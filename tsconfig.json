@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/kernel" },
+    { "path": "./packages/adapters" },
+    { "path": "./packages/core" },
+    { "path": "./packages/shell" }
+  ]
+}

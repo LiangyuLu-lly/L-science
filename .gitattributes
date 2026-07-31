@@ -1,0 +1,12 @@
+# 统一按 LF 入库。prettier 已把 endOfLine 固定为 lf，若某台机器的 git
+# 开了 autocrlf=true，不加这条会导致整仓库出现虚假 diff。
+* text=auto eol=lf
+
+# 二进制，不做行尾转换也不参与文本 diff
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
+*.edf binary
+*.zip binary
+*.node binary

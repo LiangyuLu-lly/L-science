@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+
+    // 相对导入一律写 .js 后缀（NodeNext 惯例），即使源文件是 .ts。
+    // 试过 allowImportingTsExtensions + rewriteRelativeImportExtensions 的写法，
+    // TypeScript 7.0.2 的原生编译器接受这两个选项但 emit 时并不改写后缀，
+    // 产物里会留下运行时无法解析的 './x.ts'。等该特性在原生编译器落地再回头换。
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "composite": true,
+    "incremental": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}

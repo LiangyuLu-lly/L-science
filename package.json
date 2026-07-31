@@ -1,0 +1,36 @@
+{
+  "name": "l-science",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "L-science - 本地优先 AI 科研工作台",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "doctor:json": "node scripts/doctor.mjs --json",
+    "verify:kernel": "node scripts/verify-kernel.mjs",
+    "build": "tsc --build",
+    "build:clean": "tsc --build --clean",
+    "build:ui": "npm run build --workspace @l-science/ui",
+    "dev:ui": "npm run dev --workspace @l-science/ui",
+    "typecheck:ui": "npm run typecheck --workspace @l-science/ui",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "26.1.2",
+    "concurrently": "10.0.4",
+    "prettier": "3.9.6",
+    "tsx": "4.23.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

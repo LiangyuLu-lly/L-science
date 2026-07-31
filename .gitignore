@@ -1,0 +1,24 @@
+node_modules/
+dist/
+out/
+release/
+*.tsbuildinfo
+.vite/
+coverage/
+
+*.log
+npm-debug.log*
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+Thumbs.db
+
+# 本地运行时数据与内核工作区
+/data/
+/.lsci/
+
+# Claude Science 参考二进制（158MB，仅供本地逆向分析，不入库）
+/linux-x64

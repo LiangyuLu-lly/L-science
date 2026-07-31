@@ -1,0 +1,113 @@
+:root {
+  --bg: #111318;
+  --bg-raised: #181b22;
+  --border: #262b36;
+  --fg: #e6e8ee;
+  --fg-dim: #9aa2b1;
+  --accent: #6aa9ff;
+
+  color-scheme: dark;
+  font-family:
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.app__header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.app__brand {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.app__tag {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.app__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.app__nav {
+  width: 180px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--border);
+  padding: 12px 0;
+}
+
+.app__nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.app__nav li {
+  padding: 8px 20px;
+  cursor: default;
+}
+
+.app__nav li[aria-current='page'] {
+  color: var(--accent);
+  border-left: 2px solid var(--accent);
+  padding-left: 18px;
+}
+
+.app__nav li.is-pending {
+  color: var(--fg-dim);
+}
+
+.app__main {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 32px 40px;
+  max-width: 780px;
+}
+
+.app__main h1 {
+  font-size: 20px;
+  font-weight: 600;
+  margin-top: 0;
+}
+
+.app__hint {
+  color: var(--fg-dim);
+}
+
+code {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}

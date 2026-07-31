@@ -1,0 +1,10 @@
+node_modules
+dist
+out
+release
+coverage
+*.tsbuildinfo
+linux-x64
+
+# 规格文档由人工排版，prettier 会重排 Markdown 表格与折行，反而更难读
+.kiro/

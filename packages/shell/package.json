@@ -1,0 +1,18 @@
+{
+  "name": "@l-science/shell",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc --build",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@l-science/shared": "*"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3"
+  }
+}
