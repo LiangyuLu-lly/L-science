@@ -13,6 +13,14 @@ import { homedir } from 'node:os';
 /** L-science 托管的默认 Python 环境名。用户自己的研究环境不受影响。 */
 export const MANAGED_ENV_NAME = 'lsci';
 
+/**
+ * R 独立成环境而不是塞进 Python 环境。
+ *
+ * 不是洁癖：conda 往 Python 环境装 R 时会连带解出新的 numpy，实测把 numpy 顶到
+ * 2.5 而 numba 要求 ≤2.4，整个领域栈随即导入失败。按语言分环境让这类冲突不可能发生。
+ */
+export const MANAGED_R_ENV_NAME = 'lsci-r';
+
 /** 跑一个可执行文件，拿 trim 后的 stdout。失败返回 null 而不是抛错。 */
 export function capture(exe, args, { utf16 = false, timeout = 20_000, env } = {}) {
   try {
@@ -97,4 +105,58 @@ export function managedPython(envs, envName = MANAGED_ENV_NAME) {
   const win = join(prefix, 'python.exe');
   const executable = existsSync(win) ? win : join(prefix, 'bin', 'python');
   return existsSync(executable) ? { prefix, executable } : null;
+}
+
+/**
+ * 定位托管的 R 环境，并给出启动 R 所需的完整环境变量。
+ *
+ * Windows 上 conda 装的 R 不能直接跑 `lib/R/bin/x64/Rscript.exe`——它依赖的 DLL
+ * 散落在 env 的 Library\bin 等目录下，不预置 PATH 会以 0xC0000135
+ * （STATUS_DLL_NOT_FOUND）静默退出，stdout 与 stderr 都是空的，极难定位。
+ *
+ * 这里手动复现 conda activate 对 R 做的事，而不是用 `conda run`：后者会在
+ * 内核外面多包一层进程，平台管理内核生命周期（中断、重启、强杀）时会拿不到真实 pid。
+ */
+export function managedR(envs, envName = MANAGED_R_ENV_NAME) {
+  const prefix = (envs ?? []).find((p) => p.replace(/[\\/]+$/, '').endsWith(envName));
+  if (prefix === undefined) return null;
+
+  const rHome = join(prefix, 'lib', 'R');
+  const isWin = process.platform === 'win32';
+  const rscript = isWin ? join(rHome, 'bin', 'x64', 'Rscript.exe') : join(prefix, 'bin', 'Rscript');
+  if (!existsSync(rscript)) return null;
+
+  const pathDirs = [
+    prefix,
+    join(prefix, 'Library', 'mingw-w64', 'bin'),
+    join(prefix, 'Library', 'usr', 'bin'),
+    join(prefix, 'Library', 'bin'),
+    join(prefix, 'Scripts'),
+    join(prefix, 'bin'),
+  ].filter((p) => existsSync(p));
+
+  return {
+    prefix,
+    rHome,
+    rscript,
+    pathDirs,
+    /** 传给 spawn 的 env 覆盖项。 */
+    spawnEnv: {
+      R_HOME: rHome,
+      PATH: `${pathDirs.join(';')};${process.env.PATH ?? ''}`,
+    },
+  };
+}
+
+/** 探测 R 与 IRkernel 版本。返回 null 表示 R 不可用。 */
+export function probeRVersions(r) {
+  if (r === null) return null;
+  const out = capture(
+    r.rscript,
+    ['-e', 'cat(R.version.string,"|",as.character(packageVersion("IRkernel")))'],
+    { env: r.spawnEnv },
+  );
+  if (out === null) return null;
+  const [rVersion, irkernel] = out.split('|').map((s) => s.trim());
+  return { rVersion: rVersion ?? null, irkernel: irkernel ?? null };
 }

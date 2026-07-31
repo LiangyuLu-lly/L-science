@@ -83,7 +83,7 @@ flowchart TB
     subgraph EX["执行平面 Sandbox Backend"]
         E1["Jupyter Kernel Client ZMQ"]
         E2["ipykernel Python"]
-        E3["IRkernel R 可选"]
+        E3["IRkernel R"]
         E4["Shell Runner"]
         E5["Control REPL 注入 host 对象"]
     end
@@ -164,6 +164,14 @@ Reviewer 使用的模型必须与被审查内容的生成模型来自不同 prov
 
 理由：论文场景下 AI 的最大风险不是写得不好，而是自信地编造。Claude Science 有 artifact 血缘但没有断言级证据绑定，这是 L-science 的原创补强。
 
+**AD-6：按语言划分托管环境，R 不与 Python 同环境**
+
+平台托管两个 conda 环境：`lsci`（Python 内核）与 `lsci-r`（R 内核）。二者的包管理互不影响。
+
+理由不是洁癖，是踩过的坑。实测中为拿到 `pyedflib` 的预编译版而用 conda 往 Python 环境装包，conda 顺带把 numpy 解到 2.5，而 numba（`yasa` 的传递依赖）要求 numpy ≤ 2.4，整个领域栈随即导入失败。R 的依赖体量比 `pyedflib` 大一个数量级，装进同一环境几乎必然重演。按语言分环境让这类冲突在结构上不可能发生。
+
+配套约束：**托管 Python 环境的包管理只走 uv/pip，conda 仅负责创建解释器**。`scripts/doctor.mjs` 专门校验 numba 与 numpy 的兼容性，因为这一对是混装时最先炸的。
+
 ### 环境实测结论
 
 以下结论由本机实测得出，是 AD-1 / AD-2 的事实依据：
@@ -174,12 +182,13 @@ Reviewer 使用的模型必须与被审查内容的生成模型来自不同 prov
 | `better-sqlite3` 13.0.2 | 安装零编译，Node-API prebuilt（`prebuilds/win32-x64.node`），加载成功，SQLite 3.53.4 |
 | `zeromq` 6 | 安装零编译，prebuilt（`build/win32/x64/node/msvc-115-Release/addon.node`），加载成功，libzmq 4.3.5 |
 | C/C++ 工具链 | 完全缺失（无 MSVC、`Windows Kits\10\Include` 为空），因此「所有原生依赖必须 prebuilt」是硬约束 |
-| **Jupyter 协议端到端** | 已用真实 `ipykernel` 7.3.0 跑通全链路：HMAC 握手（`kernel_info_reply`，协议 5.3）、stdout 捕获、DataFrame 的 `text/html` 富输出、跨 cell 状态持久、matplotlib inline `image/png`、`ZeroDivisionError` 结构化异常。脚本见 `scripts/verify-kernel.mjs`（`npm run verify:kernel`） |
+| **Jupyter 协议端到端** | **Python 与 R 两个内核均已跑通全链路**：HMAC 握手（`kernel_info_reply`，协议 5.3）、stdout 捕获、富输出多 MIME、跨 cell 状态持久、inline `image/png`、结构化异常。Python 用 `ipykernel` 7.3.0，R 用 `IRkernel` 1.3.2。脚本见 `scripts/verify-kernel.mjs`（`npm run verify:kernel`） |
 | Python | conda base 3.13.9（`E:\anaconda`），`uv` 0.11.16，用户既有研究环境 `nidra` / `physioex` / `usleep`（不动） |
-| 托管环境 `lsci` | 平台自用环境，落在 `C:\Users\28717\.conda\envs\lsci`（conda `envs_dirs` 首选用户目录，非管理员会话下的正常行为），Python 3.13.14 |
-| R | 未安装（`r` 工具做成运行时可选） |
-| WSL2 | 内核 2.7.3.0 就绪，默认版本 2，**零发行版** |
-| Docker | Desktop 4.72.0 已装，**daemon 未运行** |
+| 托管环境 `lsci` | 平台自用 Python 环境，落在 `C:\Users\28717\.conda\envs\lsci`（conda `envs_dirs` 首选用户目录，非管理员会话下的正常行为），Python 3.13.14 |
+| 托管环境 `lsci-r` | 平台自用 R 环境，R 4.5.3 + IRkernel 1.3.2。**R 独立成环境**（见下方 AD-6） |
+| WSL2 | 内核 2.7.3.0 就绪，默认版本 2，**零发行版**。安装发行版需管理员 + 重启 |
+| Docker | Desktop 4.72.0 已装。已尝试启动：命名管道能建起来，但特权服务 `com.docker.service` 保持 Stopped、`com.docker.backend.exe` 日志为空、也未能创建 `docker-desktop` WSL 发行版。**与 WSL2 卡在同一个提权门槛上**，且 Docker 是两条强隔离路径中更重的一条 |
+| R 在 Windows 上的启动前提 | conda 装的 R 不能直接跑 `lib/R/bin/x64/Rscript.exe`——依赖 DLL 散落在 env 的 `Library\bin` 等目录，不预置 PATH 会以 `0xC0000135`（STATUS_DLL_NOT_FOUND）退出，且 **stdout 与 stderr 全空**，极难定位。平台必须手动复现 conda activate 对 R 做的 PATH 与 `R_HOME` 设置，而不能依赖 `conda run`（后者会在内核外多包一层进程，拿不到真实 pid，无法正确中断/重启/强杀） |
 | Electron | 43.2.0 可用；但 `npm install` 期间它的 postinstall 未生效（包目录缺 `dist/electron.exe` 与 `path.txt`），需手动跑 `install.js`。已用 `scripts/postinstall.mjs` 幂等兜住 |
 | TypeScript | 7.0.2（原生 Go 编译器，按平台分发 prebuilt 二进制）。`tsc --build` 的项目引用工作正常；但 `rewriteRelativeImportExtensions` **接受选项却不生效**，产物里会留下运行时无法解析的 `./x.ts`。因此后端包的相对导入统一写 `.js` 后缀 |
 | GPU | RTX 5080 Laptop 16GB，驱动侧 CUDA 13.3，本机 Toolkit 仅 11.8（sm_120 需 cu12x+ 预编译 wheel） |
@@ -322,7 +331,12 @@ type KernelMessage =
   | { type: 'status'; state: 'busy' | 'idle' | 'starting' };
 ```
 
-内核启动方式：控制平面生成 `connection.json`（含 shell/iopub/stdin/control/hb 五个端口与随机 HMAC key），然后以目标环境的解释器启动 `python -m ipykernel_launcher -f <connection.json>`（R 为 `R --slave -e "IRkernel::main()" --args <connection.json>`）。
+内核启动方式：控制平面生成 `connection.json`（含 shell/iopub/stdin/control/hb 五个端口与随机 HMAC key），然后以目标环境的解释器启动内核。
+
+- Python：`<lsci>/python.exe -m ipykernel_launcher -f <connection.json>`，并在初始化序列注入 inline 绘图后端
+- R：`<lsci-r>/lib/R/bin/x64/Rscript.exe <irkernel-launch.R> <connection.json>`，且必须预置 `R_HOME` 与 conda 环境的 DLL 目录到 `PATH`
+
+R 侧刻意不用文档里常见的 `R --slave -e "IRkernel::main()" --args <file>`：那条命令的引号要穿过 PowerShell、cmd 与 conda 多层传参，实测被剥掉后 R 报 `unexpected end of input`。改用一个固定的启动器脚本（`scripts/lib/irkernel-launch.R`）就没有引号问题。同样刻意不用 `conda run` 做环境激活——它会在内核外多包一层进程，导致平台拿不到内核的真实 pid，中断、重启与强杀都会失效。
 
 ### 4. Model Router 多模型路由
 
@@ -725,11 +739,11 @@ CREATE TABLE migrations (
 | 阶段 | 交付内容 |
 | --- | --- |
 | M0 骨架 | Electron 外壳 + 独立 Node 后端 + `better-sqlite3` 持久化 + 会话往返 + 单一供应商直连（无路由） |
-| M1 执行平面 | Jupyter 内核客户端（ZMQ）+ `ipykernel` 接入 + Shell Runner + `native` 沙箱 + Artifact Store 与血缘 + `save_artifacts` / `read_file` / `edit_file` |
+| M1 执行平面 | Jupyter 内核客户端（ZMQ）+ `ipykernel` 与 `IRkernel` 接入 + Shell Runner + `native` 沙箱 + Artifact Store 与血缘 + `save_artifacts` / `read_file` / `edit_file`。R 运行时已就绪并验证通过，`r` 工具与 `python` 同期落地，不再推迟到 M5 |
 | M2 多模型路由 | Provider Registry + 能力向量 + 路由器 + 降级链 + committee/escalation + 路由决策面板 + 反馈闭环 |
 | M3 科研工作台 | Skill 系统 + `search_skills` + 内置技能目录 + Plan Engine + 委派/子 agent + Reviewer + findings |
 | M4 论文流水线 | Reference Library + 全文抓取 + Claim Ledger + Manuscript Compiler |
-| M5 算力与连接器 | MCP 连接器 + SSH/HPC + BYOC + 环境与包管理 + `IRkernel` R 支持 + `wsl2` 沙箱后端 |
+| M5 算力与连接器 | MCP 连接器 + SSH/HPC + BYOC + 环境与包管理 + `wsl2` 沙箱后端 |
 
 ## 待确认的决策点
 
@@ -737,6 +751,26 @@ CREATE TABLE migrations (
 
 1. **学科领域**：默认按睡眠/生理信号/神经科学建内置技能目录（依据是本机 conda 环境 `nidra` / `physioex` / `usleep`）。若方向不同，M3 的技能目录需替换。
 2. **供应商候选池**：默认预置 Anthropic / OpenAI / Google Gemini / DeepSeek / 通义千问 / 本地 Ollama 六个适配器。实际启用取决于你手里的 key。
-3. **R 支持**：默认做成运行时可选，排在 M5。由于走 `IRkernel` 成本很低，若你需要可提前。
-4. **沙箱强度**：默认 v1 用 `native` 后端。若愿意执行一次 `wsl --install`（需管理员 + 重启），可拿到硬性网络出口管控。
+3. ~~**R 支持**~~：**已落实**。R 4.5.3 + IRkernel 1.3.2 装在独立环境 `lsci-r`，协议握手与六项能力均验证通过，`r` 工具改在 M1 与 `python` 同期实现。
+4. **沙箱强度**：当前只能用 `native` 后端。两条强隔离路径（`wsl2`、`docker`）都卡在管理员提权上——见「提权待办」一节。
 5. **UI 框架**：默认 React + TypeScript + Vite。本机无 C++ 工具链，所有依赖必须是纯 JS 或提供 prebuilt 二进制。
+
+## 提权待办
+
+以下事项需要管理员令牌，无法在普通用户会话中完成。当前账户虽在 Administrators 组内（token 的组列表含 `S-1-5-32-544`），但进程令牌被 UAC 过滤，`IsAdmin` 为 `False`。
+
+**唯一真正的阻塞项：安装一个 WSL2 发行版。** 拿到它就同时解锁 `wsl2` 沙箱后端（硬性网络出口管控 + 文件系统边界）与 `bash` 真实 shell，Docker Desktop 的后端也依赖同一个前提。
+
+在**以管理员身份**打开的 PowerShell 中执行：
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+注意事项：
+
+- 通常需要重启才能完成。重启前请先保存工作。
+- 装完后重新运行 `npm run doctor`，`wsl2` 行会转为可用，`建议后端` 会自动从 `native` 变为 `wsl2`。
+- 如果只想让 Docker 可用（不推荐，它是两条强隔离路径中更重的一条），管理员会话中执行 `Start-Service com.docker.service` 后再启动 Docker Desktop。
+
+**不做也能开发。** `native` 后端在普通用户会话下完全可用，M0-M4 的全部功能都不依赖强隔离。区别只在实际保护强度：`native` 下内核内的代码可以直接建 socket 绕过代理级出口管控。UI 的隔离徽章会持续如实显示这一点。

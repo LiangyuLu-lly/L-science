@@ -17,11 +17,14 @@ import { dirname, resolve } from 'node:path';
 
 import {
   MANAGED_ENV_NAME,
+  MANAGED_R_ENV_NAME,
   capture,
   condaInfo,
   firstLine,
   managedPython,
+  managedR,
   npmVersion,
+  probeRVersions,
 } from './lib/env.mjs';
 
 const require = createRequire(import.meta.url);
@@ -124,9 +127,26 @@ function probeManagedEnv(envs) {
   };
 }
 
-function probeR() {
-  const v = firstLine(capture('R', ['--version'])) ?? firstLine(capture('Rscript', ['--version']));
-  return { available: v !== null, version: v };
+/**
+ * 探测托管的 R 环境。
+ *
+ * 刻意不看 PATH 上的 R：平台的 `r` 工具跑在自己的托管环境里。而且 Windows 上
+ * conda 装的 R 不预置 PATH 就会以 STATUS_DLL_NOT_FOUND 静默退出（stdout/stderr
+ * 全空），只探测 `R --version` 会得出「R 不存在」的错误结论。
+ */
+function probeREnv(envs) {
+  const r = managedR(envs);
+  if (r === null) return { name: MANAGED_R_ENV_NAME, found: false, available: false };
+
+  const versions = probeRVersions(r);
+  return {
+    name: MANAGED_R_ENV_NAME,
+    found: true,
+    available: versions !== null && versions.irkernel !== null,
+    prefix: r.prefix,
+    rscript: r.rscript,
+    ...(versions ?? {}),
+  };
 }
 
 function probeWsl() {
@@ -202,7 +222,7 @@ const report = {
   conda: { exe: conda.exe, base: conda.base, envCount: conda.envs?.length ?? 0 },
   uv: firstLine(capture('uv', ['--version'])),
   managedEnv: managed,
-  r: probeR(),
+  r: probeREnv(conda.envs),
   wsl: probeWsl(),
   docker: probeDocker(),
   gpu: probeGpu(),
@@ -310,7 +330,15 @@ if (!managed.found) {
   }
 }
 
-line(report.r.available ? OK : WARN, 'R', report.r.version ?? '未安装（r 工具将不注册）');
+line(
+  report.r.available ? OK : WARN,
+  `托管环境 ${report.r.name}`,
+  report.r.available
+    ? `${report.r.rVersion}  IRkernel ${report.r.irkernel}  ${report.r.prefix}`
+    : report.r.found
+      ? '环境存在但 R 或 IRkernel 不可用（r 工具将不注册）'
+      : `不存在（r 工具将不注册）—— 需先创建：conda create -n ${report.r.name} -c conda-forge r-base r-irkernel`,
+);
 line(
   report.wsl.usable ? OK : WARN,
   'WSL2',
