@@ -12,3 +12,9 @@ export { MIGRATIONS } from './migrations.js';
 
 export { appPaths, projectPaths, dataDir, blobRelPath, APP_DIR_NAME } from './paths.js';
 export type { AppPaths, ProjectPaths } from './paths.js';
+
+export { Dispatcher, DispatchError } from './dispatcher.js';
+export type { HandlerContext, RequestHandler, EventSink } from './dispatcher.js';
+
+export { LineDecoder, StdioTransport, DEFAULT_MAX_FRAME_BYTES } from './transport.js';
+export type { TransportOptions, DecodeResult } from './transport.js';

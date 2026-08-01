@@ -15,6 +15,7 @@
     "doctor": "node scripts/doctor.mjs",
     "doctor:json": "node scripts/doctor.mjs --json",
     "verify:kernel": "node scripts/verify-kernel.mjs",
+    "verify:backend": "npm run build && node scripts/verify-backend.mjs",
     "build": "tsc --build",
     "build:clean": "tsc --build --clean",
     "build:ui": "npm run build --workspace @l-science/ui",

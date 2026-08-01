@@ -1,26 +1,37 @@
 /**
  * 控制平面后端进程入口。
  *
- * M0 阶段的职责：初始化数据目录、打开默认项目库、应用迁移、报告就绪状态。
+ * stdout 被 NDJSON 协议通道独占，因此**所有日志都必须走 stderr**。往 stdout
+ * 写一行普通文本就会让对端解析失败，而且症状是「偶发的协议错误」，极难定位。
  *
- * 刻意还没有开监听端口。渲染层与后端之间的传输通道属于 M1，届时会走
- * Electron IPC 转发或绑定在 127.0.0.1 的本地套接字，并且需要一并决定
- * 鉴权方式（本机多用户场景下 localhost 并不等于可信）。
+ * 刻意不开监听端口：M1 没有跨机需求，而 localhost 在多用户 Windows 上并不等于
+ * 可信，开端口就得同时解决鉴权。stdio 的可达性天然等于「持有这个子进程句柄」。
  */
 
 import { mkdirSync } from 'node:fs';
 
+import { makeError } from '@l-science/shared';
+
 import { openDatabase, migrate, schemaVersion, sqliteVersion } from './db.js';
 import { MIGRATIONS } from './migrations.js';
-import { appPaths, projectPaths } from './paths.js';
+import { appPaths, projectPaths, type AppPaths } from './paths.js';
+import { StdioTransport } from './transport.js';
 
 const DEFAULT_PROJECT_ID = 'default';
 
+/** 日志一律走 stderr，见文件头说明。 */
 function log(msg: string): void {
-  process.stdout.write(`${new Date().toISOString()} ${msg}\n`);
+  process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
 }
 
-function main(): void {
+interface BootResult {
+  paths: AppPaths;
+  sqlite: string;
+  schema: number;
+  migrationsApplied: number;
+}
+
+function boot(): BootResult {
   const paths = appPaths();
   for (const dir of [
     paths.config,
@@ -34,7 +45,6 @@ function main(): void {
   ]) {
     mkdirSync(dir, { recursive: true });
   }
-  log(`数据目录 ${paths.root}`);
 
   const project = projectPaths(DEFAULT_PROJECT_ID);
   mkdirSync(project.blobs, { recursive: true });
@@ -42,25 +52,75 @@ function main(): void {
   mkdirSync(project.logs, { recursive: true });
 
   const db = openDatabase(project.db);
-  const appliedCount = migrate(db, MIGRATIONS);
+  try {
+    const migrationsApplied = migrate(db, MIGRATIONS);
+    return {
+      paths,
+      sqlite: sqliteVersion(db),
+      schema: schemaVersion(db),
+      migrationsApplied,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function main(): void {
+  const startedAt = Date.now();
+  const info = boot();
+
+  log(`数据目录 ${info.paths.root}`);
   log(
-    `SQLite ${sqliteVersion(db)} schema v${String(schemaVersion(db))}` +
-      (appliedCount > 0 ? `（本次应用 ${String(appliedCount)} 条迁移）` : '（无待应用迁移）'),
+    `SQLite ${info.sqlite} schema v${String(info.schema)}` +
+      (info.migrationsApplied > 0
+        ? `（本次应用 ${String(info.migrationsApplied)} 条迁移）`
+        : '（无待应用迁移）'),
   );
-  db.close();
 
-  log('控制平面就绪');
+  const transport = new StdioTransport({
+    input: process.stdin,
+    output: process.stdout,
+    onProtocolError: (error) => {
+      // 协议错误不隐藏，但也不因此退出：单个坏帧不该让整个后端下线。
+      log(
+        `协议错误 ${error.code}: ${error.message}${error.detail === undefined ? '' : ` (${error.detail})`}`,
+      );
+    },
+  });
 
-  // 保持进程存活，等待外壳的退出信号。
+  transport.dispatcher.register('app.status', async () => ({
+    ready: true,
+    pid: process.pid,
+    uptimeMs: Date.now() - startedAt,
+    node: process.version,
+    dataDir: info.paths.root,
+    sqlite: info.sqlite,
+    schema: info.schema,
+  }));
+
+  // env.doctor 的实现属于后续任务，这里先明确占位而不是假装成功。
+  transport.dispatcher.register('env.doctor', async () => {
+    throw new (await import('./dispatcher.js')).DispatchError(
+      makeError('not_found', '环境自检尚未接入控制平面', {
+        remediation: '暂时使用命令行 npm run doctor',
+      }),
+    );
+  });
+
+  transport.start();
+  log('控制平面就绪，等待请求');
+
   const shutdown = (signal: string): void => {
     log(`收到 ${signal}，退出`);
-    process.exit(0);
+    void transport.close().then(() => {
+      process.exit(0);
+    });
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
-  setInterval(() => {
-    /* 心跳占位，M1 换成真正的事件循环 */
-  }, 60_000);
+
+  // stdin 关闭意味着外壳已经走了，跟着退出，避免留下孤儿进程。
+  process.stdin.on('end', () => shutdown('stdin EOF'));
 }
 
 main();
