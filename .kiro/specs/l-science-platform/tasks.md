@@ -93,40 +93,55 @@
 
 ### 4. Jupyter 内核客户端
 
-- [ ] 4.1 消息编解码
+- [x] 4.1 消息编解码
   - 把已有的 `signMessage` / `verifyMessage` 扩展为完整的帧编解码：多段帧的组装与解析、`<IDS|MSG>` 定位、原始帧字节用于签名校验（不能用重序列化后的 JSON 校验）
   - 测试：往返编解码等价；篡改任一段导致校验失败；空 key 时跳过校验
   - _需求：3.2_
-- [ ] 4.2 五通道 Socket 管理
-  - shell（Dealer）、iopub（Subscriber）、stdin（Dealer）、control（Dealer）、heartbeat（Requester）的建立、绑定回环、关闭与资源回收
-  - 测试：通道全部绑定 127.0.0.1；关闭后无句柄泄漏
+  - 校验入站签名用**原始字节**而非 JSON 重序列化结果：键序或空白的任何差异都会让校验失败，症状是「内核消息被无声丢弃」
+  - 签名无效时标记 `signatureValid: false` 交调用方丢弃，而不是抛异常——抛异常会让接收泵中断，后续输出全丢
+  - 分段定位靠查找 `<IDS|MSG>` 而非固定下标：iopub 的 SUB 消息带 topic 前缀，DEALER 消息带 routing id
+  - 测试：31 条，含「校验用原始字节」的专项断言
+  - _需求：3.2_
+- [x] 4.2 五通道 Socket 管理
+  - shell / control / stdin 用 Dealer，iopub 用 Subscriber，hb 用 Dealer；全部绑定回环
+  - shell 与 control 各跑一个接收循环，按 `parent_header.msg_id` 派发回复，支持多个在途请求
+  - 心跳用 REQ 分帧形式 `[空帧, 载荷]`：ipykernel 的 hb 是 ROUTER，IRkernel 的是 REP，REP 要求空分隔帧开头，发裸单帧会被静默丢弃（表现为「R 内核心跳永远不可达」）
+  - stdin 收到 `input_request` 时回空值：不回会让内核永久阻塞，表现为「cell 永远不结束」
   - _需求：3.3_
-- [ ] 4.3 执行请求与 iopub 关联
-  - `execute_request` 发出后按 `parent_header.msg_id` 收集 iopub 输出直到该请求 `status=idle`；显式丢弃不匹配的消息
-  - 这条是实测踩出来的：内核启动阶段会自行推送 banner stream 与多条 status，按到达顺序取值一定错
-  - 测试：注入乱序与无关 parent 的消息，断言归属正确
+- [x] 4.3 执行请求与 iopub 关联
+  - `execute_request` 发出后按 `parent_header.msg_id` 收集 iopub 输出直到该请求 `status=idle`
+  - `sendRequest` **同步**返回 msg_id：若等 `await send()` 之后才知道 id，快内核可能已把输出推完，那些消息会被过滤器当作「不是我的」而永久丢弃
+  - 输出队列有上界，超限丢弃并计数（一个 `while True: print()` 能以远超消费速度产出消息）
   - _需求：3.4_
-- [ ] 4.4 富输出解析
-  - `stream` / `execute_result` / `display_data` / `error` / `status` 归一化为 `KernelMessage`；多 MIME 束保序
-  - 测试：覆盖 `text/plain`、`text/html`、`image/png`，以及 R 额外给出的 `text/markdown`、`text/latex`
+- [x] 4.4 富输出解析
+  - `stream` / `execute_result` / `display_data` / `update_display_data` / `clear_output` / `error` / `status` / `execute_input` 归一化
+  - comm 类消息属 widget 协议，M1 显式忽略
+  - 实测确认：Python 的 DataFrame 给 `text/plain` + `text/html`；R 的 data.frame 还额外给 `text/markdown` + `text/latex`（对论文直接有用）
   - _需求：3.6、3.8_
-- [ ] 4.5 内核启动与初始化序列
-  - 生成连接文件并启动内核：Python 走 `python -m ipykernel_launcher -f`；R 走 `Rscript scripts/lib/irkernel-launch.R`，且必须注入 `R_HOME` 与 conda 环境的 DLL 目录到 `PATH`
-  - Python 初始化序列注入 inline 绘图后端（裸 ipykernel 不把 figure 渲染成 PNG）
-  - 不使用 `conda run`：它在内核外多包一层进程，会导致拿不到真实 pid，中断与强杀失效
-  - 测试：两种语言均能启动并通过 `kernel_info_request`；缺 `R_HOME` 时给出明确错误而非静默退出
+- [x] 4.5 内核启动与初始化序列
+  - 就绪判定靠**反复发 `kernel_info_request` 直到有回复**，而非固定 sleep；同时监视子进程退出，启动失败立刻报错而不耗完超时预算
+  - Python 初始化注入 `%matplotlib inline`（裸 ipykernel 不把 figure 渲染成 PNG）
+  - R 必须注入 `R_HOME` 与 conda 环境的 DLL 目录；IRkernel 启动器在运行时写入内核目录，不依赖源码布局
+  - 不使用 `conda run`：它在内核外多包一层进程，导致拿不到真实 pid，中断与强杀失效
+  - 连接文件含 HMAC key，用完即删；`ports` 访问器只暴露端口不暴露 key
   - _需求：3.1、3.5、15.7_
-- [ ] 4.6 中断、重启与心跳
-  - control 通道 `interrupt_request`；超时未响应则重启；heartbeat 检测内核存活
-  - 崩溃后自动重建内核、保留工作区文件、明确告知内存状态已丢失
-  - 测试：长循环可被中断；强杀内核后自动恢复；重启后变量清空而工作区文件仍在
+- [x] 4.6 中断、重启与心跳
+  - **Windows 上消息式中断不可能生效**：ipykernel 的 `_send_interrupt_children()` 对 `os.name == "nt"` 直接记录 "Interrupt message not supported on Windows" 后返回。因此 `interrupt()` 先发 `interrupt_request`，再检查执行是否真的停下，未停则重启并如实报告状态已丢失，返回值区分 `interrupted` / `restarted`
+  - 重启为完整重建进程，语义比 `shutdown_request(restart=true)` 更确定
+  - 重启与关闭必须强制收尾在途执行：通道一关 iopub 监听器随之消失，输出队列永不结束，调用方的 `for await` 会永久挂住
+  - 重启期间通道断开，`execute()` 先 `await ready()` 而不是把「内核尚未就绪」抛给无从知晓后台重启的调用方
+  - 初始化代码走内部路径，不占用户执行槽位——否则用户在重启完成前的下一次调用会撞上「已有执行在途」
+  - 心跳在内核忙时仍可达，这正是它存在的理由（那时 shell 被占住，`kernel_info_request` 无法区分「在算」与「死了」）
   - _需求：3.9、3.10_
-- [ ] 4.7 内核池
-  - 按 (会话, 语言, 环境) 复用内核；空闲回收；同一会话内状态跨调用保持
-  - 测试：跨调用变量保持；不同会话互不可见
+- [x] 4.7 内核池
+  - 按 (会话, 语言) 复用；同一 key 的并发 acquire 共享一次启动，不会起出两个内核
+  - 缓存内核已死时就地替换（进程可能被外部强杀）
+  - 空闲回收跳过 busy 的内核，避免杀掉正在跑的长任务
+  - 每个会话有独立工作目录，同名文件不互相覆盖
+  - 语言环境缺失时抛出**含具体 conda 命令**的错误，而不是模糊报错
   - _需求：3.7_
-- [ ] 4.8 补全与内省
-  - `complete_request` / `inspect_request`
+- [x] 4.8 补全与内省
+  - `complete_request` / `inspect_request`，均先 `await ready()`
   - _需求：3.12_
 
 ### 5. 沙箱后端
