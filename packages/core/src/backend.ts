@@ -8,74 +8,61 @@
  * 可信，开端口就得同时解决鉴权。stdio 的可达性天然等于「持有这个子进程句柄」。
  */
 
-import { mkdirSync } from 'node:fs';
-
 import { makeError } from '@l-science/shared';
 
-import { openDatabase, migrate, schemaVersion, sqliteVersion } from './db.js';
-import { MIGRATIONS } from './migrations.js';
-import { appPaths, projectPaths, type AppPaths } from './paths.js';
+import { DispatchError } from './dispatcher.js';
+import { schemaVersion, sqliteVersion } from './db.js';
+import { AppStore, type ProjectStore } from './store.js';
 import { StdioTransport } from './transport.js';
-
-const DEFAULT_PROJECT_ID = 'default';
 
 /** 日志一律走 stderr，见文件头说明。 */
 function log(msg: string): void {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
 }
 
-interface BootResult {
-  paths: AppPaths;
-  sqlite: string;
-  schema: number;
-  migrationsApplied: number;
+function notFound(message: string, remediation?: string): DispatchError {
+  return new DispatchError(
+    makeError('not_found', message, remediation === undefined ? {} : { remediation }),
+  );
 }
 
-function boot(): BootResult {
-  const paths = appPaths();
-  for (const dir of [
-    paths.config,
-    paths.credentials,
-    paths.projects,
-    paths.runtimeKernels,
-    paths.runtimeEnvs,
-    paths.skillsBuiltin,
-    paths.skillsUser,
-    paths.logs,
-  ]) {
-    mkdirSync(dir, { recursive: true });
+function badRequest(message: string): DispatchError {
+  return new DispatchError(makeError('bad_request', message));
+}
+
+/**
+ * 打开项目库，把「项目不存在」翻译成 not_found 而不是 internal。
+ * 区分这两者对 UI 有意义：前者该提示用户，后者该报 bug。
+ */
+function openProject(store: AppStore, projectId: string): ProjectStore {
+  if (store.projects.get(projectId) === null) {
+    throw notFound(`项目不存在：${projectId}`);
   }
-
-  const project = projectPaths(DEFAULT_PROJECT_ID);
-  mkdirSync(project.blobs, { recursive: true });
-  mkdirSync(project.workspace, { recursive: true });
-  mkdirSync(project.logs, { recursive: true });
-
-  const db = openDatabase(project.db);
   try {
-    const migrationsApplied = migrate(db, MIGRATIONS);
-    return {
-      paths,
-      sqlite: sqliteVersion(db),
-      schema: schemaVersion(db),
-      migrationsApplied,
-    };
-  } finally {
-    db.close();
+    return store.openProject(projectId);
+  } catch (err) {
+    throw notFound(`项目库无法打开：${projectId}`, err instanceof Error ? err.message : undefined);
   }
 }
 
 function main(): void {
   const startedAt = Date.now();
-  const info = boot();
+  const store = AppStore.open();
 
-  log(`数据目录 ${info.paths.root}`);
-  log(
-    `SQLite ${info.sqlite} schema v${String(info.schema)}` +
-      (info.migrationsApplied > 0
-        ? `（本次应用 ${String(info.migrationsApplied)} 条迁移）`
-        : '（无待应用迁移）'),
-  );
+  log(`数据目录 ${store.paths.root}`);
+  log(`应用库 SQLite ${sqliteVersion(store.db)} schema v${String(schemaVersion(store.db))}`);
+
+  const dangling = store.danglingProjects();
+  if (dangling.length > 0) {
+    // 不静默修复：注册表与磁盘不一致是需要人知道的事实。
+    log(`警告：${String(dangling.length)} 个项目在注册表中但目录缺失 -> ${dangling.join(', ')}`);
+  }
+
+  // 首次运行给一个默认项目，避免打开就是空白。
+  if (store.projects.count({ includeArchived: true }) === 0) {
+    const created = store.createProject({ name: '未命名项目' });
+    log(`已创建默认项目 ${created.id}`);
+  }
 
   const transport = new StdioTransport({
     input: process.stdin,
@@ -88,31 +75,104 @@ function main(): void {
     },
   });
 
-  transport.dispatcher.register('app.status', async () => ({
+  const d = transport.dispatcher;
+
+  d.register('app.status', async () => ({
     ready: true,
     pid: process.pid,
     uptimeMs: Date.now() - startedAt,
     node: process.version,
-    dataDir: info.paths.root,
-    sqlite: info.sqlite,
-    schema: info.schema,
+    dataDir: store.paths.root,
+    sqlite: sqliteVersion(store.db),
+    schema: schemaVersion(store.db),
+    projectCount: store.projects.count(),
+    danglingProjects: dangling.length,
   }));
 
-  // env.doctor 的实现属于后续任务，这里先明确占位而不是假装成功。
-  transport.dispatcher.register('env.doctor', async () => {
-    throw new (await import('./dispatcher.js')).DispatchError(
-      makeError('not_found', '环境自检尚未接入控制平面', {
-        remediation: '暂时使用命令行 npm run doctor',
-      }),
+  d.register('env.doctor', async () => {
+    throw notFound('环境自检尚未接入控制平面', '暂时使用命令行 npm run doctor');
+  });
+
+  /* --- 项目 ------------------------------------------------------------ */
+
+  d.register('project.list', async (req) => ({
+    projects: store.projects.list({ includeArchived: req.includeArchived }),
+  }));
+
+  d.register('project.create', async (req) => {
+    const input =
+      req.description === undefined
+        ? { name: req.name }
+        : { name: req.name, description: req.description };
+    return { project: store.createProject(input) };
+  });
+
+  d.register('project.archive', async (req) => ({
+    project: store.projects.archive(req.projectId),
+  }));
+
+  /* --- 会话 ------------------------------------------------------------ */
+
+  d.register('conversation.list', async (req) => {
+    const project = openProject(store, req.projectId);
+    return { conversations: project.conversations.list() };
+  });
+
+  d.register('conversation.create', async (req) => {
+    const project = openProject(store, req.projectId);
+    const conversation = project.conversations.create(
+      req.title === undefined ? {} : { title: req.title },
     );
+    store.projects.touch(req.projectId);
+    return { conversation };
+  });
+
+  d.register('conversation.history', async (req) => {
+    // 会话 id 全局唯一但库是按项目分的，因此需要遍历项目来定位。
+    // 项目数量是个位数到几十的量级，这个代价可以接受；等有需要再加索引表。
+    for (const p of store.projects.list({ includeArchived: true })) {
+      let project: ProjectStore;
+      try {
+        project = store.openProject(p.id);
+      } catch {
+        continue; // 目录缺失的项目已在启动日志里报过
+      }
+      if (project.conversations.get(req.conversationId) === null) continue;
+
+      return {
+        projectId: p.id,
+        page: project.messages.page(req.conversationId, {
+          ...(req.beforeSeq === undefined ? {} : { beforeSeq: req.beforeSeq }),
+          limit: req.limit,
+        }),
+      };
+    }
+    throw notFound(`会话不存在：${req.conversationId}`);
+  });
+
+  d.register('conversation.send', async () => {
+    // 真正的编排属于后续任务；此刻明确拒绝而不是假装接受了消息。
+    throw badRequest('会话编排尚未实现（属于 M1 后续任务）');
+  });
+
+  d.register('conversation.interrupt', async () => {
+    throw badRequest('会话编排尚未实现（属于 M1 后续任务）');
+  });
+
+  d.register('approval.decide', async () => {
+    throw badRequest('审批服务尚未实现（属于任务 8.1）');
   });
 
   transport.start();
   log('控制平面就绪，等待请求');
 
+  let shuttingDown = false;
   const shutdown = (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     log(`收到 ${signal}，退出`);
     void transport.close().then(() => {
+      store.close();
       process.exit(0);
     });
   };

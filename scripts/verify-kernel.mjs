@@ -19,7 +19,7 @@
 
 import { createHmac, randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +28,27 @@ import { createServer } from 'node:net';
 import { Dealer, Subscriber } from 'zeromq';
 
 import { condaInfo, managedPython, managedR } from './lib/env.mjs';
+
+/** 每次验证都会建一个临时目录放连接文件，退出前统一清掉，不在 TEMP 里堆积。 */
+const tempDirs = [];
+
+/**
+ * 删除目录，失败则重试。
+ *
+ * 内核进程的 cwd 就是这个临时目录，而 Windows 不允许删除任何进程的当前目录。
+ * kill() 只是发信号，进程真正消失还需要一点时间，因此必须重试而不是一次性删。
+ */
+async function removeWithRetry(dir, attempts = 8) {
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return true;
+    } catch {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  return false;
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DELIM = '<IDS|MSG>';
@@ -122,6 +143,7 @@ async function verify(spec) {
   const probe = PROBES[spec.language];
   const info = await makeConnectionInfo(spec.kernelName);
   const dir = mkdtempSync(join(tmpdir(), `lsci-vk-${spec.language}-`));
+  tempDirs.push(dir);
   const connFile = join(dir, 'connection.json');
   writeFileSync(connFile, JSON.stringify(info));
 
@@ -267,7 +289,11 @@ async function verify(spec) {
 
   shell.close();
   iopub.close();
+
+  // 等内核真正退出，否则它的 cwd（临时目录）无法被删除。
+  const exited = new Promise((r) => kernel.once('exit', () => r(true)));
   kernel.kill();
+  await Promise.race([exited, new Promise((r) => setTimeout(() => r(false), 5000))]);
 
   return !failed;
 }
@@ -318,6 +344,15 @@ for (const spec of specs) {
   if (only !== null && spec.language !== only) continue;
   const ok = await verify(spec);
   if (!ok) allOk = false;
+}
+
+const leftover = [];
+for (const dir of tempDirs) {
+  if (!(await removeWithRetry(dir))) leftover.push(dir);
+}
+if (leftover.length > 0) {
+  process.stdout.write(`\n注意：${String(leftover.length)} 个临时目录未能删除（可手动清理）：\n`);
+  for (const dir of leftover) process.stdout.write(`  ${dir}\n`);
 }
 
 process.stdout.write(allOk ? '\n结果：AD-2 全部通过\n' : '\n结果：有失败项\n');

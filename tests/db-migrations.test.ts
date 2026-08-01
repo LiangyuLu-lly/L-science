@@ -1,8 +1,9 @@
 /**
- * 迁移机制测试。
+ * 迁移机制与 schema 结构测试。
  *
- * 重点是「已发布迁移不可修改」这条约束：如果历史迁移被改过，数据库的实际形状
- * 就无法从代码推断，此时必须报错而不是继续。
+ * 除了迁移本身的正确性，这里还锁住一条结构约束：全局配置表只能在应用库，
+ * 项目库不得出现。它们曾经被错放在项目库里，后果是每个项目各有一份供应商
+ * 注册表，而「列出所有项目」根本无法实现——每个项目库只装自己那一个项目。
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -11,8 +12,16 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { MIGRATIONS, migrate, openDatabase, schemaVersion, sqliteVersion } from '@l-science/core';
-import { blobRelPath } from '@l-science/core';
+import {
+  APP_MIGRATIONS,
+  PROJECT_MIGRATIONS,
+  blobRelPath,
+  migrate,
+  openDatabase,
+  schemaVersion,
+  sqliteVersion,
+  type Db,
+} from '@l-science/core';
 
 let dir: string;
 
@@ -24,7 +33,19 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('数据库', () => {
+function tableNames(db: Db): Set<string> {
+  const rows = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
+    name: string;
+  }>;
+  return new Set(rows.map((r) => r.name));
+}
+
+function columnNames(db: Db, table: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return new Set(rows.map((r) => r.name));
+}
+
+describe('数据库连接', () => {
   it('打开时启用 WAL 与外键', () => {
     const db = openDatabase(join(dir, 'a', 'b', 'p.db'));
     try {
@@ -42,41 +63,99 @@ describe('数据库', () => {
   });
 });
 
-describe('迁移', () => {
-  it('空库应用全部迁移后版本正确', () => {
-    const db = openDatabase(join(dir, 'p.db'));
+describe('应用库 schema', () => {
+  it('应用全部迁移后版本正确', () => {
+    const db = openDatabase(join(dir, 'app.db'));
     try {
-      const applied = migrate(db, MIGRATIONS);
-      expect(applied).toBe(MIGRATIONS.length);
-      expect(schemaVersion(db)).toBe(Math.max(...MIGRATIONS.map((m) => m.version)));
+      expect(migrate(db, APP_MIGRATIONS)).toBe(APP_MIGRATIONS.length);
+      expect(schemaVersion(db)).toBe(Math.max(...APP_MIGRATIONS.map((m) => m.version)));
     } finally {
       db.close();
     }
   });
 
-  it('重复执行是幂等的', () => {
-    const db = openDatabase(join(dir, 'p.db'));
+  it('包含跨项目的全局表', () => {
+    const db = openDatabase(join(dir, 'app.db'));
     try {
-      migrate(db, MIGRATIONS);
-      expect(migrate(db, MIGRATIONS)).toBe(0);
-    } finally {
-      db.close();
-    }
-  });
-
-  it('建出设计文档约定的核心表', () => {
-    const db = openDatabase(join(dir, 'p.db'));
-    try {
-      migrate(db, MIGRATIONS);
-      const names = new Set(
-        (
-          db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
-            name: string;
-          }>
-        ).map((r) => r.name),
-      );
+      migrate(db, APP_MIGRATIONS);
+      const names = tableNames(db);
       for (const t of [
         'projects',
+        'providers',
+        'models',
+        'skills',
+        'connectors',
+        'compute_targets',
+        'environments',
+        'host_grants',
+        'domain_allowlist',
+        'memory_notes',
+      ]) {
+        expect(names.has(t), `应用库缺少表 ${t}`).toBe(true);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('不包含属于单个项目的表', () => {
+    const db = openDatabase(join(dir, 'app.db'));
+    try {
+      migrate(db, APP_MIGRATIONS);
+      const names = tableNames(db);
+      for (const t of ['conversations', 'messages', 'artifacts', 'findings', 'claims']) {
+        expect(names.has(t), `${t} 不该在应用库`).toBe(false);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('projects 表有 archived_at，支持可逆归档', () => {
+    const db = openDatabase(join(dir, 'app.db'));
+    try {
+      migrate(db, APP_MIGRATIONS);
+      expect(columnNames(db, 'projects').has('archived_at')).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('models 对 providers 的外键生效', () => {
+    const db = openDatabase(join(dir, 'app.db'));
+    try {
+      migrate(db, APP_MIGRATIONS);
+      expect(() =>
+        db
+          .prepare(
+            'INSERT INTO models (id, provider_id, model_name, descriptor_json) VALUES (?,?,?,?)',
+          )
+          .run('m1', 'no-such-provider', 'x', '{}'),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('项目库 schema', () => {
+  it('应用全部迁移后版本正确', () => {
+    const db = openDatabase(join(dir, 'project.db'));
+    try {
+      expect(migrate(db, PROJECT_MIGRATIONS)).toBe(PROJECT_MIGRATIONS.length);
+      expect(schemaVersion(db)).toBe(Math.max(...PROJECT_MIGRATIONS.map((m) => m.version)));
+    } finally {
+      db.close();
+    }
+  });
+
+  it('包含项目内容表', () => {
+    const db = openDatabase(join(dir, 'project.db'));
+    try {
+      migrate(db, PROJECT_MIGRATIONS);
+      const names = tableNames(db);
+      for (const t of [
+        'project_meta',
         'conversations',
         'messages',
         'tool_calls',
@@ -85,67 +164,162 @@ describe('迁移', () => {
         'artifact_versions',
         'artifact_lineage',
         'plans',
+        'plan_steps',
+        'reviewer_runs',
         'findings',
-        'providers',
-        'models',
         'routing_decisions',
         'routing_feedback',
         'egress_log',
-        'skills',
+        'approvals',
+        'compute_jobs',
         'refs',
+        'manuscripts',
         'claims',
         'claim_evidence',
         'memory_notes',
       ]) {
-        expect(names.has(t), `缺少表 ${t}`).toBe(true);
+        expect(names.has(t), `项目库缺少表 ${t}`).toBe(true);
       }
     } finally {
       db.close();
     }
   });
 
-  it('匿名化相关表已按范围变更移除', () => {
-    const db = openDatabase(join(dir, 'p.db'));
+  it('不包含全局配置表', () => {
+    const db = openDatabase(join(dir, 'project.db'));
     try {
-      migrate(db, MIGRATIONS);
-      const names = new Set(
-        (
-          db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
-            name: string;
-          }>
-        ).map((r) => r.name),
+      migrate(db, PROJECT_MIGRATIONS);
+      const names = tableNames(db);
+      for (const t of [
+        'projects',
+        'providers',
+        'models',
+        'skills',
+        'connectors',
+        'compute_targets',
+        'environments',
+        'host_grants',
+        'domain_allowlist',
+      ]) {
+        expect(names.has(t), `${t} 属于应用库，不该在项目库`).toBe(false);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('内容表不带 project_id 冗余列', () => {
+    const db = openDatabase(join(dir, 'project.db'));
+    try {
+      migrate(db, PROJECT_MIGRATIONS);
+      for (const t of ['conversations', 'artifacts', 'refs', 'claims', 'memory_notes']) {
+        expect(columnNames(db, t).has('project_id'), `${t} 不该有 project_id`).toBe(false);
+      }
+      // 项目身份只记在 project_meta 单行里
+      expect(columnNames(db, 'project_meta').has('project_id')).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('project_meta 只允许一行', () => {
+    const db = openDatabase(join(dir, 'project.db'));
+    try {
+      migrate(db, PROJECT_MIGRATIONS);
+      db.prepare('INSERT INTO project_meta (singleton, project_id, created_at) VALUES (1,?,?)').run(
+        'p1',
+        1,
       );
-      for (const t of ['privacy_entities', 'privacy_lexicon', 'egress_audit']) {
-        expect(names.has(t), `${t} 不应存在`).toBe(false);
-      }
+      expect(() =>
+        db
+          .prepare('INSERT INTO project_meta (singleton, project_id, created_at) VALUES (2,?,?)')
+          .run('p2', 2),
+      ).toThrow(); // CHECK (singleton = 1)
+      expect(() =>
+        db
+          .prepare('INSERT INTO project_meta (singleton, project_id, created_at) VALUES (1,?,?)')
+          .run('p3', 3),
+      ).toThrow(); // 主键冲突
     } finally {
       db.close();
     }
   });
 
-  it('外键约束真实生效', () => {
-    const db = openDatabase(join(dir, 'p.db'));
+  it('messages 对 conversations 的外键生效', () => {
+    const db = openDatabase(join(dir, 'project.db'));
     try {
-      migrate(db, MIGRATIONS);
+      migrate(db, PROJECT_MIGRATIONS);
       expect(() =>
         db
           .prepare(
-            'INSERT INTO conversations (id, project_id, status, created_at, updated_at) VALUES (?,?,?,?,?)',
+            'INSERT INTO messages (id, conversation_id, seq, role, content_json, created_at) VALUES (?,?,?,?,?,?)',
           )
-          .run('c1', 'no-such-project', 'idle', 1, 1),
+          .run('m1', 'no-such-conversation', 1, 'user', '{}', 1),
       ).toThrow();
     } finally {
       db.close();
     }
   });
 
+  it('同一会话内 seq 唯一', () => {
+    const db = openDatabase(join(dir, 'project.db'));
+    try {
+      migrate(db, PROJECT_MIGRATIONS);
+      db.prepare(
+        'INSERT INTO conversations (id, status, created_at, updated_at) VALUES (?,?,?,?)',
+      ).run('c1', 'idle', 1, 1);
+      const ins = db.prepare(
+        'INSERT INTO messages (id, conversation_id, seq, role, content_json, created_at) VALUES (?,?,?,?,?,?)',
+      );
+      ins.run('m1', 'c1', 1, 'user', '{}', 1);
+      expect(() => ins.run('m2', 'c1', 1, 'user', '{}', 2)).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('删除会话级联清掉消息与工具调用', () => {
+    const db = openDatabase(join(dir, 'project.db'));
+    try {
+      migrate(db, PROJECT_MIGRATIONS);
+      db.prepare(
+        'INSERT INTO conversations (id, status, created_at, updated_at) VALUES (?,?,?,?)',
+      ).run('c1', 'idle', 1, 1);
+      db.prepare(
+        'INSERT INTO messages (id, conversation_id, seq, role, content_json, created_at) VALUES (?,?,?,?,?,?)',
+      ).run('m1', 'c1', 1, 'assistant', '{}', 1);
+      db.prepare(
+        "INSERT INTO tool_calls (id, message_id, tool_name, status) VALUES (?,?,?,'ok')",
+      ).run('t1', 'm1', 'python');
+
+      db.prepare('DELETE FROM conversations WHERE id = ?').run('c1');
+
+      expect((db.prepare('SELECT COUNT(*) n FROM messages').get() as { n: number }).n).toBe(0);
+      expect((db.prepare('SELECT COUNT(*) n FROM tool_calls').get() as { n: number }).n).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('迁移机制', () => {
+  it('重复执行是幂等的', () => {
+    const db = openDatabase(join(dir, 'app.db'));
+    try {
+      migrate(db, APP_MIGRATIONS);
+      expect(migrate(db, APP_MIGRATIONS)).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
   it('已应用迁移被改动时拒绝继续', () => {
-    const path = join(dir, 'p.db');
+    const path = join(dir, 'app.db');
     const first = openDatabase(path);
-    migrate(first, MIGRATIONS);
+    migrate(first, APP_MIGRATIONS);
     first.close();
 
-    const tampered = MIGRATIONS.map((m) =>
+    const tampered = APP_MIGRATIONS.map((m) =>
       m.version === 1 ? { ...m, sql: `${m.sql}\n-- 事后追加的改动` } : m,
     );
 
@@ -154,6 +328,42 @@ describe('迁移', () => {
       expect(() => migrate(second, tampered)).toThrow(/不允许修改/);
     } finally {
       second.close();
+    }
+  });
+
+  it('迁移失败时整条回滚', () => {
+    const db = openDatabase(join(dir, 'x.db'));
+    try {
+      const bad = [
+        {
+          version: 1,
+          name: 'half-bad',
+          sql: 'CREATE TABLE ok_table (a); CREATE TABLE 非法语法 (;',
+        },
+      ];
+      expect(() => migrate(db, bad)).toThrow();
+      // 事务回滚后前半句建的表也不该留下
+      expect(tableNames(db).has('ok_table')).toBe(false);
+      expect(schemaVersion(db)).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('两套迁移各自独立编号，互不干扰', () => {
+    const app = openDatabase(join(dir, 'app.db'));
+    const project = openDatabase(join(dir, 'project.db'));
+    try {
+      migrate(app, APP_MIGRATIONS);
+      migrate(project, PROJECT_MIGRATIONS);
+      expect(schemaVersion(app)).toBe(1);
+      expect(schemaVersion(project)).toBe(1);
+      // 同为 v1 但结构不同
+      expect(tableNames(app).has('providers')).toBe(true);
+      expect(tableNames(project).has('providers')).toBe(false);
+    } finally {
+      app.close();
+      project.close();
     }
   });
 });

@@ -28,6 +28,14 @@ const check = (ok, label, detail) => {
   if (!ok) failed = true;
 };
 
+/** 失败时把响应里的错误信封原样打出来，否则只能看到 undefined 猜不出原因。 */
+const explain = (id) => {
+  const f = stdoutFrames.find((x) => x.id === id);
+  if (f === undefined) return '(无响应)';
+  if (f.ok === true) return JSON.stringify(f.result).slice(0, 200);
+  return `${f.error?.code}: ${f.error?.message}${f.error?.detail === undefined ? '' : ` (${f.error.detail})`}`;
+};
+
 const child = spawn(process.execPath, [entry], {
   stdio: ['pipe', 'pipe', 'pipe'],
   env: { ...process.env, L_SCIENCE_DATA_DIR: dataDir },
@@ -142,7 +150,90 @@ try {
   await waitFor(() => stdoutFrames.filter((f) => f.id === 'dup').length >= 1, 8000, 'dup 响应');
   check(true, '重复 id 不致崩溃     ', '');
 
-  // --- 7. stdin 关闭后自行退出 ---
+  // --- 7. 项目与会话 CRUD ---
+  send(req('p1', { method: 'project.list' }));
+  await waitFor(() => byId('p1') !== undefined, 8000, 'project.list');
+  const initial = byId('p1');
+  check(
+    initial.ok === true &&
+      Array.isArray(initial.result?.projects) &&
+      initial.result.projects.length >= 1,
+    '首次运行有默认项目  ',
+    `${initial.result?.projects?.length ?? 0} 个`,
+  );
+
+  send(req('p2', { method: 'project.create', name: '端到端测试项目' }));
+  await waitFor(() => byId('p2') !== undefined, 8000, 'project.create');
+  const createdProject = byId('p2').result?.project;
+  check(
+    byId('p2').ok === true && createdProject?.name === '端到端测试项目',
+    'project.create      ',
+    createdProject?.id ?? '',
+  );
+
+  send(
+    req('cv1', {
+      method: 'conversation.create',
+      projectId: createdProject.id,
+      title: '第一次对话',
+    }),
+  );
+  await waitFor(() => byId('cv1') !== undefined, 8000, 'conversation.create');
+  const conversation = byId('cv1').result?.conversation;
+  check(
+    byId('cv1').ok === true && conversation?.status === 'idle',
+    'conversation.create ',
+    byId('cv1').ok === true ? `status=${conversation?.status}` : explain('cv1'),
+  );
+  if (byId('cv1').ok !== true) throw new Error(`conversation.create 失败：${explain('cv1')}`);
+
+  send(req('cv2', { method: 'conversation.list', projectId: createdProject.id }));
+  await waitFor(() => byId('cv2') !== undefined, 8000, 'conversation.list');
+  check(byId('cv2').result?.conversations?.length === 1, 'conversation.list   ', '');
+
+  send(req('cv3', { method: 'conversation.history', conversationId: conversation.id }));
+  await waitFor(() => byId('cv3') !== undefined, 8000, 'conversation.history');
+  const history = byId('cv3');
+  check(
+    history.ok === true &&
+      history.result?.page?.messages?.length === 0 &&
+      history.result.page.hasMore === false,
+    '空会话历史为空页    ',
+    `projectId=${history.result?.projectId === createdProject.id ? '匹配' : '不匹配'}`,
+  );
+
+  // 不存在的项目必须是 not_found，而不是 internal
+  send(req('p3', { method: 'conversation.list', projectId: 'no-such-project' }));
+  await waitFor(() => byId('p3') !== undefined, 8000, '不存在项目的响应');
+  check(
+    byId('p3').ok === false && byId('p3').error?.code === 'not_found',
+    '不存在项目→not_found',
+    byId('p3').error?.code ?? '',
+  );
+
+  // 归档后默认列表里应减少
+  send(req('p4', { method: 'project.archive', projectId: createdProject.id }));
+  await waitFor(() => byId('p4') !== undefined, 8000, 'project.archive');
+  send(req('p5', { method: 'project.list' }));
+  await waitFor(() => byId('p5') !== undefined, 8000, '归档后的列表');
+  send(req('p6', { method: 'project.list', includeArchived: true }));
+  await waitFor(() => byId('p6') !== undefined, 8000, '含归档的列表');
+  check(
+    byId('p5').result.projects.length < byId('p6').result.projects.length,
+    '归档从默认列表移除  ',
+    `${byId('p5').result.projects.length} vs ${byId('p6').result.projects.length}`,
+  );
+
+  // 尚未实现的方法必须显式拒绝，不能假装接受
+  send(req('n1', { method: 'conversation.send', conversationId: conversation.id, text: 'hi' }));
+  await waitFor(() => byId('n1') !== undefined, 8000, 'conversation.send');
+  check(
+    byId('n1').ok === false && byId('n1').error?.code === 'bad_request',
+    '未实现编排显式拒绝  ',
+    byId('n1').error?.message ?? '',
+  );
+
+  // --- 8. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([
@@ -153,8 +244,28 @@ try {
 } catch (err) {
   check(false, '验证流程异常        ', err instanceof Error ? err.message : String(err));
 } finally {
-  if (child.exitCode === null) child.kill();
-  rmSync(dataDir, { recursive: true, force: true });
+  // 必须等进程真正退出再删目录：Windows 上打开的 SQLite 文件被锁住，
+  // 立即 rmSync 会以 EPERM 失败。
+  if (child.exitCode === null) {
+    child.stdin.end();
+    const exited = await Promise.race([
+      new Promise((r) => child.once('exit', () => r(true))),
+      new Promise((r) => setTimeout(() => r(false), 4000)),
+    ]);
+    if (!exited) {
+      child.kill();
+      await new Promise((r) => setTimeout(r, 800));
+    }
+  }
+  // 即便如此仍可能撞上杀软或索引器短暂持有句柄，重试几次。
+  for (let i = 0; i < 5; i += 1) {
+    try {
+      rmSync(dataDir, { recursive: true, force: true });
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
 }
 
 process.stdout.write(failed ? '\n结果：有失败项\n' : '\n结果：控制平面通道全部通过\n');

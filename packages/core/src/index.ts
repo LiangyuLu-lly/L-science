@@ -8,10 +8,29 @@
 export { openDatabase, migrate, schemaVersion, sqliteVersion } from './db.js';
 export type { Db, Migration } from './db.js';
 
-export { MIGRATIONS } from './migrations.js';
+export { APP_MIGRATIONS } from './migrations/app.js';
+export { PROJECT_MIGRATIONS } from './migrations/project.js';
 
 export { appPaths, projectPaths, dataDir, blobRelPath, APP_DIR_NAME } from './paths.js';
 export type { AppPaths, ProjectPaths } from './paths.js';
+
+export { AppStore, ProjectStore } from './store.js';
+
+export { ProjectRepo } from './repo/projects.js';
+export type { Project, CreateProjectInput } from './repo/projects.js';
+
+export { ConversationRepo, MessageRepo, ToolCallRepo } from './repo/conversations.js';
+export type {
+  Conversation,
+  ConversationStatus,
+  Message,
+  MessageRole,
+  MessagePage,
+  AppendMessageInput,
+  ToolCall,
+  ToolCallStatus,
+  Usage,
+} from './repo/conversations.js';
 
 export { Dispatcher, DispatchError } from './dispatcher.js';
 export type { HandlerContext, RequestHandler, EventSink } from './dispatcher.js';

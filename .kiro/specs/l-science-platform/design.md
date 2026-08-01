@@ -13,6 +13,7 @@ Claude Science 只能调用 Anthropic 自家模型。L-science 把模型抽象�
 | 初版 | 含匿名化/脱敏引擎（检测器栈、Entity Vault、假名化、Leak Canary、哈希链审计、数据分级强制约束） |
 | 本版 | **匿名化与脱敏整条线已取消**。保留供应商策略标签（`trainingUse` / `zdr` / `local`）作为路由的可选过滤条件，以及一条普通出站日志（用于成本核算与排障）。<br>**后果（知情取舍）**：未发表手稿与受试者数据与普通文本走同一条出网路径，平台层面无任何拦截。 |
 | 本版 | AD-1 与 AD-2 的技术前提经实测推翻，两项决策已重写（见下） |
+| 本版 | **schema 拆分为应用库与项目库**（AD-7）。初版把 `providers` / `models` / `skills` / `connectors` / `compute_targets` / `environments` 等全局配置表错放进了每个项目库，后果是每个项目各有一份供应商注册表，且 `project.list` 无法实现——按项目分库时每个库只装自己那一个项目。由于当时尚无任何真实数据（真实数据目录从未被创建过），这是一次 1.0 前的 schema 重置，而非通过迁移演进 |
 
 ### 与 Claude Science 的对标基线
 
@@ -164,6 +165,17 @@ Reviewer 使用的模型必须与被审查内容的生成模型来自不同 prov
 
 理由：论文场景下 AI 的最大风险不是写得不好，而是自信地编造。Claude Science 有 artifact 血缘但没有断言级证据绑定，这是 L-science 的原创补强。
 
+**AD-7：应用库与项目库分离**
+
+两个数据库：`config/app.db` 存跨项目的东西（项目注册表、供应商与模型、技能、连接器、算力目标、环境、宿主授权、域名白名单、全局与算力作用域记忆），`projects/<id>/project.db` 存单个项目的内容。
+
+理由：设计定的是「按项目分库」，那么「列出所有项目」就不可能由某个项目库回答——每个库只装自己那一个项目。全局配置若放进项目库还会更糟：每个项目各有一份供应商注册表，改一处不影响其他项目。初版 schema 正是这么错的，已修正。
+
+两条配套约定：
+
+- **项目库内的表不带 `project_id` 列。** 数据库文件本身就是项目边界，再冗余一列只会引入「列值与所在文件不一致」这种无法被约束住的状态。项目身份记在 `project_meta` 单行表里（`CHECK (singleton = 1)`），用于检测被误复制到别处的库。
+- **创建与删除项目跨越数据库与文件系统，无法放进单个事务**，因此顺序是刻意选的：创建时先建目录与项目库、最后写注册表行；删除时先删注册表行、再关句柄、最后删目录。两个方向的中途失败都只会留下可被 `danglingProjects()` 发现的孤儿目录，而不是「注册表里有但打不开」的项目。删目录前必须先关闭数据库句柄——Windows 上打开的 SQLite 文件被锁住，直接删会以 `EPERM` 失败并留下残缺目录。
+
 **AD-6：按语言划分托管环境，R 不与 Python 同环境**
 
 平台托管两个 conda 环境：`lsci`（Python 内核）与 `lsci-r`（R 内核）。二者的包管理互不影响。
@@ -204,13 +216,14 @@ Reviewer 使用的模型必须与被审查内容的生成模型来自不同 prov
 ```
 %LOCALAPPDATA%\L-science\
   config\
+    app.db                     应用库：项目注册表、供应商与模型、技能、连接器、
+                               算力目标、环境、宿主授权、域名白名单、全局记忆
     settings.json              全局设置
-    providers.json             供应商与模型注册表
-    domain-allowlist.json      网络域名白名单
   credentials\
     vault.bin                  DPAPI 保护的 API 凭据库
   projects\<projectId>\
-    project.db                 SQLite：会话、计划、findings、引用、断言
+    project.db                 项目库：会话、消息、artifact、计划、findings、
+                               路由决策、审批、引用、断言、项目作用域记忆
     blobs\<sha256[0:2]>\<sha256>   内容寻址 artifact 二进制
     workspace\                 内核工作目录（会话级子目录）
     logs\egress.jsonl          出站日志（成本核算与排障）
@@ -517,7 +530,15 @@ Claude Science 提供了通用科研骨架，但没有针对论文产出的专�
 
 ## Data Models
 
-SQLite（`better-sqlite3`），WAL 模式，按项目分库。核心表：
+SQLite（`better-sqlite3`），WAL 模式，两级分库（见 AD-7）：`config/app.db` 存跨项目内容，`projects/<id>/project.db` 存单个项目内容。两套迁移各自独立编号，同为 v1 但结构不同。
+
+权威定义在代码里：`packages/core/src/migrations/app.ts` 与 `packages/core/src/migrations/project.ts`。下面列出的是结构要点，字段细节以代码为准——本文档不再重复完整 DDL，避免两处漂移。
+
+**应用库**：`projects`（含 `archived_at`，支持可逆归档）、`providers`、`models`、`skills`、`connectors`、`compute_targets`、`environments`、`host_grants`、`domain_allowlist`、`memory_notes`（全局与算力作用域）。
+
+**项目库**：`project_meta`（单行自我标识）、`conversations`、`messages`（`UNIQUE (conversation_id, seq)`）、`tool_calls`、`blobs`、`artifacts`、`artifact_versions`、`artifact_lineage`、`plans`、`plan_steps`、`reviewer_runs`、`findings`、`routing_decisions`、`routing_feedback`、`egress_log`、`approvals`、`compute_jobs`、`refs`、`manuscripts`、`claims`、`claim_evidence`、`memory_notes`（项目作用域）。
+
+历史参考：初版曾把全部表放在单一项目库里，DDL 如下（已废弃，仅供对照）：
 
 ```sql
 -- 项目与会话

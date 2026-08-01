@@ -25,6 +25,8 @@ export function dataDir(): string {
 export interface AppPaths {
   root: string;
   config: string;
+  /** 应用级数据库：项目注册表、供应商、技能、连接器、算力、全局记忆。 */
+  appDb: string;
   credentials: string;
   projects: string;
   runtime: string;
@@ -39,6 +41,7 @@ export function appPaths(root = dataDir()): AppPaths {
   return {
     root,
     config: join(root, 'config'),
+    appDb: join(root, 'config', 'app.db'),
     credentials: join(root, 'credentials'),
     projects: join(root, 'projects'),
     runtime: join(root, 'runtime'),
