@@ -1,11 +1,20 @@
 /**
  * Preload 脚本。渲染层唯一的能力入口。
  *
+ * 为什么是 `.cts` 而不是 `.ts`：Electron 在 `sandbox: true` 下的 preload 必须是
+ * CommonJS。shell 包整体是 ESM（`"type": "module"`），编出的 `.js` 会带 ESM
+ * `import`，沙箱化的 preload 加载器直接报
+ * `SyntaxError: Cannot use import statement outside a module` 并静默放弃加载——
+ * 表现是窗口正常打开但 `window.lscience` 不存在，功能全废却没有任何显式报错。
+ * `.cts` 让 tsc 产出 `preload.cjs`，同时保住 sandbox 带来的 OS 级隔离。
+ *
  * 只暴露窄接口，绝不暴露 `ipcRenderer` 本身——否则渲染层可以往任意通道发消息，
  * contextIsolation 带来的隔离就名存实亡了。
  */
 
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import electron = require('electron');
+
+const { contextBridge, ipcRenderer } = electron;
 
 const IPC_INVOKE = 'lscience:invoke';
 const IPC_EVENT = 'lscience:event';
@@ -22,9 +31,10 @@ export type Unsubscribe = () => void;
 
 const api = {
   versions: {
-    electron: process.versions.electron,
-    chrome: process.versions.chrome,
-    node: process.versions.node,
+    // 沙箱 preload 里的 process 是受限的 polyfill，字段可能缺失，给默认值兜底。
+    electron: process.versions.electron ?? 'unknown',
+    chrome: process.versions.chrome ?? 'unknown',
+    node: process.versions.node ?? 'unknown',
   },
 
   /**
@@ -36,7 +46,7 @@ const api = {
   },
 
   onEvent(listener: (event: BackendEvent) => void): Unsubscribe {
-    const wrapped = (_e: IpcRendererEvent, payload: BackendEvent): void => {
+    const wrapped = (_e: electron.IpcRendererEvent, payload: BackendEvent): void => {
       listener(payload);
     };
     ipcRenderer.on(IPC_EVENT, wrapped);
@@ -46,7 +56,7 @@ const api = {
   },
 
   onLog(listener: (line: string) => void): Unsubscribe {
-    const wrapped = (_e: IpcRendererEvent, line: string): void => {
+    const wrapped = (_e: electron.IpcRendererEvent, line: string): void => {
       listener(line);
     };
     ipcRenderer.on(IPC_LOG, wrapped);

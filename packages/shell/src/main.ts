@@ -119,7 +119,8 @@ function createWindow(): void {
     backgroundColor: '#111318',
     title: 'L-science',
     webPreferences: {
-      preload: join(here, 'preload.js'),
+      // 必须是 .cjs：sandbox 下的 preload 只能是 CommonJS，源文件为 preload.cts
+      preload: join(here, 'preload.cjs'),
       // 渲染层不允许直接接触 Node：所有能力经 preload 的 contextBridge 显式暴露。
       contextIsolation: true,
       nodeIntegration: false,

@@ -190,6 +190,8 @@ Reviewer 使用的模型必须与被审查内容的生成模型来自不同 prov
 | Docker | Desktop 4.72.0 已装。已尝试启动：命名管道能建起来，但特权服务 `com.docker.service` 保持 Stopped、`com.docker.backend.exe` 日志为空、也未能创建 `docker-desktop` WSL 发行版。**与 WSL2 卡在同一个提权门槛上**，且 Docker 是两条强隔离路径中更重的一条 |
 | R 在 Windows 上的启动前提 | conda 装的 R 不能直接跑 `lib/R/bin/x64/Rscript.exe`——依赖 DLL 散落在 env 的 `Library\bin` 等目录，不预置 PATH 会以 `0xC0000135`（STATUS_DLL_NOT_FOUND）退出，且 **stdout 与 stderr 全空**，极难定位。平台必须手动复现 conda activate 对 R 做的 PATH 与 `R_HOME` 设置，而不能依赖 `conda run`（后者会在内核外多包一层进程，拿不到真实 pid，无法正确中断/重启/强杀） |
 | Electron | 43.2.0 可用；但 `npm install` 期间它的 postinstall 未生效（包目录缺 `dist/electron.exe` 与 `path.txt`），需手动跑 `install.js`。已用 `scripts/postinstall.mjs` 幂等兜住 |
+| Electron preload 必须是 CommonJS | `sandbox: true` 下的 preload 只能是 CJS。shell 包整体是 ESM，编出的 `preload.js` 带 ESM `import`，Electron 会报 `Cannot use import statement outside a module` 并**静默放弃加载 preload**——窗口正常打开、无未捕获异常，但 `window.lscience` 不存在，整个 IPC 桥是死的。源文件用 `.cts` 让 tsc 产出 `preload.cjs`，从而在保住 sandbox 的同时满足 CJS 要求。这类故障单元测试抓不到，靠 `scripts/verify-ui.mjs` 经 CDP 检查真实渲染层 |
+| 渲染层实际状态验证 | 经 CDP 确认：preload 暴露且仅暴露 4 个具名方法、未泄漏 `ipcRenderer`/`require`/`process` 等内部对象、`app.status` 真实往返成功、渲染层无未捕获异常。后端跑在系统 Node v24.11.1 而 Electron 内置 Node 为 24.18.0，印证 AD-1 的进程与运行时确实分离 |
 | TypeScript | 7.0.2（原生 Go 编译器，按平台分发 prebuilt 二进制）。`tsc --build` 的项目引用工作正常；但 `rewriteRelativeImportExtensions` **接受选项却不生效**，产物里会留下运行时无法解析的 `./x.ts`。因此后端包的相对导入统一写 `.js` 后缀 |
 | GPU | RTX 5080 Laptop 16GB，驱动侧 CUDA 13.3，本机 Toolkit 仅 11.8（sm_120 需 cu12x+ 预编译 wheel） |
 | 网络 | npmjs.org 可达约 355ms，npmmirror.com 约 82ms；pypi.org 可达 |

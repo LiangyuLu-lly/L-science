@@ -20,6 +20,8 @@
     "build:clean": "tsc --build --clean",
     "build:ui": "npm run build --workspace @l-science/ui",
     "dev:ui": "npm run dev --workspace @l-science/ui",
+    "dev:shell": "npm run build && node scripts/dev-shell.mjs",
+    "verify:ui": "node scripts/verify-ui.mjs",
     "typecheck:ui": "npm run typecheck --workspace @l-science/ui",
     "test": "vitest run",
     "test:watch": "vitest",
