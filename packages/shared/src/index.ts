@@ -8,6 +8,38 @@
 
 export const PROTOCOL_VERSION = '0.1.0' as const;
 
+export {
+  IPC_PROTOCOL_VERSION,
+  errorCodeSchema,
+  errorEnvelopeSchema,
+  requestSchema,
+  requestFrameSchema,
+  responseFrameSchema,
+  eventFrameSchema,
+  frameSchema,
+  isRetryable,
+  makeError,
+  parseFrame,
+  parseRequest,
+  requestFrame,
+  okResponse,
+  errResponse,
+  eventFrame,
+} from './ipc.js';
+
+export type {
+  ErrorCode,
+  ErrorEnvelope,
+  Request,
+  RequestMethod,
+  RequestOf,
+  RequestFrame,
+  ResponseFrame,
+  EventFrame,
+  Frame,
+  ParseResult,
+} from './ipc.js';
+
 /* ------------------------------------------------------------------ *
  * 任务与路由
  * ------------------------------------------------------------------ */
