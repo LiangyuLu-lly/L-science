@@ -44,6 +44,9 @@ export type { CredentialRef } from './credentials/vault.js';
 
 export * from './router/index.js';
 
+export { RegistryRepo, RegistrySync, buildRouterView, HEALTH_TTL_MS } from './repo/registry.js';
+export type { ProviderRecord, ModelRecord, ModelHealth, SyncResult } from './repo/registry.js';
+
 export {
   JobObject,
   InterruptEvent,
