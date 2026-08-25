@@ -143,9 +143,11 @@ Electron 只负责窗口、菜单与 IPC 桥；控制平面跑在一个由系统
 
 | 后端 | 隔离强度 | 本机可用性 | 网络出口管控 |
 | --- | --- | --- | --- |
-| `native`（v1 默认） | 弱：Job Object 资源限额 + 工作目录约束 + 工具层路径白名单 + 代理强制 | 立即可用 | 代理级（可被绕过） |
-| `wsl2` | 强：独立内核 + 网络命名空间 + 文件系统边界 | 需 `wsl --install -d` 装发行版（管理员 + 重启） | 硬性 |
-| `docker` | 强：容器 + 自定义网络 | 需启动 Docker Desktop 重建 WSL 后端 | 硬性 |
+| `native` | 弱：Job Object 内核级资源限额（见 AD-8）+ 工作目录约束 + 工具层路径白名单 + 代理强制 | 立即可用 | 代理级（代码可直接建 socket 绕过） |
+| `wsl2`（当前默认） | 强：独立内核 + 网络命名空间 + 文件系统边界 | 本机已装 Ubuntu，可用 | 硬性 |
+| `docker` | 强：容器 + 自定义网络 | **不实现**：其后端本身依赖 WSL2，在已有 WSL2 的前提下多一层容器的隔离增益不值得 Docker Desktop 的常驻开销 | 硬性 |
+
+`native` 后端下文件系统边界的唯一实现是 `PathGuard`。它逐类拦截 Windows 上的路径等价写法：`..` 穿越、大小写差异、8.3 短名（`PROGRA~1`）、长路径前缀（`\\?\` 会绕过规范化）、UNC、备用数据流（`file.txt:hidden`）、保留设备名（`NUL`/`CON`/`COM1`，含带扩展名形式）、尾随点与空格（系统会静默剥掉）、以及符号链接与 junction 逃逸（对尚不存在的目标检查最近的已存在祖先）。漏掉任何一条都等于边界失效，因此每条都有独立测试。
 
 理由：Windows Sandbox 与 Containers 可选功能均已禁用，启用需管理员权限 + 重启，当前会话非管理员。因此 v1 必须能在纯用户态跑起来，同时把升级路径留好。UI 持续显示当前隔离强度徽章。
 
@@ -164,6 +166,21 @@ Reviewer 使用的模型必须与被审查内容的生成模型来自不同 prov
 手稿中每一条可核查断言都在数据库里有一条记录，绑定到具体证据（artifact 版本 / DOI / 分析单元）。无证据断言与证据-结论不符由 Reviewer 强制检查。
 
 理由：论文场景下 AI 的最大风险不是写得不好，而是自信地编造。Claude Science 有 artifact 血缘但没有断言级证据绑定，这是 L-science 的原创补强。
+
+**AD-8：用 FFI 获取必要的 Windows 原生能力**
+
+经 `koffi`（自带 prebuilt 二进制，无需本机 C/C++ 工具链）调用 Windows API，拿到两样没有原生调用就做不到的东西：
+
+| 能力 | 没有它的后果 |
+| --- | --- |
+| **Job Object**（`CreateJobObjectW` / `SetInformationJobObject` / `AssignProcessToJobObject`） | 内存限额只能退化为轮询检查——进程在两次轮询之间可以冲到任意大小；「退出不留孤儿」只能靠 `taskkill /T`，而它依赖父子关系记录，进程主动脱离父级就杀不到 |
+| **内核中断事件**（`CreateEventW` / `SetEvent`，即 `JPY_INTERRUPT_EVENT`） | 中断只能退化为重启内核，用户的全部变量丢失 |
+
+这修正了 AD-3 原先的表述（原文声称用 Job Object，但当时的实现拿不到）。实测结论：96MB 限额下超限进程被内核直接终止；`KILL_ON_JOB_CLOSE` 在 job 句柄关闭时带走整组进程；`SetEvent` 在约 1.1-1.6 秒内产生真实 `KeyboardInterrupt` 且状态保留。
+
+包边界：FFI 只存在于 `@l-science/core` 的 `win32/` 下。`@l-science/kernel` 通过注入的 `KernelInterrupter` 接口拿到中断能力，本身不依赖 FFI——这样内核客户端保持可移植，也便于在没有 FFI 的环境下按接口降级。
+
+不可用时（非 Windows、或 koffi 加载失败）全部能力优雅降级，并由 `nativeCapabilities().notes` 给出后果说明，而不是静默变成空操作。「以为设了限额其实没设」比「知道没有限额」危险得多。
 
 **AD-7：应用库与项目库分离**
 
@@ -200,7 +217,8 @@ Reviewer 使用的模型必须与被审查内容的生成模型来自不同 prov
 | 托管环境 `lsci-r` | 平台自用 R 环境，R 4.5.3 + IRkernel 1.3.2。**R 独立成环境**（见下方 AD-6） |
 | WSL2 | 内核 2.7.3.0 就绪，默认版本 2，**零发行版**。安装发行版需管理员 + 重启 |
 | Docker | Desktop 4.72.0 已装。已尝试启动：命名管道能建起来，但特权服务 `com.docker.service` 保持 Stopped、`com.docker.backend.exe` 日志为空、也未能创建 `docker-desktop` WSL 发行版。**与 WSL2 卡在同一个提权门槛上**，且 Docker 是两条强隔离路径中更重的一条 |
-| **Windows 上无法消息式中断内核** | ipykernel 的 `_send_interrupt_children()` 里写着 `if os.name == "nt": self.log.error("Interrupt message not supported on Windows")`——`interrupt_request` 在 Windows 上是**空操作**。jupyter_client 走的是 `JPY_INTERRUPT_EVENT`（把一个 Windows Event 句柄经环境变量传给内核，由 ipykernel 的 `ParentPollerWindows` 等待），创建该内核对象需要原生调用，纯 JS 拿不到。<br>因此 `interrupt()` 的策略是：先按规范发 `interrupt_request`，再**检查执行是否真的停下**；未停则重启内核并如实报告状态已丢失，返回值区分 `interrupted` 与 `restarted`。绝不假装中断成功——那会让用户以为变量还在。<br>附带结论：内核跑在 `wsl2` 沙箱后端里时是 Linux 进程，消息式中断正常生效。这是 `wsl2` 后端除网络隔离之外的第二个实质收益。 |
+| **Windows 内核中断（已解决）** | ipykernel 的 `_send_interrupt_children()` 里写着 `if os.name == "nt": self.log.error("Interrupt message not supported on Windows")`——控制通道的 `interrupt_request` 在 Windows 上是**空操作**。真正的机制是 `JPY_INTERRUPT_EVENT`：把一个可继承的 Windows Event 句柄经环境变量传给内核，由 ipykernel 的 `ParentPollerWindows` 等待。<br>初版设计认为「创建该内核对象需要原生调用，纯 JS 拿不到」，因此把中断退化成重启。**这个结论已被推翻**：经 koffi FFI（自带 prebuilt，无需本机 C 工具链）调用 `CreateEventW` / `SetEvent` 即可。实测触发后约 1.1-1.6 秒产生真实 `KeyboardInterrupt`，且**内存状态完整保留**。见 AD-8。 |
+| 中断的固有边界 | `interrupt_main()` 只设置「待处理信号」标志，由解释器在字节码之间检查。因此**单个长阻塞调用无法被中断**（`time.sleep(60)` 要等它自己返回才检查标志），只有真正的控制台 CTRL_C 能打断。平台对此的行为是：尝试中断 → 确认无效 → 退化为重启 → 如实报告状态已丢失。`interrupt()` 的返回值区分 `interrupted` 与 `restarted`，绝不假装中断成功。 |
 | R 内核心跳的分帧要求 | ipykernel 的心跳通道是 ROUTER，IRkernel 的是 REP。REP 要求消息以空分隔帧开头（REQ 会自动加），发裸单帧会被静默丢弃，表现为「R 内核心跳永远不可达」。客户端统一用 `[空帧, 载荷]` 的 REQ 分帧形式，对 ROUTER 无害，两者都能通。 |
 | R 在 Windows 上的启动前提 | conda 装的 R 不能直接跑 `lib/R/bin/x64/Rscript.exe`——依赖 DLL 散落在 env 的 `Library\bin` 等目录，不预置 PATH 会以 `0xC0000135`（STATUS_DLL_NOT_FOUND）退出，且 **stdout 与 stderr 全空**，极难定位。平台必须手动复现 conda activate 对 R 做的 PATH 与 `R_HOME` 设置，而不能依赖 `conda run`（后者会在内核外多包一层进程，拿不到真实 pid，无法正确中断/重启/强杀） |
 | Electron | 43.2.0 可用；但 `npm install` 期间它的 postinstall 未生效（包目录缺 `dist/electron.exe` 与 `path.txt`），需手动跑 `install.js`。已用 `scripts/postinstall.mjs` 幂等兜住 |

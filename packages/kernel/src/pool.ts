@@ -9,7 +9,7 @@
 
 import { join } from 'node:path';
 
-import { JupyterKernel } from './kernel.js';
+import { JupyterKernel, type KernelInterrupter } from './kernel.js';
 import {
   detectKernels,
   pythonLaunchSpec,
@@ -29,6 +29,13 @@ export interface KernelPoolOptions {
   onLog?: (line: string) => void;
   /** 注入探测结果，便于测试。省略时实时探测。 */
   available?: AvailableKernels;
+  /**
+   * 为每个内核创建中断递送机制。
+   *
+   * 省略时 Windows 上的中断会退化成重启（丢失内存状态）。`@l-science/core`
+   * 通过 FFI 提供 `InterruptEvent`，本包刻意不引入 FFI 依赖。
+   */
+  interrupterFactory?: () => KernelInterrupter | null;
 }
 
 interface Entry {
@@ -130,6 +137,8 @@ export class KernelPool {
     const runtimeDir = join(this.#opts.runtimeDir, conversationId);
     const cwd = join(this.#opts.workspaceRoot, conversationId);
 
+    const interrupter = this.#opts.interrupterFactory?.() ?? null;
+
     if (language === 'python') {
       if (a.python === null) {
         throw new Error(
@@ -141,6 +150,7 @@ export class KernelPool {
         runtimeDir,
         cwd,
         onLog: this.#onLog,
+        ...(interrupter === null ? {} : { interrupter }),
       });
     }
 
@@ -159,6 +169,7 @@ export class KernelPool {
       runtimeDir,
       cwd,
       onLog: this.#onLog,
+      ...(interrupter === null ? {} : { interrupter }),
     });
   }
 

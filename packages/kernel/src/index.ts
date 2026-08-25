@@ -45,6 +45,7 @@ export type {
   ExecuteOptions,
   InspectReply,
   KernelInfo,
+  KernelInterrupter,
   KernelOptions,
 } from './kernel.js';
 

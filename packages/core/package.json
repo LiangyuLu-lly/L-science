@@ -20,6 +20,7 @@
     "@l-science/kernel": "*",
     "@l-science/shared": "*",
     "better-sqlite3": "13.0.2",
+    "koffi": "3.1.4",
     "zod": "4.4.3"
   },
   "devDependencies": {

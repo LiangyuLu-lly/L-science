@@ -32,6 +32,17 @@ export type {
   Usage,
 } from './repo/conversations.js';
 
+export * from './sandbox/index.js';
+
+export {
+  JobObject,
+  InterruptEvent,
+  nativeCapabilities,
+  win32,
+  win32Available,
+} from './win32/index.js';
+export type { JobLimits, NativeCapabilities, Win32Api } from './win32/index.js';
+
 export { Dispatcher, DispatchError } from './dispatcher.js';
 export type { HandlerContext, RequestHandler, EventSink } from './dispatcher.js';
 

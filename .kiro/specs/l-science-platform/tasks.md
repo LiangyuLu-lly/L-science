@@ -146,22 +146,34 @@
 
 ### 5. 沙箱后端
 
-- [ ] 5.1 `SandboxBackend` 接口与隔离报告
+- [x] 5.0 经 FFI 获取 Windows 原生能力（AD-8，计划外但必须先做）
+  - 用 `koffi`（自带 prebuilt，无需本机 C 工具链）调 Windows API，拿到两样没有原生调用就做不到的能力
+  - **Job Object**：内核级内存限额 + `KILL_ON_JOB_CLOSE`。没有它限额只能退化为轮询（存在超限窗口），孤儿清理只能靠 `taskkill /T`（进程脱离父级就杀不到）
+  - **内核中断事件**（`JPY_INTERRUPT_EVENT`）：没有它中断只能退化为重启，用户变量全丢
+  - 实测：96MB 限额下超限进程被内核终止；`SetEvent` 在约 1.1-1.6 秒内产生真实 `KeyboardInterrupt` 且**状态完整保留**
+  - FFI 只存在于 core 的 `win32/`；kernel 包通过注入的 `KernelInterrupter` 接口拿到能力，本身不依赖 FFI
+  - 不可用时优雅降级并由 `nativeCapabilities().notes` 说明后果——「以为设了限额其实没设」比「知道没有限额」危险
+  - 修正了 `interrupt()` 的一个真 race：原先轮询全局 `#executing`，用户中断后立刻跑下一个 cell 会让它误判为中断无效而重启内核；改为按具体那次执行的标识判断
+  - 记录固有边界：单个长阻塞调用（`time.sleep(60)`）无法被 `interrupt_main()` 中断，此时如实退化为重启
+  - _需求：5.2、3.9_
+- [x] 5.1 `SandboxBackend` 接口与隔离报告
   - 定义接口与 `IsolationReport`；实现后端选择逻辑（按 doctor 的探测结果）
   - `caveats` 必须原样透出到 UI，不允许在传递过程中被裁剪或美化
   - 测试：无强隔离后端时选择 `native` 且报告中包含全部已知缺口
   - _需求：5.1、2.5、2.6_
-- [ ] 5.2 `native` 后端的进程约束
-  - Job Object 施加内存与 CPU 上限并设置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`；墙钟超时终止
-  - 测试：超限被终止；父进程退出后无孤儿进程
+- [x] 5.2 `native` 后端的进程约束
+  - Job Object 内核级内存限额 + `KILL_ON_JOB_CLOSE`；墙钟超时终止；输出上限截断并标注
+  - `SupervisedResult.enforcement` 区分 `kernel` / `polling` / `wall-clock-only`，让降级可见
+  - PowerShell 命令经 UTF-16LE Base64 传入（避免多层传参剥引号），并注入 UTF-8 编码前导——否则中文输出会因控制台 OEM 代码页变成乱码（实测撞到）
   - _需求：5.2、20.2.3_
-- [ ] 5.3 路径规范化与白名单校验
-  - 统一的路径解析入口，拒绝 `..` 穿越、符号链接与 junction 逃逸、UNC 路径、备用数据流、大小写混淆、长路径前缀绕过
-  - 测试：逐类逃逸手法各一条用例，全部断言被拒
+- [x] 5.3 路径规范化与白名单校验
+  - 逐类拦截：`..` 穿越、大小写差异、8.3 短名、长路径前缀 `\\?\`、UNC、备用数据流、保留设备名（含带扩展名形式）、尾随点与空格、符号链接与 junction 逃逸
+  - 对尚不存在的目标检查最近的已存在祖先，防止「经指向外部的目录链接创建新文件」
+  - 测试：每类手法各一条用例，全部断言被拒
   - _需求：5.3_
-- [ ] 5.4 受保护路径拒写表
-  - 覆盖 `.ssh`、`.git/config`、`.git/hooks`、`.vscode`、`.idea`、PowerShell profile、平台自身数据目录
-  - 测试：每类路径的写入尝试均被拒
+- [x] 5.4 受保护路径拒写表
+  - 覆盖 `.ssh` / `.gnupg` / `.aws`、`.git/config` 与 `hooks` 与 `modules`、`.vscode`、`.idea`、`.npmrc`、`.netrc`、shell 启动脚本、PowerShell profile、开机启动目录、以及显式声明的平台数据目录
+  - 只拦写不拦读：读取无害且有诊断价值
   - _需求：5.4_
 - [ ] 5.5 宿主路径授权
   - `request_host_access` / `list_host_grants`；区分只读与读写；支持撤销与有效期
@@ -172,7 +184,7 @@
   - UI 必须明示 `native` 后端下该管控为代理级、可被直接建 socket 绕过
   - 测试：白名单内放行、白名单外拦截并发起审批
   - _需求：5.8、5.9_
-- [ ] 5.7 `wsl2` 后端
+- [x] 5.7 `wsl2` 后端
   - 在 WSL2 发行版内启动内核与 shell，利用网络命名空间做硬性出口管控；Windows 与 WSL 路径互转
   - 前置条件：已安装发行版。注意本机存在 localhost 代理未镜像到 WSL 的情况（NAT 模式不支持），需在出口策略中处理
   - 测试：发行版不可用时正确降级并更新徽章

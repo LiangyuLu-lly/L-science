@@ -95,6 +95,21 @@ class OutputQueue {
   }
 }
 
+/**
+ * 平台相关的中断递送机制。
+ *
+ * 由调用方注入而不是在本包内实现：Windows 上它需要经 FFI 创建一个可继承的
+ * Event 句柄，而本包刻意不引入 FFI 依赖。`@l-science/core` 的 `InterruptEvent`
+ * 在结构上满足这个接口。
+ */
+export interface KernelInterrupter {
+  /** 注入内核进程的环境变量（Windows 上为 `JPY_INTERRUPT_EVENT`）。 */
+  readonly env: Readonly<Record<string, string>>;
+  /** 触发中断。返回是否成功递送。 */
+  signal(): boolean;
+  close(): void;
+}
+
 export interface KernelOptions {
   spec: LaunchSpec;
   /** 连接文件与启动器脚本的存放目录。 */
@@ -102,6 +117,16 @@ export interface KernelOptions {
   /** 内核工作目录，必须落在项目 workspace 内。 */
   cwd: string;
   onLog?: (line: string) => void;
+  /**
+   * 中断递送机制。
+   *
+   * 省略时 Windows 上的中断只能退化为重启：ipykernel 的
+   * `_send_interrupt_children()` 对 `os.name == "nt"` 直接放弃，控制通道的
+   * `interrupt_request` 是空操作。注入后中断能真正生效且保留内存状态。
+   *
+   * 生命周期归本内核：`shutdown()` 时会关闭它。
+   */
+  interrupter?: KernelInterrupter;
 }
 
 export interface ExecuteOptions {
@@ -138,6 +163,7 @@ export class JupyterKernel {
   readonly #cwd: string;
   readonly #onLog: (line: string) => void;
   readonly #id: string;
+  readonly #interrupter: KernelInterrupter | null;
 
   #session: string;
   #info: ConnectionInfo | null = null;
@@ -157,12 +183,22 @@ export class JupyterKernel {
   #finishExecution: ((failure?: Error) => void) | null = null;
   /** 在途的重启任务。期间通道断开，execute 需要先等它完成。 */
   #restarting: Promise<void> | null = null;
+  /**
+   * 当前执行的标识。
+   *
+   * `interrupt()` 必须按「具体哪一次执行」判断是否成功，不能看全局的
+   * `#executing`：用户中断后立刻发起下一个 cell 时，全局标志会再次变成 true，
+   * 还在轮询的 interrupt 会误判为「中断没生效」而去重启内核——把本该保留的
+   * 状态给丢了。
+   */
+  #executionToken: symbol | null = null;
 
   private constructor(opts: KernelOptions) {
     this.#spec = opts.spec;
     this.#runtimeDir = opts.runtimeDir;
     this.#cwd = opts.cwd;
     this.#onLog = opts.onLog ?? ((): void => {});
+    this.#interrupter = opts.interrupter ?? null;
     this.#id = randomUUID();
     this.#session = createSessionId();
     this.language = opts.spec.language;
@@ -231,7 +267,8 @@ export class JupyterKernel {
     const child = spawn(this.#spec.command, [...this.#spec.args, connFile], {
       cwd: this.#cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...this.#spec.env },
+      // 中断事件的句柄经环境变量传入，因此必须在这里合并
+      env: { ...process.env, ...this.#spec.env, ...(this.#interrupter?.env ?? {}) },
       windowsHide: true,
     });
     this.#child = child;
@@ -337,6 +374,7 @@ export class JupyterKernel {
     this.#finishExecution?.(new Error('内核已重启，本次执行被中止'));
     this.#finishExecution = null;
     this.#executing = false;
+    this.#executionToken = null;
 
     const task = (async (): Promise<void> => {
       await this.#teardown();
@@ -360,41 +398,53 @@ export class JupyterKernel {
   }
 
   /**
-   * 中断执行。
+   * 中断执行。返回实际发生了什么。
    *
-   * 返回实际发生了什么，因为在 Windows 上「中断」往往只能靠重启达成：
+   * 两条递送路径，都试：
    *
-   * ipykernel 的 `_send_interrupt_children()` 里写着
-   * `if os.name == "nt": self.log.error("Interrupt message not supported on Windows")`
-   * ——消息式中断在 Windows 上是空操作。jupyter_client 走的是
-   * `JPY_INTERRUPT_EVENT`（把一个 Windows Event 句柄经环境变量传给内核，
-   * 由 ipykernel 的 ParentPollerWindows 等待），那需要创建内核对象的原生调用，
-   * 纯 JS 拿不到。
+   * - **中断事件**（注入的 `interrupter`）：Windows 上唯一真正有效的机制。
+   *   ipykernel 的 `_send_interrupt_children()` 对 `os.name == "nt"` 直接放弃，
+   *   所以控制通道的 `interrupt_request` 在 Windows 上是空操作；真正起作用的是
+   *   经 `JPY_INTERRUPT_EVENT` 传入的 Event 句柄。实测触发后约 1.6 秒内产生
+   *   KeyboardInterrupt，且**内存状态完整保留**。
+   * - **`interrupt_request`**：POSIX 上有效（内核跑在 WSL2 后端里也走这条）。
    *
-   * 因此这里的策略是：先按规范发 `interrupt_request`（Linux/macOS 上有效，
-   * 内核跑在 WSL2 沙箱里时同样有效），再检查执行是否真的停下；没停就重启，
-   * 并如实报告状态已丢失。绝不假装中断成功——那会让用户以为变量还在。
+   * 两条都不奏效时才重启，并如实报告状态已丢失。绝不假装中断成功——那会让
+   * 用户以为变量还在。
    */
   async interrupt(graceMs = 3000): Promise<'idle' | 'interrupted' | 'restarted'> {
     if (this.#closed) return 'idle';
-    if (!this.#executing) return 'idle';
 
-    const channels = this.#requireChannels();
-    try {
-      await channels.request('control', 'interrupt_request', {}, 5000);
-    } catch (err) {
-      this.#onLog(`中断请求未获回复：${err instanceof Error ? err.message : String(err)}`);
+    // 记下要中断的是哪一次执行；后文全程按它判断，不看全局的 #executing
+    const target = this.#executionToken;
+    if (target === null) return 'idle';
+
+    const delivered = this.#interrupter?.signal() ?? false;
+    if (!delivered && this.#interrupter !== null) {
+      this.#onLog('中断事件递送失败，回落到 interrupt_request');
     }
 
-    // 轮询等执行真正结束，而不是假定 interrupt_request 一定奏效
+    // 即便事件已递送也发一次消息：跨平台一致，且对 POSIX 内核是主路径
+    try {
+      await this.#requireChannels().request('control', 'interrupt_request', {}, 5000);
+    } catch (err) {
+      this.#onLog(
+        `interrupt_request 未获回复：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // 轮询等那次执行真正结束。判据是它的标识不再是当前标识——即便用户紧接着
+    // 发起了新的执行，原来那次已经停下就算中断成功。
     const deadline = Date.now() + graceMs;
     while (Date.now() < deadline) {
-      if (!this.#executing) return 'interrupted';
+      if (this.#executionToken !== target) return 'interrupted';
       await new Promise((r) => setTimeout(r, 100));
     }
 
     this.#onLog(
-      '中断未生效（Windows 上 ipykernel 不支持消息式中断），改为重启内核；内存状态将丢失',
+      this.#interrupter === null
+        ? '中断未生效且未注入中断事件机制，改为重启内核；内存状态将丢失'
+        : '中断在宽限期内未生效，改为重启内核；内存状态将丢失',
     );
     await this.restart();
     return 'restarted';
@@ -420,6 +470,8 @@ export class JupyterKernel {
     this.#finishExecution = null;
     this.#executing = false;
     await this.#teardown();
+    // 中断事件的生命周期归本内核，见 KernelOptions.interrupter 的说明
+    this.#interrupter?.close();
   }
 
   async #teardown(): Promise<void> {
@@ -476,7 +528,11 @@ export class JupyterKernel {
     const timeoutMs = opts.timeoutMs ?? 0;
 
     // 同步占位，保证「拒绝并发」这件事是同步可预期的
-    if (!internal) this.#executing = true;
+    const token = Symbol('execution');
+    if (!internal) {
+      this.#executing = true;
+      this.#executionToken = token;
+    }
 
     let unsubscribe: (() => void) | null = null;
     let timer: NodeJS.Timeout | null = null;
@@ -491,6 +547,8 @@ export class JupyterKernel {
       if (!internal) {
         this.#executing = false;
         this.#finishExecution = null;
+        // 只在仍是自己这次执行时清空，避免抹掉后继执行的标识
+        if (this.#executionToken === token) this.#executionToken = null;
       }
       if (queue.dropped > 0) {
         queue.push({
