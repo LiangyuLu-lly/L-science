@@ -42,6 +42,8 @@ export {
 } from './credentials/vault.js';
 export type { CredentialRef } from './credentials/vault.js';
 
+export * from './router/index.js';
+
 export {
   JobObject,
   InterruptEvent,
