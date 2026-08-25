@@ -38,6 +38,14 @@ export type { CapabilitySnapshot } from './capabilities.js';
 export { createShellTool, formatShellResult, truncateStream } from './shell.js';
 export type { ShellInput, ShellToolOptions } from './shell.js';
 
+export { BackgroundRunner, BackgroundTooManyError } from './background.js';
+export type {
+  BackgroundNotice,
+  BackgroundRunnerOptions,
+  BackgroundState,
+  BackgroundTask,
+} from './background.js';
+
 export {
   collectExecution,
   createKernelTool,
