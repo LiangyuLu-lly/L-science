@@ -356,14 +356,65 @@ describe('迁移机制', () => {
     try {
       migrate(app, APP_MIGRATIONS);
       migrate(project, PROJECT_MIGRATIONS);
-      expect(schemaVersion(app)).toBe(1);
-      expect(schemaVersion(project)).toBe(1);
-      // 同为 v1 但结构不同
+
+      // 断言各自跑到自己那套的最新版本，而不是写死具体数字——
+      // 写死会让每次新增迁移都误报一次失败，而失败并不指向任何真实问题
+      const appLatest = Math.max(...APP_MIGRATIONS.map((m) => m.version));
+      const projectLatest = Math.max(...PROJECT_MIGRATIONS.map((m) => m.version));
+      expect(schemaVersion(app)).toBe(appLatest);
+      expect(schemaVersion(project)).toBe(projectLatest);
+
+      // 版本号互不影响，结构也不同
       expect(tableNames(app).has('providers')).toBe(true);
       expect(tableNames(project).has('providers')).toBe(false);
+      expect(tableNames(project).has('artifacts')).toBe(true);
+      expect(tableNames(app).has('artifacts')).toBe(false);
     } finally {
       app.close();
       project.close();
+    }
+  });
+});
+
+describe('blob 回收标记迁移（v2）', () => {
+  it('blobs 表带上 evicted_at 列', () => {
+    // 这一列是为了解决「软删除保留版本行 → 外键挡住删 blob 行 → GC 回收不了
+    // 空间」这个冲突。没有它，垃圾回收会直接撞 FOREIGN KEY constraint failed
+    const db = openDatabase(join(dir, 'evict.db'));
+    try {
+      migrate(db, PROJECT_MIGRATIONS);
+      const columns = (db.prepare('PRAGMA table_info(blobs)').all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+      expect(columns).toContain('evicted_at');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('从 v1 增量升级到 v2 而不是重建', () => {
+    // 用户已有的项目库必须能就地升级，重建会丢掉全部数据
+    const path = join(dir, 'upgrade.db');
+    const first = openDatabase(path);
+    try {
+      migrate(first, [PROJECT_MIGRATIONS[0]!]);
+      first
+        .prepare(
+          "INSERT INTO blobs (sha256, size_bytes, rel_path, refcount, created_at) VALUES ('a', 1, 'a/a', 0, 1)",
+        )
+        .run();
+    } finally {
+      first.close();
+    }
+
+    const second = openDatabase(path);
+    try {
+      migrate(second, PROJECT_MIGRATIONS);
+      // 升级后旧数据还在
+      const row = second.prepare("SELECT sha256, evicted_at FROM blobs WHERE sha256 = 'a'").get();
+      expect(row).toMatchObject({ sha256: 'a', evicted_at: null });
+    } finally {
+      second.close();
     }
   });
 });

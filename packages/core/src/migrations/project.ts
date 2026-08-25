@@ -273,6 +273,26 @@ CREATE TABLE memory_notes (
 );
 `;
 
+/**
+ * blob 的内容回收标记。
+ *
+ * 起因是一个设计冲突：软删除刻意保留 artifact_versions 行（血缘不能断），
+ * 而版本行的 blob_sha256 外键指向 blobs，因此 blobs 行删不掉——垃圾回收
+ * 直接撞 FOREIGN KEY constraint failed，空间根本回收不了。
+ *
+ * 解法是把「内容还在吗」与「记录还在吗」分开：GC 删掉磁盘文件并打上
+ * evicted_at，blobs 行与版本行都保留。血缘因此完整，空间也能回收。
+ *
+ * 单独记这个时间戳而不是只靠「文件不存在」推断，是为了区分两件事：
+ * 内容被主动回收（预期行为，可以如实告知用户）与文件意外丢失（数据损坏，
+ * 需要告警）。两者对用户的含义完全不同。
+ */
+const M002 = `
+ALTER TABLE blobs ADD COLUMN evicted_at INTEGER;
+CREATE INDEX idx_blobs_evicted ON blobs (evicted_at) WHERE evicted_at IS NOT NULL;
+`;
+
 export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'project-initial', sql: M001 },
+  { version: 2, name: 'blob-eviction', sql: M002 },
 ];

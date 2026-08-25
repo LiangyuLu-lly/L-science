@@ -59,6 +59,8 @@ export type { HostAccessDecision, RequestHostAccessInput } from './sandbox/host-
 
 export * from './tools/index.js';
 
+export * from './artifact/index.js';
+
 export {
   JobObject,
   InterruptEvent,
