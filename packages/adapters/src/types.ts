@@ -17,6 +17,18 @@ export interface ChatMessage {
   content: string;
   /** 当 role 为 'tool' 时，指向发起该调用的 tool_call id。 */
   toolCallId?: string;
+  /**
+   * 当 role 为 'assistant' 且该轮产出了工具调用时，必须原样带上它们。
+   *
+   * 这不是可选的补充信息，而是协议要求：OpenAI 方言规定 `role:'tool'` 的消息
+   * 必须紧跟在一条声明了 `tool_calls` 的 assistant 消息之后。缺了它，服务端会
+   * 以 400 拒收整个请求，报「tool 消息没有对应的 tool_calls」。
+   *
+   * 实测这个 bug 的症状具有误导性：第一轮工具调用正常，把结果回灌后的第二轮
+   * 直接失败，看起来像是「模型不愿意继续」或「工具结果格式不对」，
+   * 而真正的原因在历史消息的结构上。
+   */
+  toolCalls?: ReadonlyArray<{ id: string; name: string; argumentsJson: string }>;
 }
 
 export interface ToolSchema {

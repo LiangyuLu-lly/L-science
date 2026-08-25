@@ -10,14 +10,28 @@
 
 import { makeError } from '@l-science/shared';
 
+import { mkdirSync } from 'node:fs';
+import { join as joinPath, resolve as resolvePath, sep } from 'node:path';
+
+import { createDefaultRegistry } from '@l-science/adapters';
+import type { TurnEvent } from '@l-science/shared';
+
 import { ApprovalService } from './approval/service.js';
 import { QuestionService } from './approval/questions.js';
+import { ArtifactStore } from './artifact/store.js';
+import { createDeleteArtifactsTool, createSaveArtifactsTool } from './artifact/tools.js';
+import { CredentialVault } from './credentials/vault.js';
 import { DispatchError } from './dispatcher.js';
 import { schemaVersion, sqliteVersion } from './db.js';
+import { ConversationBusyError, Orchestrator } from './orchestrator/index.js';
 import { ApprovalRepo } from './repo/approvals.js';
 import { GrantRepo } from './repo/grants.js';
+import { RegistryRepo, buildRouterView } from './repo/registry.js';
 import { requestHostAccess } from './sandbox/host-access.js';
 import { AppStore, type ProjectStore } from './store.js';
+import { capabilityProbe, detectCapabilities } from './tools/capabilities.js';
+import { createEditFileTool, createReadFileTool } from './tools/files.js';
+import { ToolRegistry } from './tools/registry.js';
 import { StdioTransport } from './transport.js';
 
 /** 日志一律走 stderr，见文件头说明。 */
@@ -29,10 +43,6 @@ function notFound(message: string, remediation?: string): DispatchError {
   return new DispatchError(
     makeError('not_found', message, remediation === undefined ? {} : { remediation }),
   );
-}
-
-function badRequest(message: string): DispatchError {
-  return new DispatchError(makeError('bad_request', message));
 }
 
 /**
@@ -155,13 +165,134 @@ function main(): void {
     throw notFound(`会话不存在：${req.conversationId}`);
   });
 
-  d.register('conversation.send', async () => {
-    // 真正的编排属于后续任务；此刻明确拒绝而不是假装接受了消息。
-    throw badRequest('会话编排尚未实现（属于 M1 后续任务）');
+  /*
+   * 会话编排（任务 8.5.4）。
+   *
+   * 按项目懒加载编排器：工具注册表要绑定该项目的制品存储与工作目录，
+   * 共用一个会让 A 项目的会话把制品写进 B 项目的库。
+   */
+  const orchestrators = new Map<string, Orchestrator>();
+  const vault = new CredentialVault();
+  const capabilities = detectCapabilities();
+  const adapters = createDefaultRegistry();
+
+  const orchestratorFor = (projectId: string): Orchestrator => {
+    const existing = orchestrators.get(projectId);
+    if (existing !== undefined) return existing;
+
+    const project = openProject(store, projectId);
+    const registryRepo = new RegistryRepo(store.db);
+    const artifactStore = new ArtifactStore(project.db, project.paths.blobs);
+
+    const tools = new ToolRegistry({ probe: capabilityProbe(capabilities) });
+
+    // 工具的路径解析统一走会话工作目录。PathGuard 的接入属于后续任务，
+    // 这里先做最基本的边界检查，避免 `..` 逃出工作目录
+    const resolveWithin = (raw: string, ctx: { workspaceDir: string }): string => {
+      const resolved = resolvePath(ctx.workspaceDir, raw);
+      const base = resolvePath(ctx.workspaceDir);
+      if (resolved !== base && !resolved.startsWith(base + sep)) {
+        throw new Error(`路径超出会话工作目录：${raw}`);
+      }
+      return resolved;
+    };
+
+    tools.register(
+      createReadFileTool({
+        resolvePath: resolveWithin,
+        resolveVersion: (versionId) => artifactStore.versionPath(versionId),
+      }),
+    );
+    tools.register(createEditFileTool({ resolvePath: resolveWithin }));
+    tools.register(createSaveArtifactsTool({ store: artifactStore, resolvePath: resolveWithin }));
+    tools.register(
+      createDeleteArtifactsTool({ store: artifactStore, approvals: approvalFor(projectId) }),
+    );
+
+    const orchestrator = new Orchestrator({
+      conversations: project.conversations,
+      messages: project.messages,
+      toolCalls: project.toolCalls,
+      tools,
+      adapters,
+      routerView: () =>
+        buildRouterView({
+          repo: registryRepo,
+          hasCredential: (ref) => ref !== null && vault.exists && vault.has(ref),
+        }),
+      adapterContext: (providerId) => {
+        const provider = registryRepo.getProvider(providerId);
+        if (provider === null || provider.baseUrl === null) return null;
+        const apiKey =
+          provider.credentialRef === null || !vault.exists
+            ? undefined
+            : (vault.get(provider.credentialRef) ?? undefined);
+        return { baseUrl: provider.baseUrl, ...(apiKey === undefined ? {} : { apiKey }) };
+      },
+      workspaceDir: (conversationId) => {
+        // 每个会话一个子目录，避免两个会话互相覆盖同名文件
+        const dir = joinPath(project.paths.workspace, conversationId);
+        mkdirSync(dir, { recursive: true });
+        return dir;
+      },
+    });
+
+    orchestrators.set(projectId, orchestrator);
+    return orchestrator;
+  };
+
+  /** 会话 id 全局唯一但库按项目分，因此需要定位它属于哪个项目。 */
+  const findProjectOf = (conversationId: string): string | null => {
+    for (const p of store.projects.list({ includeArchived: true })) {
+      try {
+        if (store.openProject(p.id).conversations.get(conversationId) !== null) return p.id;
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  };
+
+  d.register('conversation.send', async (req, helpers) => {
+    const projectId = findProjectOf(req.conversationId);
+    if (projectId === null) throw notFound(`会话不存在：${req.conversationId}`);
+
+    const orchestrator = orchestratorFor(projectId);
+
+    let events: AsyncIterable<TurnEvent>;
+    try {
+      events = orchestrator.startTurn(req.conversationId, req.text);
+    } catch (err) {
+      if (err instanceof ConversationBusyError) {
+        throw new DispatchError(
+          makeError('conflict', err.message, {
+            remediation: '等当前回合结束，或调用 conversation.interrupt 中断它。',
+          }),
+        );
+      }
+      throw err;
+    }
+
+    // 事件挂在这次请求上（helpers.emit），而不是广播：渲染层需要知道
+    // 这些增量属于哪一次发送，否则多个会话同时跑时无法区分
+    let eventCount = 0;
+    for await (const event of events) {
+      eventCount += 1;
+      helpers.emit(event);
+    }
+
+    store.projects.touch(projectId);
+    return { delivered: true, events: eventCount };
   });
 
-  d.register('conversation.interrupt', async () => {
-    throw badRequest('会话编排尚未实现（属于 M1 后续任务）');
+  d.register('conversation.interrupt', async (req) => {
+    const projectId = findProjectOf(req.conversationId);
+    if (projectId === null) throw notFound(`会话不存在：${req.conversationId}`);
+
+    const interrupted = await orchestratorFor(projectId).interrupt(req.conversationId);
+    // 没在跑也返回成功：中断一个已经停下的东西不该报错，
+    // 用户点停止时并不知道它是不是刚好结束了
+    return { interrupted };
   });
 
   /*

@@ -61,6 +61,8 @@ export * from './tools/index.js';
 
 export * from './artifact/index.js';
 
+export * from './orchestrator/index.js';
+
 export {
   JobObject,
   InterruptEvent,

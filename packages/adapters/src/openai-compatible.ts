@@ -279,12 +279,37 @@ export abstract class OpenAICompatibleAdapter implements ProviderAdapter {
 
   /* ---------------- 请求体构造 ---------------- */
 
+  /**
+   * 把统一消息翻译成线上格式。
+   *
+   * assistant 消息的 `tool_calls` 必须原样带上：协议规定 `role:'tool'` 的消息
+   * 必须紧跟在声明了 tool_calls 的 assistant 消息之后，缺了它服务端会以 400
+   * 拒收整个请求。这个错误的症状具有误导性——第一轮工具调用正常，回灌结果后的
+   * 第二轮直接失败，看起来像模型不配合而不是历史结构不对。
+   *
+   * 带 tool_calls 时 content 允许为空串：模型经常直接产出工具调用而不说话，
+   * 此时强行塞一段占位文本会污染上下文。
+   */
   protected toWireMessages(messages: readonly ChatMessage[]): unknown[] {
-    return messages.map((m) =>
-      m.role === 'tool'
-        ? { role: 'tool', content: m.content, tool_call_id: m.toolCallId }
-        : { role: m.role, content: m.content },
-    );
+    return messages.map((m) => {
+      if (m.role === 'tool') {
+        return { role: 'tool', content: m.content, tool_call_id: m.toolCallId };
+      }
+
+      if (m.role === 'assistant' && m.toolCalls !== undefined && m.toolCalls.length > 0) {
+        return {
+          role: 'assistant',
+          content: m.content === '' ? null : m.content,
+          tool_calls: m.toolCalls.map((call) => ({
+            id: call.id,
+            type: 'function',
+            function: { name: call.name, arguments: call.argumentsJson },
+          })),
+        };
+      }
+
+      return { role: m.role, content: m.content };
+    });
   }
 
   protected toWireTools(tools: readonly ToolSchema[]): unknown[] {

@@ -996,3 +996,98 @@ describe('思维模式与用量（实测发现）', () => {
     expect(models.every((m) => m.features.thinking)).toBe(true);
   });
 });
+
+describe('工具调用回合的消息结构（实测发现的协议 bug）', () => {
+  it('assistant 消息带上 tool_calls', async () => {
+    // 协议规定 role:'tool' 的消息必须紧跟在声明了 tool_calls 的 assistant
+    // 消息之后。缺了它服务端以 400 拒收整个请求，而症状具有误导性：
+    // 第一轮工具调用正常，回灌结果后的第二轮直接失败，看起来像模型不配合
+    let captured: { messages: unknown[] } = { messages: [] };
+    mockFetch((_url, init) => {
+      captured = JSON.parse(String(init?.body)) as { messages: unknown[] };
+      return sseResponse(['{"choices":[{"delta":{},"finish_reason":"stop"}]}']);
+    });
+
+    await collect(
+      new DeepSeekAdapter().chat(ctx, {
+        modelName: 'deepseek-v4-flash',
+        messages: [
+          { role: 'user', content: '算一下' },
+          {
+            role: 'assistant',
+            content: '我来算',
+            toolCalls: [{ id: 'c1', name: 'calc', argumentsJson: '{"x":1}' }],
+          },
+          { role: 'tool', content: '结果是 2', toolCallId: 'c1' },
+        ],
+        stream: true,
+      }),
+    );
+
+    const assistant = captured.messages[1] as {
+      role: string;
+      content: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: string;
+        function: { name: string; arguments: string };
+      }>;
+    };
+    expect(assistant.tool_calls).toHaveLength(1);
+    expect(assistant.tool_calls?.[0]).toEqual({
+      id: 'c1',
+      type: 'function',
+      function: { name: 'calc', arguments: '{"x":1}' },
+    });
+
+    // tool 消息带上对应的 id，否则无法关联
+    expect(captured.messages[2]).toMatchObject({ role: 'tool', tool_call_id: 'c1' });
+  });
+
+  it('只有工具调用没有正文时 content 为 null 而不是空串占位', async () => {
+    // 模型经常直接产出工具调用而不说话。塞一段占位文本会污染上下文
+    let captured: { messages: unknown[] } = { messages: [] };
+    mockFetch((_url, init) => {
+      captured = JSON.parse(String(init?.body)) as { messages: unknown[] };
+      return sseResponse(['{"choices":[{"delta":{},"finish_reason":"stop"}]}']);
+    });
+
+    await collect(
+      new DeepSeekAdapter().chat(ctx, {
+        modelName: 'deepseek-v4-flash',
+        messages: [
+          { role: 'user', content: 'x' },
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [{ id: 'c1', name: 'f', argumentsJson: '{}' }],
+          },
+        ],
+        stream: true,
+      }),
+    );
+
+    expect(captured.messages[1]).toMatchObject({ content: null });
+  });
+
+  it('没有工具调用的 assistant 消息保持简单形态', async () => {
+    let captured: { messages: unknown[] } = { messages: [] };
+    mockFetch((_url, init) => {
+      captured = JSON.parse(String(init?.body)) as { messages: unknown[] };
+      return sseResponse(['{"choices":[{"delta":{},"finish_reason":"stop"}]}']);
+    });
+
+    await collect(
+      new DeepSeekAdapter().chat(ctx, {
+        modelName: 'deepseek-v4-flash',
+        messages: [
+          { role: 'user', content: 'x' },
+          { role: 'assistant', content: '好的' },
+        ],
+        stream: true,
+      }),
+    );
+
+    expect(captured.messages[1]).toEqual({ role: 'assistant', content: '好的' });
+  });
+});

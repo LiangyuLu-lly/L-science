@@ -78,7 +78,17 @@ const waitFor = async (predicate, timeoutMs = 8000, what = '条件') => {
   throw new Error(`等待${what}超时`);
 };
 
-const byId = (id) => stdoutFrames.find((f) => f.id === id);
+/**
+ * 取某个请求的响应帧。
+ *
+ * 必须按 type 过滤：请求关联的事件帧（helpers.emit）带同一个 id，不过滤会拿到
+ * 第一个事件而不是响应。症状是 `ok` 与 `error` 都是 undefined，看起来像后端
+ * 返回了一个畸形响应，而实际上响应还没到。
+ */
+const byId = (id) => stdoutFrames.find((f) => f.id === id && f.type === 'response');
+
+/** 取某个请求关联的事件帧。 */
+const eventsOf = (id) => stdoutFrames.filter((f) => f.id === id && f.type === 'event');
 
 try {
   // 后端要先完成 boot（建目录、迁移）才会开始处理请求
@@ -224,14 +234,52 @@ try {
     `${byId('p5').result.projects.length} vs ${byId('p6').result.projects.length}`,
   );
 
-  // 尚未实现的方法必须显式拒绝，不能假装接受
+  /*
+   * 会话编排已接通（任务 8.5.4）。这里不打真实模型——那是 verify-turn.mjs 的
+   * 职责。本脚本只验证 IPC 层的接线：没有配置任何供应商时，编排应当以
+   * 「没有可用模型」这个可解释的结果收尾，而不是崩溃或挂死。
+   */
   send(req('n1', { method: 'conversation.send', conversationId: conversation.id, text: 'hi' }));
-  await waitFor(() => byId('n1') !== undefined, 8000, 'conversation.send');
+  await waitFor(() => byId('n1') !== undefined, 20000, 'conversation.send');
   check(
-    byId('n1').ok === false && byId('n1').error?.code === 'bad_request',
-    '未实现编排显式拒绝  ',
-    byId('n1').error?.message ?? '',
+    byId('n1').ok === true && byId('n1').result?.delivered === true,
+    '编排接通不崩溃      ',
+    explain('n1'),
   );
+
+  // 事件按请求 id 关联而不是广播：渲染层要能区分这些增量属于哪一次发送
+  const turnEvents = eventsOf('n1');
+  check(turnEvents.length > 0, '事件关联到本次请求  ', `${turnEvents.length} 个`);
+
+  // 无供应商时应产出路由决策事件并说明缺什么，而不是静默失败
+  const routingEvent = turnEvents.find((f) => f.payload?.kind === 'routing.decision');
+  check(
+    routingEvent !== undefined && routingEvent.payload.decision.chosenModelId === null,
+    '无供应商时如实报告  ',
+    (routingEvent?.payload.decision.reason ?? '').slice(0, 50),
+  );
+
+  // 回合必须以 turn.end 收尾，否则渲染层不知道该收起「正在思考」的指示
+  check(
+    turnEvents.some((f) => f.payload?.kind === 'turn.end'),
+    '回合以 turn.end 收尾 ',
+    turnEvents.map((f) => f.payload?.kind).join(', '),
+  );
+
+  // 中断一个已停下的会话不该报错——用户点停止时并不知道它是否刚好结束了
+  send(req('n2', { method: 'conversation.interrupt', conversationId: conversation.id }));
+  await waitFor(() => byId('n2') !== undefined, 8000, 'conversation.interrupt');
+  check(
+    byId('n2').ok === true,
+    '中断已停会话不报错  ',
+    `interrupted=${byId('n2').result?.interrupted}`,
+  );
+
+  // 回合结束后会话必须回到 idle，否则用户再也发不出消息
+  send(req('n3', { method: 'conversation.list', projectId: createdProject.id }));
+  await waitFor(() => byId('n3') !== undefined, 8000, 'conversation.list');
+  const listed = (byId('n3').result?.conversations ?? []).find((c) => c.id === conversation.id);
+  check(listed?.status === 'idle', '回合后状态回到 idle ', listed?.status ?? '?');
 
   // --- 8. 审批与授权（任务 8.1、8.2、5.5）---
   // IPC → 服务 → 数据库这条链必须端到端跑通，单测覆盖不到进程边界
