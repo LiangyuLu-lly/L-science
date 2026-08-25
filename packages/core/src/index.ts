@@ -57,6 +57,8 @@ export type { HostGrant, DomainGrant, GrantMode, GrantInvalidReason } from './re
 export { requestHostAccess, normalizeHostPath, assessHostPath } from './sandbox/host-access.js';
 export type { HostAccessDecision, RequestHostAccessInput } from './sandbox/host-access.js';
 
+export * from './tools/index.js';
+
 export {
   JobObject,
   InterruptEvent,

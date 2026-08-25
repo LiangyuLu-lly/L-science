@@ -169,8 +169,15 @@ export interface Usage {
   currency: string;
 }
 
+/**
+ * Jupyter MIME bundle。
+ *
+ * 值类型是 `unknown` 而不是 `string`：`application/json` 与各种
+ * `application/vnd.*+json` 表示本身就是对象。声明成 string 会迫使内核层先
+ * stringify、消费层再 parse，一来一回既多余又会在往返中丢掉类型信息。
+ */
 export interface MimeBundle {
-  [mimeType: string]: string;
+  [mimeType: string]: unknown;
 }
 
 export type ToolOutput =
