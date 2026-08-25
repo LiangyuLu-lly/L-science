@@ -35,6 +35,14 @@ export type {
 export * from './sandbox/index.js';
 
 export {
+  CredentialVault,
+  providerRef,
+  dpapiAvailable,
+  DpapiUnavailableError,
+} from './credentials/vault.js';
+export type { CredentialRef } from './credentials/vault.js';
+
+export {
   JobObject,
   InterruptEvent,
   nativeCapabilities,
