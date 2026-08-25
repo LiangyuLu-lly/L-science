@@ -165,6 +165,59 @@ export const requestSchema = z.discriminatedUnion('method', [
     method: z.literal('grant.list'),
     includeInactive: z.boolean().optional(),
   }),
+
+  /* --- Artifacts 视图（任务 9.3，需求 6.2、6.4）--- */
+
+  z.object({
+    method: z.literal('artifact.list'),
+    projectId: idSchema,
+    includeDeleted: z.boolean().optional(),
+  }),
+
+  /** 某个制品的版本序列。「更新即新版本」的可见性依赖这个接口。 */
+  z.object({
+    method: z.literal('artifact.versions'),
+    projectId: idSchema,
+    artifactId: idSchema,
+  }),
+
+  /** 某个版本的血缘：向上追溯到输入，向下追溯到派生产物。 */
+  z.object({
+    method: z.literal('artifact.lineage'),
+    projectId: idSchema,
+    versionId: idSchema,
+  }),
+
+  /**
+   * 删除前的影响预览。
+   *
+   * 与实际删除分开：UI 需要在弹出确认之前就能显示「有几个版本、多大、被谁依赖」，
+   * 而实际删除会走审批阻塞等待，不适合用来渲染列表。
+   */
+  z.object({
+    method: z.literal('artifact.describeDeletion'),
+    projectId: idSchema,
+    artifactIds: z.array(idSchema).min(1).max(200),
+  }),
+
+  z.object({
+    method: z.literal('artifact.restore'),
+    projectId: idSchema,
+    artifactId: idSchema,
+  }),
+
+  /* --- 环境与能力（任务 9.4，需求 2.5、2.6）--- */
+
+  /**
+   * 当前沙箱隔离强度与 caveats。
+   *
+   * UI 必须持续展示它并原文显示 caveats——设计目标里的「诚实降级」依赖这一点，
+   * 不允许把弱隔离包装成强隔离。
+   */
+  z.object({ method: z.literal('sandbox.isolation') }),
+
+  /** 可用与不可用的工具清单。不可用的要带上安装指引（需求 9.6）。 */
+  z.object({ method: z.literal('tool.list'), projectId: idSchema }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

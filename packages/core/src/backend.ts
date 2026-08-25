@@ -27,7 +27,9 @@ import { ConversationBusyError, Orchestrator } from './orchestrator/index.js';
 import { ApprovalRepo } from './repo/approvals.js';
 import { GrantRepo } from './repo/grants.js';
 import { RegistryRepo, buildRouterView } from './repo/registry.js';
+import { isolationStrength } from './sandbox/backend.js';
 import { requestHostAccess } from './sandbox/host-access.js';
+import { selectBackend } from './sandbox/index.js';
 import { AppStore, type ProjectStore } from './store.js';
 import { capabilityProbe, detectCapabilities } from './tools/capabilities.js';
 import { createEditFileTool, createReadFileTool } from './tools/files.js';
@@ -172,6 +174,14 @@ function main(): void {
    * 共用一个会让 A 项目的会话把制品写进 B 项目的库。
    */
   const orchestrators = new Map<string, Orchestrator>();
+  /**
+   * 与编排器同源的工具注册表。
+   *
+   * `tool.list` 必须报告**编排器实际持有的那一份**，而不是另建一个。另建的话
+   * 两处的条件注册结果可能分歧（比如探测缓存在两次调用之间失效），于是 UI 显示
+   * 有 `r` 工具而模型那边没有——用户会以为是模型不肯用它。
+   */
+  const toolRegistries = new Map<string, ToolRegistry>();
   const vault = new CredentialVault();
   const capabilities = detectCapabilities();
   const adapters = createDefaultRegistry();
@@ -238,6 +248,7 @@ function main(): void {
     });
 
     orchestrators.set(projectId, orchestrator);
+    toolRegistries.set(projectId, tools);
     return orchestrator;
   };
 
@@ -283,6 +294,86 @@ function main(): void {
 
     store.projects.touch(projectId);
     return { delivered: true, events: eventCount };
+  });
+
+  /* --- Artifacts 视图（任务 9.3）--- */
+
+  const artifactStoreFor = (projectId: string): ArtifactStore => {
+    const project = openProject(store, projectId);
+    return new ArtifactStore(project.db, project.paths.blobs);
+  };
+
+  d.register('artifact.list', async (req) => {
+    const artifacts = artifactStoreFor(req.projectId);
+    const records = artifacts.listArtifacts(
+      req.includeDeleted === undefined ? {} : { includeDeleted: req.includeDeleted },
+    );
+
+    // 顺带带上每个制品的版本数与最新版本的血缘完整性：UI 要在列表上直接标出
+    // 「这张图没有可复现血缘」，而不是让用户逐个点进去才发现
+    const irreproducibleIds = new Set(artifacts.irreproducible().map((v) => v.artifactId));
+
+    return {
+      artifacts: records.map((a) => ({
+        ...a,
+        versionCount: artifacts.listVersions(a.id).length,
+        reproducible: !irreproducibleIds.has(a.id),
+      })),
+    };
+  });
+
+  d.register('artifact.versions', async (req) => ({
+    versions: artifactStoreFor(req.projectId).listVersions(req.artifactId),
+  }));
+
+  d.register('artifact.lineage', async (req) => {
+    const artifacts = artifactStoreFor(req.projectId);
+    return {
+      ancestors: artifacts.ancestors(req.versionId),
+      descendants: artifacts.descendants(req.versionId),
+    };
+  });
+
+  d.register('artifact.describeDeletion', async (req) => ({
+    candidates: artifactStoreFor(req.projectId).describeDeletion(req.artifactIds),
+  }));
+
+  d.register('artifact.restore', async (req) => ({
+    restored: artifactStoreFor(req.projectId).restore(req.artifactId),
+  }));
+
+  /* --- 环境与能力（任务 9.4）--- */
+
+  d.register('sandbox.isolation', async () => {
+    const selection = await selectBackend();
+    try {
+      return {
+        backend: selection.backend.id,
+        isolation: selection.backend.isolation,
+        strength: isolationStrength(selection.backend.isolation),
+        skipped: selection.skipped,
+      };
+    } finally {
+      // 只是查询隔离强度，不需要留着后端实例
+      await selection.backend.dispose();
+    }
+  });
+
+  d.register('tool.list', async (req) => {
+    // 复用编排器持有的注册表，避免两处注册出现分歧
+    orchestratorFor(req.projectId);
+    const registry = toolRegistries.get(req.projectId);
+    return {
+      available: registry?.toolSchemas() ?? [],
+      unavailable: (registry?.unavailable() ?? []).map((u) => ({
+        name: u.name,
+        missing: u.missing,
+        explanation: registry?.explainUnavailable(u.name) ?? '',
+      })),
+      capabilities: [...capabilities.available].sort(),
+      pythonEnv: capabilities.pythonEnv,
+      rEnv: capabilities.rEnv,
+    };
   });
 
   d.register('conversation.interrupt', async (req) => {

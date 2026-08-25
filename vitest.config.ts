@@ -20,6 +20,10 @@ export default defineConfig({
     },
   },
   test: {
+    // 默认 node 环境。需要 DOM 的测试用文件头的
+    // `@vitest-environment jsdom` 注释单独声明——全局开 jsdom 会让后端测试
+    // 也背上它的启动开销（每个文件几十毫秒，累计起来很明显），而后端代码
+    // 根本不该碰 DOM
     environment: 'node',
     include: ['tests/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
     reporters: ['default'],
