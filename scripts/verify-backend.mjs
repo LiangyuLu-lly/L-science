@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * 控制平面后端的端到端验证（任务 2.2）。
  *
@@ -233,7 +233,138 @@ try {
     byId('n1').error?.message ?? '',
   );
 
-  // --- 8. stdin 关闭后自行退出 ---
+  // --- 8. 审批与授权（任务 8.1、8.2、5.5）---
+  // IPC → 服务 → 数据库这条链必须端到端跑通，单测覆盖不到进程边界
+
+  send(req('g1', { method: 'grant.list' }));
+  await waitFor(() => byId('g1') !== undefined, 8000, 'grant.list');
+  check(
+    byId('g1').ok === true &&
+      Array.isArray(byId('g1').result?.hostPaths) &&
+      byId('g1').result.hostPaths.length === 0,
+    'grant.list 初始为空  ',
+    explain('g1'),
+  );
+
+  // 不存在的审批 id 必须报错，不能静默成功——静默成功让「点了没反应」无从排查
+  send(req('a1', { method: 'approval.decide', approvalId: 'ap_nope', decision: 'approve' }));
+  await waitFor(() => byId('a1') !== undefined, 8000, 'approval.decide');
+  check(
+    byId('a1').ok === false && byId('a1').error?.code === 'not_found',
+    '决议不存在的审批报错',
+    byId('a1').error?.message ?? '',
+  );
+
+  send(req('q1', { method: 'question.answer', questionId: 'q_nope', answer: 'x' }));
+  await waitFor(() => byId('q1') !== undefined, 8000, 'question.answer');
+  check(
+    byId('q1').ok === false && byId('q1').error?.code === 'not_found',
+    '作答不存在的提问报错',
+    byId('q1').error?.message ?? '',
+  );
+
+  // 危险路径不发审批，直接拒绝
+  send(
+    req('h1', {
+      method: 'host.requestAccess',
+      hostPath: 'C:\\Windows\\System32',
+      mode: 'rw',
+      purpose: '不该被允许',
+      projectId: createdProject.id,
+    }),
+  );
+  await waitFor(() => byId('h1') !== undefined, 8000, 'host.requestAccess 危险路径');
+  check(
+    byId('h1').ok === true && byId('h1').result?.granted === false,
+    '系统目录直接被拒    ',
+    byId('h1').result?.reason?.slice(0, 60) ?? explain('h1'),
+  );
+
+  // 正常路径：应广播 approval.request 事件，然后由 approval.decide 决议
+  const targetPath = join(dataDir, 'external');
+  send(
+    req('h2', {
+      method: 'host.requestAccess',
+      hostPath: targetPath,
+      mode: 'ro',
+      purpose: '读取外部数据集',
+      projectId: createdProject.id,
+      conversationId: conversation.id,
+    }),
+  );
+
+  await waitFor(
+    () => stdoutFrames.some((f) => f.type === 'event' && f.payload?.kind === 'approval.request'),
+    8000,
+    '审批请求事件',
+  );
+  const approvalEvent = stdoutFrames.find(
+    (f) => f.type === 'event' && f.payload?.kind === 'approval.request',
+  );
+  const card = approvalEvent.payload.approval;
+  check(true, '审批请求广播到前端  ', `id=${card.id}`);
+  check(
+    typeof card.impact === 'string' &&
+      card.impact.length > 0 &&
+      typeof card.reversible === 'boolean' &&
+      Array.isArray(card.scopeOptions),
+    '卡片含影响范围与可逆',
+    `可逆=${card.reversible} 作用域=${card.scopeOptions.join('/')}`,
+  );
+
+  // 决议后原请求才会返回——这验证了阻塞等待真的生效
+  check(byId('h2') === undefined, '决议前请求保持挂起  ', '');
+
+  send(
+    req('a2', {
+      method: 'approval.decide',
+      approvalId: card.id,
+      decision: 'approve',
+      scope: 'project',
+    }),
+  );
+  await waitFor(() => byId('h2') !== undefined, 8000, 'host.requestAccess 决议后返回');
+  check(
+    byId('h2').ok === true && byId('h2').result?.granted === true,
+    '批准后放行          ',
+    `来源=${byId('h2').result?.source}`,
+  );
+
+  // 授权应已落库，且第二次请求不再发审批
+  send(req('g2', { method: 'grant.list' }));
+  await waitFor(() => byId('g2') !== undefined, 8000, 'grant.list 第二次');
+  const hostGrants = byId('g2').result?.hostPaths ?? [];
+  check(hostGrants.length === 1, '授权已落库          ', `${hostGrants.length} 条`);
+
+  const eventsBefore = stdoutFrames.filter(
+    (f) => f.type === 'event' && f.payload?.kind === 'approval.request',
+  ).length;
+  send(
+    req('h3', {
+      method: 'host.requestAccess',
+      hostPath: targetPath,
+      mode: 'ro',
+      purpose: '再次读取',
+      projectId: createdProject.id,
+      conversationId: conversation.id,
+    }),
+  );
+  await waitFor(() => byId('h3') !== undefined, 8000, 'host.requestAccess 复用授权');
+  const eventsAfter = stdoutFrames.filter(
+    (f) => f.type === 'event' && f.payload?.kind === 'approval.request',
+  ).length;
+  check(
+    byId('h3').result?.source === 'existing-grant' && eventsAfter === eventsBefore,
+    '已授权则不再询问    ',
+    `来源=${byId('h3').result?.source}`,
+  );
+
+  // 撤销后应重新需要审批
+  send(req('g3', { method: 'grant.revoke', grantId: hostGrants[0].id }));
+  await waitFor(() => byId('g3') !== undefined, 8000, 'grant.revoke');
+  check(byId('g3').ok === true && byId('g3').result?.revoked === true, '撤销授权成功        ', '');
+
+  // --- 9. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

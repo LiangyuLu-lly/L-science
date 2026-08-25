@@ -206,12 +206,70 @@ export interface ArtifactVersionRef {
   versionNo: number;
 }
 
+/** 需求 17.1 列出的五类需审批操作。 */
+export type ApprovalKind =
+  'artifact-delete' | 'host-access' | 'ssh-command' | 'compute-provider' | 'domain-allowlist';
+
+/**
+ * 授权的作用域（需求 17.5）。
+ *
+ * `once` 存在的意义是让用户能在不建立长期授权的情况下放行一次。没有它的话，
+ * 用户面对「要么拒绝、要么永久授权」的二选一，多数人会选永久——审批就退化成
+ * 一次性的形式主义。
+ */
+export type GrantScope = 'once' | 'session' | 'project' | 'always';
+
 export interface ApprovalRequest {
   id: string;
-  kind: 'artifact-delete' | 'host-access' | 'ssh-command' | 'compute-provider' | 'domain-allowlist';
+  kind: ApprovalKind;
+  /** 一句话说明将要发生什么。 */
   title: string;
+  /** 补充细节，可多行。 */
   detail: string;
+  /**
+   * 影响范围（需求 17.2）。
+   *
+   * 与 `detail` 分开是刻意的：UI 需要把它单独醒目展示，而且分成独立字段会
+   * 强迫每个调用点真的回答「这会影响什么」，而不是写一句含糊的说明糊过去。
+   */
+  impact: string;
+  /**
+   * 是否可逆（需求 17.2）。
+   *
+   * 不可逆的操作在 UI 上需要更强的确认。这个字段必须如实填写——把不可逆
+   * 操作标成可逆，等于把审批变成用户会习惯性点过的弹窗。
+   */
+  reversible: boolean;
+  /** 若操作可逆，说明怎么撤销。不可逆时为 null。 */
+  undoHint: string | null;
+  /**
+   * 允许用户选择的授权作用域。空数组表示这是一次性确认，不产生持久授权。
+   */
+  scopeOptions: readonly GrantScope[];
   payload: unknown;
+}
+
+/**
+ * agent 向用户提问（需求 17.4）。
+ *
+ * `kind` 区分一般提问与算力配置提问。这个区分不是分类癖：算力配置类提问需要
+ * 展示当前可用的算力目标、分区、账户等上下文，UI 渲染方式与一般提问完全不同。
+ * 把两者合成一种，结果是算力问题以纯文本形式抛给用户，而用户根本不知道
+ * 有哪些合法取值。
+ */
+export interface UserQuestion {
+  id: string;
+  kind: 'general' | 'compute-config';
+  question: string;
+  /** 补充上下文，可多行。 */
+  detail: string | null;
+  /**
+   * 预设选项。为空表示自由作答。
+   *
+   * 有选项时 UI 应同时允许自由输入——预设选项常常漏掉用户真正想说的那个，
+   * 强制只能选会把用户逼到「选一个最接近的」，而那个答案是错的。
+   */
+  choices: readonly string[];
 }
 
 export type TurnEvent =
@@ -221,6 +279,7 @@ export type TurnEvent =
   | { kind: 'tool.output'; callId: string; output: ToolOutput }
   | { kind: 'routing.decision'; decision: RoutingDecision }
   | { kind: 'approval.request'; approval: ApprovalRequest }
+  | { kind: 'question.request'; question: UserQuestion }
   | { kind: 'finding.raised'; finding: Finding }
   | { kind: 'artifact.saved'; artifact: ArtifactVersionRef }
   | { kind: 'turn.end'; usage: Usage };

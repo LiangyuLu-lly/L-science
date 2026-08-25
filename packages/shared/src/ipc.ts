@@ -127,6 +127,43 @@ export const requestSchema = z.discriminatedUnion('method', [
     approvalId: idSchema,
     decision: z.enum(['approve', 'deny']),
     note: z.string().max(2000).optional(),
+    // 用户选择的授权作用域（需求 17.5）。省略时后端取最保守的可选项
+    scope: z.enum(['once', 'session', 'project', 'always']).optional(),
+  }),
+
+  z.object({
+    method: z.literal('question.answer'),
+    questionId: idSchema,
+    // 允许空串：用户明确表示「没有补充」也是一个有效答案，
+    // 强制非空会让他被迫编一个内容
+    answer: z.string().max(10_000),
+  }),
+
+  /** 撤销一条宿主路径授权或域名白名单条目（需求 17.5）。 */
+  z.object({
+    method: z.literal('grant.revoke'),
+    grantId: idSchema,
+  }),
+
+  /**
+   * 请求访问沙箱之外的宿主路径（需求 5.5、17.1）。
+   *
+   * 已有有效授权时直接返回，否则发起审批并阻塞等待。
+   */
+  z.object({
+    method: z.literal('host.requestAccess'),
+    hostPath: z.string().min(1).max(4096),
+    mode: z.enum(['ro', 'rw']),
+    /** 为什么需要它。会原文展示在审批卡片上，因此不能为空。 */
+    purpose: z.string().min(1).max(1000),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+  }),
+
+  /** 列出当前有效的宿主路径授权与域名白名单（需求 17.5 的可查看与可撤销）。 */
+  z.object({
+    method: z.literal('grant.list'),
+    includeInactive: z.boolean().optional(),
   }),
 ]);
 

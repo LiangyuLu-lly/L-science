@@ -10,8 +10,13 @@
 
 import { makeError } from '@l-science/shared';
 
+import { ApprovalService } from './approval/service.js';
+import { QuestionService } from './approval/questions.js';
 import { DispatchError } from './dispatcher.js';
 import { schemaVersion, sqliteVersion } from './db.js';
+import { ApprovalRepo } from './repo/approvals.js';
+import { GrantRepo } from './repo/grants.js';
+import { requestHostAccess } from './sandbox/host-access.js';
 import { AppStore, type ProjectStore } from './store.js';
 import { StdioTransport } from './transport.js';
 
@@ -159,8 +164,99 @@ function main(): void {
     throw badRequest('会话编排尚未实现（属于 M1 后续任务）');
   });
 
-  d.register('approval.decide', async () => {
-    throw badRequest('审批服务尚未实现（属于任务 8.1）');
+  /*
+   * 审批与提问（任务 8.1、8.2）。
+   *
+   * 审批服务需要一个项目库来落审计记录，但审批可以在任何项目的会话里发起。
+   * 这里按项目 id 懒加载各自的服务实例，而不是共用一个——共用会让审计记录
+   * 落到错误的项目库里，事后回查时找不到。
+   */
+  const approvalsByProject = new Map<string, ApprovalService>();
+
+  const approvalFor = (projectId: string): ApprovalService => {
+    const existing = approvalsByProject.get(projectId);
+    if (existing !== undefined) return existing;
+
+    const project = openProject(store, projectId);
+    const service = new ApprovalService({
+      repo: new ApprovalRepo(project.db),
+      publish: (approval, conversationId) => {
+        // 广播而不是定向到某个请求：审批是后端主动发起的，
+        // 没有一个「正在等待响应的请求」可以挂靠
+        d.broadcast({ kind: 'approval.request', approval, conversationId, projectId });
+      },
+    });
+    approvalsByProject.set(projectId, service);
+    return service;
+  };
+
+  const questions = new QuestionService({
+    publish: (question, conversationId) => {
+      d.broadcast({ kind: 'question.request', question, conversationId });
+    },
+  });
+
+  d.register('approval.decide', async (req) => {
+    // 审批 id 不带项目信息，因此逐个服务试。数量等于本次运行中被触碰过的
+    // 项目数，是个位数量级
+    for (const service of approvalsByProject.values()) {
+      if (
+        service.decide({
+          approvalId: req.approvalId,
+          decision: req.decision,
+          ...(req.note === undefined ? {} : { note: req.note }),
+          ...(req.scope === undefined ? {} : { scope: req.scope }),
+        })
+      ) {
+        return { settled: true };
+      }
+    }
+    // 明确报错而不是静默成功：静默成功会让「点了没反应」无从排查
+    throw notFound(
+      `审批不存在或已决议：${req.approvalId}`,
+      '该审批可能已超时、已被取消，或后端在此期间重启过。',
+    );
+  });
+
+  d.register('question.answer', async (req) => {
+    if (!questions.answer(req.questionId, req.answer)) {
+      throw notFound(
+        `提问不存在或已作答：${req.questionId}`,
+        '该提问可能已超时，或所属会话已被中止。',
+      );
+    }
+    return { answered: true };
+  });
+
+  const grants = new GrantRepo(store.db);
+
+  d.register('grant.revoke', async (req) => {
+    if (grants.revokeHostPath(req.grantId)) return { revoked: true, kind: 'host-path' };
+    if (grants.removeDomain(req.grantId)) return { revoked: true, kind: 'domain' };
+    throw notFound(`授权不存在或已撤销：${req.grantId}`);
+  });
+
+  d.register('grant.list', async (req) => ({
+    hostPaths: grants.listHostGrants(
+      req.includeInactive === undefined ? {} : { includeInactive: req.includeInactive },
+    ),
+    domains: grants.listDomains(),
+  }));
+
+  d.register('host.requestAccess', async (req) => {
+    const decision = await requestHostAccess({
+      grants,
+      approvals: approvalFor(req.projectId),
+      hostPath: req.hostPath,
+      mode: req.mode,
+      purpose: req.purpose,
+      projectId: req.projectId,
+      conversationId: req.conversationId ?? null,
+    });
+
+    // 被拒绝时也返回 200 而不是抛错：拒绝是正常结果，用错误表达会让
+    // 调用方倾向于 catch 后继续
+    return decision;
   });
 
   transport.start();
@@ -171,6 +267,12 @@ function main(): void {
     if (shuttingDown) return;
     shuttingDown = true;
     log(`收到 ${signal}，退出`);
+
+    // 必须先关审批与提问服务：它们持有 Promise 等待者，不 resolve 掉的话
+    // await 它们的编排逻辑永久挂起，进程也就关不掉
+    for (const service of approvalsByProject.values()) service.close();
+    questions.close();
+
     void transport.close().then(() => {
       store.close();
       process.exit(0);

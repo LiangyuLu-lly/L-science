@@ -47,6 +47,16 @@ export * from './router/index.js';
 export { RegistryRepo, RegistrySync, buildRouterView, HEALTH_TTL_MS } from './repo/registry.js';
 export type { ProviderRecord, ModelRecord, ModelHealth, SyncResult } from './repo/registry.js';
 
+export * from './approval/index.js';
+export { ApprovalRepo } from './repo/approvals.js';
+export type { ApprovalRow, ApprovalState } from './repo/approvals.js';
+
+export { GrantRepo } from './repo/grants.js';
+export type { HostGrant, DomainGrant, GrantMode, GrantInvalidReason } from './repo/grants.js';
+
+export { requestHostAccess, normalizeHostPath, assessHostPath } from './sandbox/host-access.js';
+export type { HostAccessDecision, RequestHostAccessInput } from './sandbox/host-access.js';
+
 export {
   JobObject,
   InterruptEvent,
