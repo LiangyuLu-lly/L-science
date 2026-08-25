@@ -95,10 +95,12 @@ if (deepseekKey === null) {
     let text = '';
     let done = null;
 
+    // 输出上限必须给思维模式留余量。v4 全系默认开启思维，给 24 token 的话
+    // 会全部被思考消耗掉，正文一个字都产不出，停止原因变成 max_tokens
     for await (const chunk of adapter.chat(ctx, {
       modelName: 'deepseek-v4-flash',
       messages: [{ role: 'user', content: '只输出三个字：验证通过' }],
-      maxOutputTokens: 24,
+      maxOutputTokens: 512,
       stream: true,
     })) {
       if (chunk.kind === 'text') {
@@ -246,20 +248,34 @@ if (!ollamaHealth.ok) {
     if (target !== undefined) {
       const started = Date.now();
       let text = '';
+      let thinkingChars = 0;
       let done = null;
+      // 同理给思维模型留余量。实测 qwen3:4b 在 16 token 上限下产出 17 个
+      // 分片全是思考、正文为空
       for await (const chunk of ollama.chat(ollamaCtx, {
         modelName: target.id,
         messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
-        maxOutputTokens: 16,
+        maxOutputTokens: target.features.thinking ? 1024 : 32,
         stream: true,
       })) {
         if (chunk.kind === 'text') text += chunk.text;
+        else if (chunk.kind === 'thinking') thinkingChars += chunk.text.length;
         else if (chunk.kind === 'done') done = chunk;
       }
       check(
         text.trim() !== '' && done !== null,
         '本地流式对话',
-        `${target.id} ${Date.now() - started}ms "${text.trim().slice(0, 40)}"`,
+        `${target.id} ${Date.now() - started}ms 思考${thinkingChars}字 正文"${text.trim().slice(0, 40)}"`,
+      );
+      check(
+        (done?.usage.tokensIn ?? 0) > 0 && (done?.usage.tokensOut ?? 0) > 0,
+        '本地用量上报',
+        `in=${done?.usage.tokensIn} out=${done?.usage.tokensOut}`,
+      );
+      check(
+        target.features.thinking === thinkingChars > 0,
+        'thinking 标记与实际一致',
+        `标记=${target.features.thinking} 实际思考=${thinkingChars}字`,
       );
       check((done?.usage.cost ?? -1) === 0, '本地推理零成本', `$${done?.usage.cost}`);
     }

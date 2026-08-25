@@ -62,7 +62,13 @@ function model(overrides: Partial<ModelDescriptor> & { id: string }): ModelDescr
     performance: { medianLatencyMs: 800, tokensPerSec: 40 },
     policy: { trainingUse: 'unknown', retentionDays: null, zdr: false, region: 'us' },
     local: false,
-    features: { streaming: true, toolUse: true, promptCache: false, vision: false },
+    features: {
+      streaming: true,
+      toolUse: true,
+      promptCache: false,
+      vision: false,
+      thinking: false,
+    },
     ...overrides,
   };
 }
@@ -183,7 +189,13 @@ describe('硬过滤（需求 7.3）', () => {
   it('需要工具时剔除不支持工具的模型', () => {
     const noTools = model({
       id: 'no-tools',
-      features: { streaming: true, toolUse: false, promptCache: false, vision: false },
+      features: {
+        streaming: true,
+        toolUse: false,
+        promptCache: false,
+        vision: false,
+        thinking: false,
+      },
     });
     const result = hardFilter({
       models: [noTools, model({ id: 'with-tools' })],

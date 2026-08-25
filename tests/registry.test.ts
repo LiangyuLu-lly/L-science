@@ -78,7 +78,7 @@ function descriptor(id: string, overrides: Partial<ModelDescriptor> = {}): Model
     performance: { medianLatencyMs: 700, tokensPerSec: 40 },
     policy: { trainingUse: 'unknown', retentionDays: null, zdr: false, region: 'cn' },
     local: false,
-    features: { streaming: true, toolUse: true, promptCache: true, vision: false },
+    features: { streaming: true, toolUse: true, promptCache: true, vision: false, thinking: false },
     ...overrides,
   };
 }

@@ -124,9 +124,10 @@ export class OllamaAdapter extends OpenAICompatibleAdapter {
       id: 'ollama',
       displayName: 'Ollama（本地）',
       requiresApiKey: false,
-      // Ollama 的 OpenAI 兼容层会在最后一个事件里给 usage，不需要
-      // stream_options；显式传该字段在部分版本上会被拒绝
-      supportsStreamUsage: false,
+      // 实测（0.32.15）：不带 stream_options 时流式响应完全没有 usage 字段，
+      // 带上之后最后一个事件给出 prompt_tokens/completion_tokens。
+      // 起初以为本地端点不需要它，结果本地模型的 token 统计全是 0
+      supportsStreamUsage: true,
     });
   }
 
@@ -198,6 +199,7 @@ export class OllamaAdapter extends OpenAICompatibleAdapter {
           toolUse: capabilities.has('tools'),
           promptCache: true, // Ollama 默认复用 KV cache
           vision,
+          thinking: capabilities.has('thinking'),
         },
       });
     }

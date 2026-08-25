@@ -199,6 +199,8 @@ export class DeepSeekAdapter extends OpenAICompatibleAdapter {
         toolUse: true,
         promptCache: true, // 官方有 cache hit 计价档，说明支持前缀缓存
         vision: isVision,
+        // 官方文档：v4 全系支持思维与非思维两种模式，且**思维为默认**
+        thinking: true,
       },
     };
   }

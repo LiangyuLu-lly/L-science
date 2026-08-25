@@ -104,6 +104,15 @@ export interface ModelDescriptor {
     toolUse: boolean;
     promptCache: boolean;
     vision: boolean;
+    /**
+     * 是否会产出思维链。
+     *
+     * 这不是「有没有更强推理」的标记，而是**预算相关的事实**：思维模式下
+     * 模型先消耗输出配额做思考，再产出答案。实测把 max_tokens 设成 16 给
+     * qwen3:4b，结果 17 个分片全是思考、正文一个字都没有。因此调用方在给
+     * thinking 模型定输出上限时必须留出思考的余量。
+     */
+    thinking: boolean;
   };
 }
 

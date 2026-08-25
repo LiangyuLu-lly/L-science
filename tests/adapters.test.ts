@@ -874,7 +874,7 @@ describe('Ollama 适配器', () => {
     expect(chunks.some((c) => c.kind === 'text')).toBe(true);
   });
 
-  it('不发送 stream_options（部分版本会拒绝）', async () => {
+  it('请求体带模型名与消息，工具为空时不发 tools 字段', async () => {
     let captured: Record<string, unknown> = {};
     mockFetch((_url, init) => {
       captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -883,12 +883,14 @@ describe('Ollama 适配器', () => {
 
     await collect(
       new OllamaAdapter().chat(ollamaCtx, {
-        modelName: 'qwen3:8b',
+        modelName: 'qwen3:4b',
         messages: [{ role: 'user', content: 'x' }],
         stream: true,
       }),
     );
-    expect(captured.stream_options).toBeUndefined();
+    expect(captured).toMatchObject({ model: 'qwen3:4b', stream: true });
+    // 发一个空的 tools 数组会让部分端点进入工具模式并改变输出格式
+    expect(captured.tools).toBeUndefined();
   });
 
   it('连不上时给出可执行的提示而不是裸的 ECONNREFUSED', async () => {
@@ -930,5 +932,67 @@ describe('默认注册表', () => {
 
   it('取未注册的适配器会报错而不是返回 undefined', () => {
     expect(() => createDefaultRegistry().get('anthropic')).toThrow(/未注册/);
+  });
+});
+
+describe('思维模式与用量（实测发现）', () => {
+  it('Ollama 必须带 include_usage 才有 usage', async () => {
+    // 实测 0.32.15：不带 stream_options 时流式响应完全没有 usage 字段。
+    // 起初以为本地端点不需要它，结果本地模型的 token 统计全是 0
+    let captured: Record<string, unknown> = {};
+    mockFetch((_url, init) => {
+      captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return sseResponse(['{"choices":[{"delta":{},"finish_reason":"stop"}]}']);
+    });
+
+    await collect(
+      new OllamaAdapter().chat(ollamaCtx, {
+        modelName: 'qwen3:4b',
+        messages: [{ role: 'user', content: 'x' }],
+        stream: true,
+      }),
+    );
+    expect(captured.stream_options).toEqual({ include_usage: true });
+  });
+
+  it('Ollama 从 capabilities 读出 thinking 标记', async () => {
+    mockFetch((url) =>
+      url.endsWith('/api/tags')
+        ? new Response(JSON.stringify({ models: [{ model: 'qwen3:4b' }] }), { status: 200 })
+        : new Response(
+            JSON.stringify({
+              capabilities: ['completion', 'tools', 'thinking'],
+              model_info: { 'qwen3.context_length': 262144 },
+            }),
+            { status: 200 },
+          ),
+    );
+
+    const models = await new OllamaAdapter().listModels(ollamaCtx);
+    // thinking 是预算相关的事实：思维模式先消耗输出配额做思考再产出答案
+    expect(models[0]?.features.thinking).toBe(true);
+    expect(models[0]?.contextWindow).toBe(262144);
+  });
+
+  it('不支持思维的本地模型标记为 false', async () => {
+    mockFetch((url) =>
+      url.endsWith('/api/tags')
+        ? new Response(JSON.stringify({ models: [{ model: 'plain' }] }), { status: 200 })
+        : new Response(JSON.stringify({ capabilities: ['completion'] }), { status: 200 }),
+    );
+    const models = await new OllamaAdapter().listModels(ollamaCtx);
+    expect(models[0]?.features.thinking).toBe(false);
+  });
+
+  it('DeepSeek v4 全系标记为支持思维（官方文档：思维为默认模式）', async () => {
+    mockFetch(
+      () =>
+        new Response(
+          JSON.stringify({ data: [{ id: 'deepseek-v4-flash' }, { id: 'deepseek-v4-pro' }] }),
+          { status: 200 },
+        ),
+    );
+    const models = await new DeepSeekAdapter().listModels(ctx);
+    expect(models.every((m) => m.features.thinking)).toBe(true);
   });
 });
