@@ -131,6 +131,30 @@ CREATE TABLE memory_notes (
 CREATE INDEX idx_memory_scope ON memory_notes (scope, scope_id);
 `;
 
+/**
+ * 技能嵌入向量缓存（需求 9.4）。
+ *
+ * 嵌入是可选层，但重算的代价不小：三十几个技能一次批量嵌入在本机 Ollama 上是
+ * 几秒，而后端每次启动都重算意味着这几秒落在用户第一次检索技能的时候。
+ *
+ * 缓存键必须同时包含 `model` 与 `text_sha256`：
+ * - 换了嵌入模型，旧向量与新查询向量维度或语义空间都不同，混用得到的相似度
+ *   是噪声，而它不会报错，只会让检索结果变得莫名其妙。
+ * - 技能描述改了而向量没更新，表现是「我改了 triggers 但搜不到」。
+ */
+const M002 = `
+CREATE TABLE skill_embeddings (
+  slug        TEXT NOT NULL,
+  model       TEXT NOT NULL,
+  text_sha256 TEXT NOT NULL,
+  dims        INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (slug, model)
+);
+`;
+
 export const APP_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'app-initial', sql: M001 },
+  { version: 2, name: 'skill-embeddings', sql: M002 },
 ];

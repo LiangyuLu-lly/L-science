@@ -1,0 +1,18 @@
+{
+  "slug": "literature-search",
+  "name": "文献检索",
+  "version": "1.0.0",
+  "domain": "文献",
+  "description": "构建可复现的检索式：PubMed/MeSH 语法、布尔逻辑与截词、各数据库的覆盖差异与选择依据、检索记录的留档要求，以及为什么检索式必须写进论文。",
+  "triggers": [
+    "文献检索 / 查文献 / 搜论文 / 检索式怎么写",
+    "PubMed / MeSH / Crossref / OpenAlex / Semantic Scholar / Scopus",
+    "布尔逻辑 / 截词 / 字段限定 / 检索策略",
+    "综述的检索策略 / 可复现检索 / 检索日期与命中数留档"
+  ],
+  "requires": {
+    "python": ["requests"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

@@ -1,0 +1,19 @@
+{
+  "slug": "figure-standards",
+  "name": "图表规范",
+  "version": "1.0.0",
+  "domain": "写作与投稿",
+  "description": "投稿级图表的制作规范：图型选择（为什么小样本不该用柱状图）、matplotlib 的期刊参数、色觉友好与灰度可读、必备元素与图注写法、矢量格式选择，以及每张图必须带生成代码的血缘要求。",
+  "triggers": [
+    "画图 / 出图 / 图表规范 / 投稿用图",
+    "figure 分辨率 / dpi / 矢量图 / TIFF EPS PDF",
+    "柱状图还是箱线图 / 小提琴图 / 雨云图 / 显示单个数据点",
+    "配色 / 色盲友好 / 灰度打印 / jet colormap",
+    "图注怎么写 / 误差棒是 SD 还是 SEM / 坐标轴单位"
+  ],
+  "requires": {
+    "python": ["matplotlib", "numpy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

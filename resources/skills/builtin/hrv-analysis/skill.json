@@ -1,0 +1,19 @@
+{
+  "slug": "hrv-analysis",
+  "name": "心率变异性分析",
+  "version": "1.0.0",
+  "domain": "信号与数据",
+  "description": "从 ECG 或 PPG 提取 RR 间期、异位心搏与伪影处理、时域/频域/非线性 HRV 指标的计算与解释边界，以及分析窗长对指标可比性的决定性影响。",
+  "triggers": [
+    "心率变异性 / HRV / RR 间期 / NN 间期",
+    "RMSSD SDNN pNN50 / LF HF 比值 / 频域 HRV",
+    "R 波检测 / QRS 检测 / 异位心搏 / 早搏处理",
+    "PPG 脉搏波 / 脉率变异 PRV",
+    "样本熵 去趋势波动分析 DFA / 非线性 HRV"
+  ],
+  "requires": {
+    "python": ["neurokit2", "numpy", "pandas", "scipy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

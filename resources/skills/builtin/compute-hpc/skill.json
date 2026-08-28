@@ -1,0 +1,16 @@
+{
+  "slug": "compute-hpc",
+  "name": "HPC 与远程算力",
+  "version": "1.0.0",
+  "domain": "平台自身",
+  "description": "把长任务提交到 Slurm/PBS 集群或远程机器：作业脚本要素、资源申请的估算方法、数据传输与暂存目录、环境一致性、作业状态跟踪与失败诊断，以及本地先跑通再提交的纪律。",
+  "triggers": [
+    "提交到集群 / Slurm / sbatch / squeue / PBS / qsub",
+    "跑不完 / 任务太久 / 需要 GPU / 显存不够",
+    "远程机器 / SSH 跑分析 / 数据怎么传上去",
+    "作业失败了 / OOM / 超时被杀 / 排队很久",
+    "集群上的 conda 环境 / 模块 module load"
+  ],
+  "requires": {},
+  "tools": ["bash", "python", "read_file", "save_artifacts"]
+}

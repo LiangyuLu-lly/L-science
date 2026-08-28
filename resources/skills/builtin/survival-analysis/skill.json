@@ -1,0 +1,20 @@
+{
+  "slug": "survival-analysis",
+  "name": "生存分析",
+  "version": "1.0.0",
+  "domain": "统计与建模",
+  "description": "时间到事件数据的 Kaplan-Meier 估计、log-rank 检验与 Cox 比例风险模型；删失的正确处理、比例风险假设的检查，以及在睡眠研究中用于潜伏期与事件复发分析。",
+  "triggers": [
+    "生存分析 / 时间到事件 / time-to-event / Kaplan-Meier",
+    "Cox 回归 / 比例风险 / hazard ratio / log-rank 检验",
+    "删失 censoring / 右删失 / 竞争风险",
+    "入睡潜伏期分析 / 复发时间 / 首次事件时间",
+    "比例风险假设检验 / Schoenfeld 残差"
+  ],
+  "requires": {
+    "python": ["numpy", "pandas"],
+    "r": ["survival"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "r", "save_artifacts"]
+}

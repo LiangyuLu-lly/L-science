@@ -1,0 +1,19 @@
+{
+  "slug": "ml-eval-protocol",
+  "name": "机器学习评估规范",
+  "version": "1.0.0",
+  "domain": "统计与建模",
+  "description": "生理信号机器学习的评估协议：按被试分组划分、预处理放进折内、嵌套交叉验证、类别不平衡下的指标选择、必备基线与随机种子报告。逐条对应会导致性能虚高的数据泄漏。",
+  "triggers": [
+    "机器学习评估 / 交叉验证 / 训练测试划分",
+    "数据泄漏 / leakage / 为什么准确率这么高 / 结果太好了",
+    "按被试划分 / GroupKFold / 同一个人的数据在训练和测试里",
+    "类别不平衡 / macro F1 / Cohen kappa / AUROC AUPRC",
+    "超参数搜索 / 嵌套交叉验证 / 随机种子 / 基线模型"
+  ],
+  "requires": {
+    "python": ["sklearn", "numpy", "pandas"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

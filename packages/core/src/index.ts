@@ -61,6 +61,16 @@ export type {
 export { RoutingRepo, SIGNAL_WEIGHT } from './repo/routing.js';
 export type { FeedbackRecord, FeedbackSignal, FeedbackSource } from './repo/routing.js';
 
+export * from './skills/index.js';
+
+export { SkillAuditRepo, SkillRepo } from './repo/skills.js';
+export type {
+  SkillLoadEvent,
+  SkillLoadReason,
+  SkillRecord,
+  SkillSyncResult,
+} from './repo/skills.js';
+
 export * from './approval/index.js';
 export { ApprovalRepo } from './repo/approvals.js';
 export type { ApprovalRow, ApprovalState } from './repo/approvals.js';

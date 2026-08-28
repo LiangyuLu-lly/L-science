@@ -1,0 +1,15 @@
+{
+  "slug": "response-to-reviewers",
+  "name": "审稿意见回复",
+  "version": "1.0.0",
+  "domain": "写作与投稿",
+  "description": "逐条回复审稿意见的格式与语气：接受/部分接受/有依据地不接受这三种回应的写法、必须给出稿件改动位置、审稿人意见冲突的处理，以及修回后的自查清单。",
+  "triggers": [
+    "回复审稿意见 / response to reviewers / 修回",
+    "审稿人的意见我不同意 / 怎么礼貌地拒绝审稿人的建议",
+    "两个审稿人意见冲突 / major revision 怎么改",
+    "修回稿要准备什么 / 带标注版"
+  ],
+  "requires": {},
+  "tools": ["read_file", "edit_file", "save_artifacts"]
+}

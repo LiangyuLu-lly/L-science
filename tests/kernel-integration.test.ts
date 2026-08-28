@@ -28,7 +28,18 @@ const available = detectKernels();
 const hasPython = available.python !== null;
 const hasR = available.r !== null;
 
-const SLOW = 90_000;
+/*
+ * 单个用例的预算。
+ *
+ * 这些用例都要真起内核，而 Python 内核的冷启动预算本身就是 30s（R 是 60s）。
+ * 「外部强杀后池自动重建」这类用例要连续起两次内核，加上心跳探测与 shutdown
+ * 的等待，最坏合法情况已接近 70s——留 90s 意味着几乎没有余量，冷缓存且多个
+ * 测试文件并行抢 CPU 时就会超时（实测撞过）。
+ *
+ * 放宽预算不会让断言变松：用例断言的是行为（换了新进程、状态清空、输出正确），
+ * 对速度的要求由用例内部的显式断言表达。总时限只负责在真卡死时把测试停下来。
+ */
+const SLOW = 150_000;
 
 let root: string;
 

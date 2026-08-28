@@ -1,0 +1,18 @@
+{
+  "slug": "reference-dedupe",
+  "name": "参考文献去重",
+  "version": "1.0.0",
+  "domain": "文献",
+  "description": "多库检索结果的三级去重：DOI 归一化后精确匹配、id 匹配、标题+作者+年份模糊匹配；灰区交人工确认的判据，以及 PRISMA 计数所需的来源留存。",
+  "triggers": [
+    "参考文献去重 / 多个数据库的结果合并 / 重复文献",
+    "DOI 归一化 / 同一篇文献出现多次",
+    "预印本和正式版算不算重复 / 勘误撤稿怎么处理",
+    "PRISMA 流程图的去重数量"
+  ],
+  "requires": {
+    "python": ["pandas"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

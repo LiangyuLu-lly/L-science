@@ -1,0 +1,18 @@
+{
+  "slug": "table-standards",
+  "name": "表格规范",
+  "version": "1.0.0",
+  "domain": "写作与投稿",
+  "description": "投稿级表格：表 1 基线特征的构造与「不要对基线做显著性检验」这条、三线表格式、有效位数与对齐、脚注与缩写、以及从 pandas 导出可直接投稿的表格。",
+  "triggers": [
+    "表格规范 / 表 1 怎么做 / 基线特征表",
+    "三线表 / 表格格式 / 表注怎么写",
+    "基线要不要做显著性检验 / 组间可比性",
+    "pandas 导出表格 / DataFrame 转 LaTeX 或 Word 表"
+  ],
+  "requires": {
+    "python": ["pandas", "numpy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

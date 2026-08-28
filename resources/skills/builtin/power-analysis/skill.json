@@ -1,0 +1,19 @@
+{
+  "slug": "power-analysis",
+  "name": "样本量与检验力分析",
+  "version": "1.0.0",
+  "domain": "统计与建模",
+  "description": "先验样本量估算、效应量的合理来源、重复测量与混合模型设计的模拟法检验力分析，以及为什么不该做事后检验力分析。",
+  "triggers": [
+    "样本量估算 / 需要多少被试 / power analysis / 检验力",
+    "效应量从哪来 / Cohen's d 取多少合适 / 最小重要差异",
+    "事后检验力 / post hoc power / 结果不显著是不是样本量不够",
+    "重复测量设计的样本量 / 混合模型检验力模拟",
+    "预注册里的样本量论证"
+  ],
+  "requires": {
+    "python": ["statsmodels", "numpy", "scipy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "r", "save_artifacts"]
+}

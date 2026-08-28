@@ -1,0 +1,19 @@
+{
+  "slug": "event-detection",
+  "name": "睡眠事件检测",
+  "version": "1.0.0",
+  "domain": "信号与数据",
+  "description": "纺锤波、慢波、慢波—纺锤波耦合、觉醒与呼吸事件的检测判据与参数，密度指标的正确分母，以及检测器之间不可比这一关键限制。",
+  "triggers": [
+    "纺锤波检测 / spindle / 纺锤波密度",
+    "慢波检测 / slow wave / 慢振荡 / K 复合波",
+    "慢波纺锤波耦合 / phase-amplitude coupling / 圆统计",
+    "觉醒检测 / arousal index",
+    "呼吸暂停 / 低通气 / AHI / 血氧下降"
+  ],
+  "requires": {
+    "python": ["yasa", "numpy", "pandas", "scipy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

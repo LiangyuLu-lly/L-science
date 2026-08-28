@@ -1,0 +1,18 @@
+{
+  "slug": "eeg-preprocess",
+  "name": "EEG 预处理",
+  "version": "1.0.0",
+  "domain": "信号与数据",
+  "description": "脑电预处理流程：滤波、重参考、坏道处理、伪迹标记与去除，以及每一步对下游频谱与事件检测的影响。强调预处理参数必须随结果一起记录。",
+  "triggers": [
+    "脑电滤波 / 带通 / 陷波 / 去工频干扰",
+    "重参考 / 平均参考 / 双极导联",
+    "坏道插值 / 眼动伪迹 / 肌电伪迹 / ICA 去伪迹",
+    "预处理之后频谱变得很奇怪 / 边缘效应"
+  ],
+  "requires": {
+    "python": ["mne", "numpy", "scipy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

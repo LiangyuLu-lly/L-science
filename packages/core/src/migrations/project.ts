@@ -292,7 +292,32 @@ ALTER TABLE blobs ADD COLUMN evicted_at INTEGER;
 CREATE INDEX idx_blobs_evicted ON blobs (evicted_at) WHERE evicted_at IS NOT NULL;
 `;
 
+/**
+ * 技能加载审计（需求 9.8）。
+ *
+ * 记在项目库而不是应用库：「这次会话为什么用了睡眠分期技能」是项目内的追溯
+ * 问题，跟着项目一起归档、一起导出才有意义。
+ *
+ * `slug` 刻意**不加外键**指向应用库的 `skills`——跨库外键做不到，而且即便能做
+ * 也不该做：技能被卸载之后，历史上「当时用了它」这个事实必须保留下来，否则
+ * 半年后回看一份结论时，产生它的方法凭空消失了。
+ */
+const M003 = `
+CREATE TABLE skill_loads (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+  slug            TEXT NOT NULL,
+  reason          TEXT NOT NULL,
+  detail          TEXT,
+  injected_chars  INTEGER NOT NULL DEFAULT 0,
+  at              INTEGER NOT NULL
+);
+CREATE INDEX idx_skill_loads_conv ON skill_loads (conversation_id, at DESC);
+CREATE INDEX idx_skill_loads_slug ON skill_loads (slug);
+`;
+
 export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'project-initial', sql: M001 },
   { version: 2, name: 'blob-eviction', sql: M002 },
+  { version: 3, name: 'skill-load-audit', sql: M003 },
 ];

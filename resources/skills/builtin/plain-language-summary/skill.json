@@ -1,0 +1,14 @@
+{
+  "slug": "plain-language-summary",
+  "name": "通俗摘要",
+  "version": "1.0.0",
+  "domain": "写作与投稿",
+  "description": "面向非专业读者的通俗摘要与 lay abstract：术语替换、句式简化、结论强度的准确传达，以及在通俗化过程中不得夸大或省略限制条件。",
+  "triggers": [
+    "通俗摘要 / lay summary / plain language summary / 大众版摘要",
+    "科普 / 面向患者的说明 / 给非专业读者解释",
+    "期刊要求 significance statement / key points"
+  ],
+  "requires": {},
+  "tools": ["read_file", "edit_file", "save_artifacts"]
+}

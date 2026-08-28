@@ -1,0 +1,16 @@
+{
+  "slug": "journal-templates",
+  "name": "期刊格式与投稿要求",
+  "version": "1.0.0",
+  "domain": "写作与投稿",
+  "description": "把稿件适配到目标期刊：作者指南里必须逐条核对的项目、引用样式与参考文献格式、双盲送审版的处理、投稿包清单，以及为什么格式要求必须以期刊官方页面为准而不能凭记忆。",
+  "triggers": [
+    "投稿格式 / 期刊要求 / 作者指南 / author guidelines",
+    "换个期刊投 / 转投 / 格式改成另一家",
+    "引用样式 / Vancouver / APA / 参考文献格式",
+    "双盲送审 / 匿名版 / blinded manuscript",
+    "投稿需要准备哪些文件 / cover letter 与 highlights"
+  ],
+  "requires": {},
+  "tools": ["read_file", "edit_file", "save_artifacts"]
+}

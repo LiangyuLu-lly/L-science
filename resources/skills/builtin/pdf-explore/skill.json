@@ -1,0 +1,17 @@
+{
+  "slug": "pdf-explore",
+  "name": "PDF 深读",
+  "version": "1.0.0",
+  "domain": "文献",
+  "description": "在长篇 PDF 里定位并提取事实：按页读取而非整篇塞进上下文、定位方法与结果段落、读表与读图的边界、提取数值时必须记录页码与原文。",
+  "triggers": [
+    "读 PDF / 深读论文 / 提取论文里的数据",
+    "论文的样本量是多少 / 他们用的什么方法 / 结果里的具体数值",
+    "PDF 太长读不完 / 只想看方法和结果部分",
+    "从表格里提取数据 / 图里的数值怎么读"
+  ],
+  "requires": {
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["read_file", "python", "save_artifacts"]
+}

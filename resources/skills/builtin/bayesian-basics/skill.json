@@ -1,0 +1,19 @@
+{
+  "slug": "bayesian-basics",
+  "name": "贝叶斯基础",
+  "version": "1.0.0",
+  "domain": "统计与建模",
+  "description": "贝叶斯因子的解释与先验敏感性分析、后验估计与 HDI 的正确表述、MCMC 收敛诊断（R-hat/ESS/发散）与后验预测检查，以及何时用贝叶斯比频率派更合适。",
+  "triggers": [
+    "贝叶斯 / 贝叶斯因子 / Bayes factor / BF10",
+    "支持零假设的证据 / 证明没有差异 / 等效性",
+    "后验分布 / 可信区间 / HDI / MCMC / pymc / brms / Stan",
+    "R-hat / 有效样本量 ESS / 发散转移 divergence / 收敛诊断",
+    "先验怎么选 / 无信息先验 / 先验敏感性"
+  ],
+  "requires": {
+    "python": ["numpy", "pandas", "scipy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "r", "save_artifacts"]
+}

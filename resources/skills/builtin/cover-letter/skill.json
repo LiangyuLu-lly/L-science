@@ -1,0 +1,15 @@
+{
+  "slug": "cover-letter",
+  "name": "投稿信",
+  "version": "1.0.0",
+  "domain": "写作与投稿",
+  "description": "写给编辑而不是审稿人的投稿信：一段话说清「为什么这篇适合这个刊」、必要的声明项、推荐与回避审稿人的写法，以及转投时不能只改刊名。",
+  "triggers": [
+    "cover letter / 投稿信 / 给编辑的信",
+    "怎么跟编辑说这篇文章的价值",
+    "推荐审稿人 / 回避审稿人 / 声明未重复投稿",
+    "转投时投稿信怎么改"
+  ],
+  "requires": {},
+  "tools": ["read_file", "edit_file", "save_artifacts"]
+}

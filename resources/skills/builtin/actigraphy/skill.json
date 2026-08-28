@@ -1,0 +1,19 @@
+{
+  "slug": "actigraphy",
+  "name": "体动记录仪分析",
+  "version": "1.0.0",
+  "domain": "信号与数据",
+  "description": "腕表体动数据的睡眠/清醒判定算法、佩戴时长与缺失处理、昼夜节律指标（IS/IV/RA/M10/L5、余弦拟合），以及体动记录相对 PSG 的固有局限。",
+  "triggers": [
+    "体动记录 / actigraphy / 腕表 / 加速度计睡眠判定",
+    "Cole-Kripke / Sadeh 算法 / 睡眠日志核对",
+    "昼夜节律指标 / 节律稳定性 IS / 节律碎片化 IV / 相对振幅 RA",
+    "M10 L5 / 余弦拟合 cosinor / 中点睡眠时间 MSFsc",
+    "佩戴依从性 / non-wear 检测 / 数据缺失"
+  ],
+  "requires": {
+    "python": ["numpy", "pandas", "scipy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

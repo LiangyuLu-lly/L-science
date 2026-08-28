@@ -1,0 +1,18 @@
+{
+  "slug": "citation-verify",
+  "name": "引文核实",
+  "version": "1.0.0",
+  "domain": "文献",
+  "description": "核实一条引文是否真实存在、以及它是否真的支持所声称的结论。强制经检索工具取证，禁止凭记忆作答；给出「存在但不支持」这一最危险情形的判定方法。",
+  "triggers": [
+    "核实引文 / 检查参考文献 / 这篇文献真的存在吗",
+    "DOI 对不上 / 找不到这篇文章 / 作者年份不匹配",
+    "这个说法有文献支持吗 / 引用是否恰当",
+    "文献幻觉 / 编造的参考文献"
+  ],
+  "requires": {
+    "python": ["requests"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "read_file", "save_artifacts"]
+}

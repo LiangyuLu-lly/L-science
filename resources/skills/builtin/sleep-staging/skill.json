@@ -1,0 +1,19 @@
+{
+  "slug": "sleep-staging",
+  "name": "睡眠分期",
+  "version": "1.0.0",
+  "domain": "信号与数据",
+  "description": "AASM 判读规则要点、用 YASA 做自动分期、睡眠指标（TST/SE/SOL/WASO/各期占比）的准确定义与分期图绘制，以及分期分析里的常见统计错误。",
+  "triggers": [
+    "睡眠分期 / 判读分期 / hypnogram / 分期图",
+    "N1 N2 N3 REM 判读规则 / AASM 标准 / K 复合波 / 纺锤波",
+    "自动分期 / YASA / 分期一致性 / Cohen's kappa",
+    "睡眠效率 / 入睡潜伏期 / WASO / 各期占比怎么算",
+    "首夜效应 / 多夜记录"
+  ],
+  "requires": {
+    "python": ["yasa", "mne", "numpy", "pandas"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

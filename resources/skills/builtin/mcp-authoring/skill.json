@@ -1,0 +1,17 @@
+{
+  "slug": "mcp-authoring",
+  "name": "MCP 服务器编写",
+  "version": "1.0.0",
+  "domain": "平台自身",
+  "description": "为平台编写 MCP（Model Context Protocol）服务器：stdio 与 HTTP/SSE 两种传输的选择、工具描述该写给谁看、参数校验与错误信息的可执行性、日志绝不能污染 stdio 通道，以及本地优先下的安全边界。",
+  "triggers": [
+    "写一个 MCP 服务器 / MCP 工具 / Model Context Protocol",
+    "怎么给平台加自定义工具 / 接入外部服务",
+    "MCP 的 stdio 和 SSE 传输选哪个",
+    "MCP 服务器连不上 / 工具调用报错"
+  ],
+  "requires": {
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "read_file", "edit_file"]
+}

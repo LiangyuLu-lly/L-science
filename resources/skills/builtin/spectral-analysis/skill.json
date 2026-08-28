@@ -1,0 +1,19 @@
+{
+  "slug": "spectral-analysis",
+  "name": "频谱分析",
+  "version": "1.0.0",
+  "domain": "信号与数据",
+  "description": "功率谱估计方法选择（Welch / 多窗）、band power 的正确算法与单位、频段定义、相对功率的陷阱、1/f 背景与振荡峰的分离，以及整夜谱图绘制。",
+  "triggers": [
+    "功率谱 / PSD / Welch / 多窗 multitaper / 谱图 spectrogram",
+    "delta theta alpha sigma beta 频段功率怎么算",
+    "相对功率 / 绝对功率 / band power 单位",
+    "1/f 背景 / aperiodic / fooof / specparam / 振荡峰",
+    "慢波活动 SWA / 纺锤波频段功率"
+  ],
+  "requires": {
+    "python": ["mne", "numpy", "scipy", "matplotlib"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

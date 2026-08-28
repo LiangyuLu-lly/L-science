@@ -1,0 +1,19 @@
+{
+  "slug": "mixed-effects-models",
+  "name": "混合效应模型",
+  "version": "1.0.0",
+  "domain": "统计与建模",
+  "description": "重复测量与嵌套数据的线性/广义线性混合模型：随机效应结构的选择、收敛问题的处理、自由度与 p 值的来�署、效应量报告，以及「把重复测量当独立样本」这一最常见的致命错误。",
+  "triggers": [
+    "重复测量 / 多夜记录 / 每个被试多个观测 / 嵌套数据",
+    "混合效应模型 / 随机截距 / 随机斜率 / lmer / mixedlm",
+    "为什么不能直接做 t 检验或方差分析 / 伪重复 pseudoreplication",
+    "模型不收敛 / 奇异拟合 singular fit / 随机效应方差为 0",
+    "混合模型的 p 值 / Satterthwaite / 边际 R2"
+  ],
+  "requires": {
+    "python": ["statsmodels", "pandas", "numpy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "r", "save_artifacts"]
+}

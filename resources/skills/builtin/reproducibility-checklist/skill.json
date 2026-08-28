@@ -1,0 +1,17 @@
+{
+  "slug": "reproducibility-checklist",
+  "name": "可复现性清单",
+  "version": "1.0.0",
+  "domain": "规范与可复现",
+  "description": "逐项检查一份分析能否被别人重跑出同样结果：数据版本与手工修改、随机种子、环境与包版本记录、执行顺序、图表血缘，以及数据不能公开时仍必须提供的材料。",
+  "triggers": [
+    "可复现 / 复现性 / reproducibility / 别人能重跑吗",
+    "随机种子 / 环境记录 / 包版本 / requirements / sessionInfo",
+    "代码和数据怎么归档 / 投稿要交哪些材料",
+    "为什么结果和上次不一样"
+  ],
+  "requires": {
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "read_file", "save_artifacts"]
+}

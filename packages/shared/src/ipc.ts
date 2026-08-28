@@ -432,6 +432,35 @@ export const requestSchema = z.discriminatedUnion('method', [
   }),
 
   z.object({ method: z.literal('credential.delete'), ref: z.string().min(1).max(200) }),
+
+  /* --- 技能系统（任务 12.1-12.3，需求 9.1、9.2、9.6、9.8）--- */
+
+  /** 全部技能（含被禁用的）、被用户覆盖的内置技能、加载失败的技能及原因。 */
+  z.object({ method: z.literal('skill.list') }),
+
+  /** 重新扫描技能目录。改完 SKILL.md 之后用它生效，不必重启后端。 */
+  z.object({
+    method: z.literal('skill.reload'),
+    /** 顺带重建嵌入向量。默认不重建——它要向本机推理服务发几十段文本。 */
+    rebuildVectors: z.boolean().default(false),
+  }),
+
+  z.object({ method: z.literal('skill.setEnabled'), slug: idSchema, enabled: z.boolean() }),
+
+  /** 检索技能。界面上用它让用户确认「这句话会命中哪些技能」。 */
+  z.object({
+    method: z.literal('skill.search'),
+    query: z.string().min(1).max(2000),
+    limit: z.number().int().min(1).max(20).default(5),
+  }),
+
+  /** 某个会话加载过哪些技能及原因（需求 9.8）。 */
+  z.object({
+    method: z.literal('skill.audit'),
+    projectId: idSchema,
+    conversationId: idSchema,
+    limit: z.number().int().min(1).max(500).default(200),
+  }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

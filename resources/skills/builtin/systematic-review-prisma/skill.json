@@ -1,0 +1,19 @@
+{
+  "slug": "systematic-review-prisma",
+  "name": "系统综述与 PRISMA",
+  "version": "1.0.0",
+  "domain": "文献",
+  "description": "系统综述的完整流程：PROSPERO 预注册、PICO 与纳入排除标准、双人筛选与一致性、偏倚风险评估、PRISMA 2020 流程图与条目清单，以及元分析的异质性处理。",
+  "triggers": [
+    "系统综述 / systematic review / meta 分析 / 元分析",
+    "PRISMA 流程图 / PRISMA 条目清单 / PROSPERO 预注册",
+    "纳入排除标准 / PICO / 筛选流程 / 双人筛选一致性",
+    "偏倚风险 / RoB 2 / ROBINS-I / Newcastle-Ottawa / GRADE",
+    "异质性 I2 / 随机效应模型 / 森林图 / 漏斗图 / 发表偏倚"
+  ],
+  "requires": {
+    "python": ["pandas", "numpy", "matplotlib"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "read_file", "save_artifacts"]
+}

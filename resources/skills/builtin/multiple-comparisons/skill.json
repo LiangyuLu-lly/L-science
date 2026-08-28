@@ -1,0 +1,19 @@
+{
+  "slug": "multiple-comparisons",
+  "name": "多重比较校正",
+  "version": "1.0.0",
+  "domain": "统计与建模",
+  "description": "何时必须校正、FWER 与 FDR 的选择、Bonferroni/Holm/BH 的适用条件、脑电时频与多通道数据的簇水平置换检验，以及「校正家族」如何界定。",
+  "triggers": [
+    "多重比较 / 多重检验 / p 值校正",
+    "Bonferroni / Holm / Benjamini-Hochberg / FDR / FWER",
+    "每个通道各做一次检验 / 每个频段各做一次 / 逐时间点检验",
+    "簇水平置换检验 / cluster-based permutation / TFCE",
+    "校正之后就不显著了怎么办"
+  ],
+  "requires": {
+    "python": ["statsmodels", "numpy", "scipy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

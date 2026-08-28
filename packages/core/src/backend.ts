@@ -11,9 +11,11 @@
 import { makeError } from '@l-science/shared';
 
 import { mkdirSync } from 'node:fs';
-import { join as joinPath, resolve as resolvePath, sep } from 'node:path';
+import { dirname, join as joinPath, resolve as resolvePath, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createDefaultRegistry } from '@l-science/adapters';
+import { detectKernels } from '@l-science/kernel';
 import type { TurnEvent } from '@l-science/shared';
 
 import { ApprovalService } from './approval/service.js';
@@ -40,7 +42,19 @@ import { isolationStrength } from './sandbox/backend.js';
 import { requestHostAccess } from './sandbox/host-access.js';
 import { selectBackend } from './sandbox/index.js';
 import { AppStore, type ProjectStore } from './store.js';
-import { capabilityProbe, detectCapabilities } from './tools/capabilities.js';
+import { SkillAuditRepo } from './repo/skills.js';
+import {
+  createLoadSkillReferenceTool,
+  createOllamaEmbedder,
+  createSearchSkillsTool,
+  installBuiltinSkills,
+  probeCommands,
+  probePythonModules,
+  probeRPackages,
+  SkillManager,
+  type Embedder,
+} from './skills/index.js';
+import { capabilityProbe, detectCapabilities, REMEDIATION } from './tools/capabilities.js';
 import { createEditFileTool, createReadFileTool } from './tools/files.js';
 import { ToolRegistry } from './tools/registry.js';
 import { StdioTransport } from './transport.js';
@@ -193,6 +207,7 @@ function main(): void {
   const toolRegistries = new Map<string, ToolRegistry>();
   const usageRepos = new Map<string, UsageRepo>();
   const routingRepos = new Map<string, RoutingRepo>();
+  const skillAudits = new Map<string, SkillAuditRepo>();
   const vault = new CredentialVault();
   const capabilities = detectCapabilities();
   const adapters = createDefaultRegistry();
@@ -232,6 +247,81 @@ function main(): void {
       hasCredential: (ref) => ref !== null && vault.available && vault.exists && vault.has(ref),
     });
 
+  /* --- 技能系统（任务 12.1-12.4）------------------------------------- */
+
+  // 内置技能由平台拥有，每次启动同步一次。幂等：内容未变时不写文件
+  installBuiltinSkills({
+    targetDir: store.paths.skillsBuiltin,
+    fromDir: dirname(fileURLToPath(import.meta.url)),
+    onLog: log,
+  });
+
+  const kernelEnvs = detectKernels();
+
+  /**
+   * 嵌入层。
+   *
+   * 用注册表里已启用的本地供应商（Ollama）做嵌入，而不是另外配一份地址：用户
+   * 已经登记过一次本机推理服务，再要他配第二遍是多余的。没有本地供应商时
+   * `embedder` 为 null，检索退回纯词法层——那条路必须始终可用，否则「装好平台后
+   * 要先做两步配置才能检索技能」会让绝大多数人从没用过技能系统。
+   */
+  const embedderNow = (): Embedder | null => {
+    const local = modelRegistry
+      .listProviders({ includeDisabled: false })
+      .find((p) => p.adapter === 'ollama' && p.baseUrl !== null);
+    if (local?.baseUrl === undefined || local.baseUrl === null) return null;
+
+    const model = process.env['L_SCIENCE_EMBED_MODEL'];
+    return createOllamaEmbedder({
+      baseUrl: local.baseUrl,
+      ...(model === undefined || model === '' ? {} : { model }),
+    });
+  };
+
+  const skills = new SkillManager({
+    builtinDir: store.paths.skillsBuiltin,
+    userDir: store.paths.skillsUser,
+    db: store.db,
+    probes: {
+      python: probePythonModules(kernelEnvs.python?.executable ?? null),
+      r: probeRPackages(kernelEnvs.r?.rscript ?? null),
+      commands: probeCommands(),
+      // 连接器要到 M5 才有，此刻恒为空集：声明了连接器依赖的技能会如实报「缺失」，
+      // 而不是假装满足
+      connectors: () => new Set<string>(),
+      capabilities: () => capabilities.available,
+    },
+    ...(capabilities.pythonEnv === null ? {} : { pythonEnv: capabilities.pythonEnv }),
+    ...(capabilities.rEnv === null ? {} : { rEnv: capabilities.rEnv }),
+    capabilityRemediation: REMEDIATION,
+    embedder: embedderNow(),
+    onLog: log,
+  });
+
+  {
+    const catalog = skills.reload();
+    log(
+      `技能：生效 ${String(catalog.skills.size)} 个` +
+        `（用户覆盖 ${String(catalog.shadowed.length)}，加载失败 ${String(catalog.broken.length)}）`,
+    );
+    /*
+     * 向量层在后台构建，不阻塞启动。
+     *
+     * 它要向 Ollama 发三十几段文本，本机首次调用还可能触发模型加载——把它放在
+     * 启动路径上会让后端「就绪」延后好几秒，而这期间用户什么都做不了。检索在
+     * 向量就绪之前照常工作（纯词法），就绪后自动增强。
+     */
+    void skills
+      .buildVectors()
+      .then((r) => {
+        if (r.built + r.cached > 0) {
+          log(`技能嵌入：新建 ${String(r.built)}，命中缓存 ${String(r.cached)}`);
+        }
+      })
+      .catch(() => undefined);
+  }
+
   const orchestratorFor = (projectId: string): Orchestrator => {
     const existing = orchestrators.get(projectId);
     if (existing !== undefined) return existing;
@@ -269,6 +359,26 @@ function main(): void {
     tools.register(
       createDeleteArtifactsTool({ store: artifactStore, approvals: approvalFor(projectId) }),
     );
+
+    /*
+     * 技能工具（任务 12.2、12.3）。
+     *
+     * 审计记在项目库：「这次会话为什么用了睡眠分期技能」是项目内的追溯问题。
+     * 审计写入失败不能让工具调用失败——记不下来是遗憾，因此把整次分析中断是荒谬的。
+     */
+    const skillAudit = new SkillAuditRepo(project.db);
+    skillAudits.set(projectId, skillAudit);
+
+    const auditSkillLoad = (input: Parameters<SkillAuditRepo['record']>[0]): void => {
+      try {
+        skillAudit.record(input);
+      } catch (err) {
+        log(`技能加载审计写入失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+
+    tools.register(createSearchSkillsTool({ manager: skills, audit: auditSkillLoad }));
+    tools.register(createLoadSkillReferenceTool({ manager: skills, audit: auditSkillLoad }));
 
     const orchestrator = new Orchestrator({
       conversations: project.conversations,
@@ -737,6 +847,108 @@ function main(): void {
     vault.set(req.ref, req.secret);
     // 回执里不带任何密钥内容，只带指纹
     return { ref: req.ref, fingerprint: vault.fingerprint(req.ref) };
+  });
+
+  /* --- 技能（任务 12.1-12.3）--- */
+
+  d.register('skill.list', async () => {
+    const catalog = skills.catalog;
+    const records = skills.records();
+
+    return {
+      /** 词法检索永远可用；向量层可选。界面要能说出当前是哪种状态。 */
+      vectorsReady: skills.vectorsReady,
+      embedFailure: skills.embedFailure,
+      builtinDir: store.paths.skillsBuiltin,
+      userDir: store.paths.skillsUser,
+      skills: records.map((record) => {
+        const loaded = catalog.skills.get(record.slug);
+        const requirements = skills.requirementsOf(record.slug);
+        return {
+          slug: record.slug,
+          name: record.name,
+          version: record.version,
+          scope: record.scope,
+          domain: record.domain,
+          description: record.manifest.description,
+          triggers: record.manifest.triggers,
+          tools: record.manifest.tools,
+          requires: record.manifest.requires,
+          enabled: record.enabled,
+          path: record.path,
+          /** 文件系统上是否还在。同步只禁用不删行，这一项让界面能区分两者。 */
+          present: loaded !== undefined,
+          references: loaded?.references ?? [],
+          scripts: loaded?.scripts ?? [],
+          warnings: loaded?.warnings ?? [],
+          requirementsSatisfied: requirements?.satisfied ?? null,
+          missing: requirements?.missing ?? [],
+          probeFailures: requirements?.probeFailures ?? [],
+        };
+      }),
+      // 被用户技能遮蔽的内置技能。查不到它，「我的改动生效了吗」无从确认
+      shadowed: catalog.shadowed.map((s) => ({
+        slug: s.manifest.slug,
+        name: s.manifest.name,
+        version: s.manifest.version,
+        path: s.path,
+      })),
+      broken: catalog.broken,
+    };
+  });
+
+  d.register('skill.reload', async (req) => {
+    const catalog = skills.reload();
+    const result = req.rebuildVectors
+      ? await skills.buildVectors()
+      : { built: 0, cached: 0, failed: skills.embedFailure };
+
+    return {
+      active: catalog.skills.size,
+      shadowed: catalog.shadowed.length,
+      broken: catalog.broken.length,
+      vectors: result,
+    };
+  });
+
+  d.register('skill.setEnabled', async (req) => {
+    if (!skills.setEnabled(req.slug, req.enabled)) {
+      throw notFound(`技能不在注册表中：${req.slug}`, '先重新扫描技能目录。');
+    }
+    return { slug: req.slug, enabled: req.enabled };
+  });
+
+  d.register('skill.search', async (req) => {
+    const hits = await skills.search(req.query, req.limit);
+    return {
+      vectorsReady: skills.vectorsReady,
+      hits: hits.map((hit) => ({
+        slug: hit.slug,
+        name: hit.manifest.name,
+        domain: hit.manifest.domain,
+        description: hit.manifest.description,
+        scope: hit.scope,
+        score: hit.score,
+        lexicalScore: hit.lexicalScore,
+        vectorScore: hit.vectorScore,
+        matchedTerms: hit.matchedTerms,
+        requirementsSatisfied: hit.requirementsSatisfied,
+        missingSummary: hit.missingSummary,
+        references: hit.references,
+      })),
+    };
+  });
+
+  d.register('skill.audit', async (req) => {
+    // 审计仓储随编排器一起懒加载
+    orchestratorFor(req.projectId);
+    const audit = skillAudits.get(req.projectId);
+    if (audit === undefined) throw notFound(`项目不可用：${req.projectId}`);
+
+    return {
+      events: audit.byConversation(req.conversationId, req.limit),
+      summary: audit.summary(),
+    };
   });
 
   d.register('credential.delete', async (req) => {

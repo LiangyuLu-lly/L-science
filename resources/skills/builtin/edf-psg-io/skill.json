@@ -1,0 +1,18 @@
+{
+  "slug": "edf-psg-io",
+  "name": "EDF / PSG 数据读写",
+  "version": "1.0.0",
+  "domain": "信号与数据",
+  "description": "读取与写出 EDF/EDF+/BDF 格式的多导睡眠图与生理信号，核对通道命名、采样率、单位与时间轴对齐，导出前检查标注完整性。",
+  "triggers": [
+    "读取 EDF 文件 / 打开 PSG 记录 / 载入多导睡眠图",
+    "通道名不统一、采样率不一致、单位是 V 还是 µV",
+    "把分期结果或事件标注写回 EDF+ / 导出为 EDF",
+    "记录时长与标注时间轴对不上、跨夜记录的起始时间"
+  ],
+  "requires": {
+    "python": ["mne", "numpy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "read_file", "save_artifacts"]
+}
