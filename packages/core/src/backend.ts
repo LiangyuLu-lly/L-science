@@ -55,7 +55,13 @@ import {
   type ProviderRecord,
 } from './repo/registry.js';
 import { buildTaskProfile, route } from './router/index.js';
-import { FindingsRepo } from './repo/findings.js';
+import { FindingsRepo, type FindingStatus, type ReviewerTrigger } from './repo/findings.js';
+import {
+  ReviewerService,
+  createCheckFindingsTool,
+  createMarkFindingAddressedTool,
+  createRequestReviewTool,
+} from './reviewer/index.js';
 import { RoutingRepo } from './repo/routing.js';
 import { UsageRepo } from './repo/usage.js';
 import { isolationStrength } from './sandbox/backend.js';
@@ -268,6 +274,7 @@ async function main(): Promise<void> {
   const skillAudits = new Map<string, SkillAuditRepo>();
   const planRepos = new Map<string, PlanRepo>();
   const findingsRepos = new Map<string, FindingsRepo>();
+  const reviewers = new Map<string, ReviewerService>();
   const subAgentRunners = new Map<string, SubAgentRunner>();
 
   /**
@@ -552,7 +559,20 @@ async function main(): Promise<void> {
       }),
     );
     tools.register(createEditFileTool({ resolvePath: resolveForWrite }));
-    tools.register(createSaveArtifactsTool({ store: artifactStore, resolvePath: resolveForRead }));
+    tools.register(
+      createSaveArtifactsTool({
+        store: artifactStore,
+        resolvePath: resolveForRead,
+        // 制品保存是审查触发点之一（需求 11.3）。带上版本 id，审查才知道该看哪些
+        onSaved: ({ ctx, versionIds }) => {
+          void reviewer.schedule({
+            conversationId: ctx.conversationId,
+            trigger: 'artifact-saved',
+            versionIds,
+          });
+        },
+      }),
+    );
     tools.register(
       createDeleteArtifactsTool({ store: artifactStore, approvals: approvalFor(projectId) }),
     );
@@ -833,6 +853,91 @@ async function main(): Promise<void> {
     tools.register(createControlReplTool(replToolOptions));
     tools.register(createControlReplAdminTool(replToolOptions));
 
+    /* --- Reviewer Service（任务 12.8，需求 11.1-11.8）--------------- */
+
+    const reviewer = new ReviewerService({
+      findings: findingsRepo,
+      artifacts: artifactStore,
+      messages: project.messages,
+      adapters,
+      adapterContext: adapterContextFor,
+      routerView: routerViewNow,
+      experience: () => routingRepo.experience(),
+      usage: usageRepo,
+      onFinding: (finding) => {
+        d.broadcast({ kind: 'finding.raised', projectId, finding });
+      },
+      onRunFinished: ({ conversationId, runId, status, summary }) => {
+        d.broadcast({
+          kind: 'reviewer.finished',
+          projectId,
+          conversationId,
+          runId,
+          status,
+          summary,
+        });
+        if (status === 'degraded') log(`审查降级（${conversationId}）：${summary}`);
+      },
+      /*
+       * FAIL 打断主 agent（需求 11.5）。
+       *
+       * 「打断」在这里有两种落点，取决于会话此刻的状态：
+       *
+       * - 回合还在跑：中断它。继续跑下去的每一步都建立在一个已经站不住的结论上，
+       *   越往后走要推翻的东西越多。
+       * - 会话空闲：把发现写成一条系统消息，下一回合的历史里就带着它。
+       *
+       * 两种情况都要落一条消息——只中断不解释的话，用户看到的是「它自己停了」。
+       * WARN 不走这条路径，它只出现在 findings 列表与 check_findings 的输出里。
+       */
+      onFail: async ({ conversationId, findings }) => {
+        const lines = findings.map(
+          (f) => `- [${f.category}] ${f.title}\n  ${(f.detail ?? '').split('\n')[0] ?? ''}`,
+        );
+        const orchestrator = orchestrators.get(projectId);
+        const wasActive = orchestrator?.isActive(conversationId) ?? false;
+
+        try {
+          project.messages.append({
+            conversationId,
+            role: 'system',
+            content: {
+              kind: 'reviewer-block',
+              text: [
+                `独立审查提出了 ${String(findings.length)} 条阻断级发现：`,
+                ...lines,
+                '',
+                wasActive
+                  ? '当前回合已被中断：继续往下做只会让需要推翻的东西更多。'
+                  : '这些发现会阻止「任务已完成」的结论。',
+                '处理完请用 mark_finding_addressed 说明改了什么，由下一轮审查复核。',
+              ].join('\n'),
+            },
+          });
+        } catch (err) {
+          log(`审查阻断消息落库失败：${err instanceof Error ? err.message : String(err)}`);
+        }
+
+        if (wasActive && orchestrator !== undefined) {
+          await orchestrator.interrupt(conversationId).catch(() => undefined);
+        }
+      },
+      onLog: (line) => {
+        log(`[reviewer ${projectId}] ${line}`);
+      },
+    });
+    reviewers.set(projectId, reviewer);
+
+    const findingToolOptions = {
+      repo: () => findingsRepo,
+      schedule: (input: { conversationId: string; trigger: ReviewerTrigger }) => {
+        void reviewer.schedule(input);
+      },
+    };
+    tools.register(createCheckFindingsTool(findingToolOptions));
+    tools.register(createMarkFindingAddressedTool(findingToolOptions));
+    tools.register(createRequestReviewTool(findingToolOptions));
+
     computePlanes.set(projectId, {
       pool,
       controlPool,
@@ -863,6 +968,16 @@ async function main(): Promise<void> {
         const dir = joinPath(project.paths.workspace, conversationId);
         mkdirSync(dir, { recursive: true });
         return dir;
+      },
+      /*
+       * 回合结束触发审查（需求 11.3）。
+       *
+       * 不 await：审查要跑一次模型调用，在这里等它等于让用户多等几十秒才看到
+       * 回合结束。中断收场的回合也审查——中断之前产出的分析结果照样需要被看，
+       * 用户中断的是等待而不是已经算出来的东西。
+       */
+      onTurnEnd: ({ conversationId }) => {
+        void reviewer.schedule({ conversationId, trigger: 'turn-end' });
       },
     });
 
@@ -1584,6 +1699,76 @@ async function main(): Promise<void> {
     };
   });
 
+  /* --- 审查与 findings（任务 12.8，需求 11）--- */
+
+  const findingsFor = async (projectId: string): Promise<FindingsRepo> => {
+    await orchestratorFor(projectId);
+    const repo = findingsRepos.get(projectId);
+    if (repo === undefined) throw notFound(`项目不可用：${projectId}`);
+    return repo;
+  };
+
+  d.register('finding.list', async (req) => {
+    const repo = await findingsFor(req.projectId);
+    return {
+      findings: repo.list({
+        conversationId: req.conversationId,
+        ...(req.status === undefined ? {} : { status: req.status as FindingStatus | 'unresolved' }),
+        limit: req.limit,
+      }),
+      summary: repo.summary(req.conversationId),
+    };
+  });
+
+  d.register('finding.decide', async (req) => {
+    const repo = await findingsFor(req.projectId);
+    const finding = repo.get(req.findingId);
+    if (finding === null) throw notFound(`发现不存在：${req.findingId}`);
+
+    const note = req.note ?? '';
+    const applied =
+      req.decision === 'resolve'
+        ? repo.resolve(req.findingId, note === '' ? undefined : note)
+        : req.decision === 'dismiss'
+          ? repo.dismiss(req.findingId, note === '' ? '用户判为误报' : note)
+          : repo.reopen(req.findingId, note === '' ? '用户重新打开' : note);
+
+    if (!applied) {
+      // 明确报冲突而不是静默成功：当前状态不允许这个动作时，用户需要知道
+      throw new DispatchError(
+        makeError('conflict', `发现当前状态是 ${finding.status}，不能执行 ${req.decision}`, {
+          remediation:
+            req.decision === 'reopen'
+              ? 'reopen 只对「已自报待复核」的发现有效。'
+              : '它可能已经关闭或已被判为误报。',
+        }),
+      );
+    }
+
+    return { finding: repo.get(req.findingId) };
+  });
+
+  d.register('reviewer.run', async (req) => {
+    await orchestratorFor(req.projectId);
+    const reviewer = reviewers.get(req.projectId);
+    if (reviewer === undefined) throw notFound(`项目不可用：${req.projectId}`);
+
+    /*
+     * 不 await 审查完成。
+     *
+     * 它要跑一次模型调用，几十秒到几分钟。挂在这个请求上会撞上 IPC 的超时，
+     * 而超时的表现是「点了审查按钮转半天然后报错」——审查其实跑完了。
+     * 结果经 reviewer.finished 事件与 finding.raised 通知 UI。
+     */
+    void reviewer.schedule({ conversationId: req.conversationId, trigger: 'user-request' });
+    return { scheduled: true, merged: reviewer.busy };
+  });
+
+  d.register('reviewer.runs', async (req) => {
+    const repo = await findingsFor(req.projectId);
+    return { runs: repo.runs(req.conversationId, req.limit) };
+  });
+
   d.register('credential.delete', async (req) => {
     requireVault();
 
@@ -1743,6 +1928,9 @@ async function main(): Promise<void> {
      * 直接退出——进程退出会连带收掉 Job Object 里的一切。
      */
     const closers: Array<Promise<unknown>> = [];
+    // 审查服务先关：它持有在途的模型调用，不中止的话进程要等它跑完才退
+    for (const reviewer of reviewers.values()) reviewer.close();
+
     for (const plane of computePlanes.values()) {
       plane.background.close();
       closers.push(plane.repl.close());

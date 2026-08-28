@@ -13,39 +13,30 @@
 
 import { randomUUID } from 'node:crypto';
 
+import type {
+  Finding,
+  FindingCategory,
+  FindingEvidence,
+  FindingSeverity,
+  FindingStatus,
+} from '@l-science/shared';
+
 import type { Db } from '../db.js';
 
-/** WARN 不打断主 agent，FAIL 打断（需求 11.5）。 */
-export type FindingSeverity = 'warn' | 'fail';
-
-/** 检查类别（需求 11.4）。 */
-export type FindingCategory =
-  'evidence' | 'statistics' | 'reproducibility' | 'consistency' | 'integrity';
-
-export type FindingStatus = 'open' | 'claimed-fixed' | 'resolved' | 'dismissed';
-
-/** 证据指向。三种之一必须给出具体 id。 */
-export interface FindingEvidence {
-  kind: 'artifact-version' | 'message' | 'claim' | 'plan-step';
-  id: string;
-  /** 为什么这条证据支持该发现。 */
-  note?: string;
-}
-
-export interface Finding {
-  id: string;
-  conversationId: string;
-  reviewerRunId: string | null;
-  severity: FindingSeverity;
-  category: FindingCategory;
-  title: string;
-  detail: string | null;
-  evidence: readonly FindingEvidence[];
-  status: FindingStatus;
-  addressedNote: string | null;
-  addressedAt: number | null;
-  createdAt: number;
-}
+/*
+ * 类型本体在 `@l-science/shared`，这里只 re-export。
+ *
+ * 曾经两边各写一份：shared 里是照设计文档写的 `'WARN' | 'FAIL'`，仓储里是实际入库的
+ * `'warn' | 'fail'`。两个类型从不互相赋值，编译期因此永远发现不了；而后果是渲染层
+ * 按大写匹配严重度、一条都匹配不上——全部落到默认分支，FAIL 与 WARN 长得一模一样。
+ */
+export type {
+  Finding,
+  FindingCategory,
+  FindingEvidence,
+  FindingSeverity,
+  FindingStatus,
+} from '@l-science/shared';
 
 export type ReviewerTrigger = 'turn-end' | 'artifact-saved' | 'pre-compile' | 'user-request';
 

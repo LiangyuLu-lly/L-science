@@ -33,6 +33,15 @@ export async function streamModel(input: {
   history: readonly ChatMessage[];
   toolSchemas: ReturnType<ToolRegistry['toolSchemas']>;
   signal: AbortSignal;
+  /**
+   * 覆盖输出上限。
+   *
+   * 需要它是因为默认值（thinking 模型 8192）对「必须产出完整结构化输出」的调用
+   * 不够用：实测 qwen3:4b 审查一段内容时把 8192 全花在思考上，正文一个字都没有，
+   * 于是审查结果是空的而且看起来像模型不肯按格式输出。对话回合不受影响——它可以
+   * 只产出一句话就结束，而结构化输出不行。
+   */
+  maxOutputTokens?: number;
 }): Promise<{
   text: string;
   thinking: string;
@@ -50,7 +59,7 @@ export async function streamModel(input: {
 
   const maxOutputTokens = Math.min(
     modelMaxOutput(input.model),
-    input.model.features.thinking ? 8192 : 4096,
+    input.maxOutputTokens ?? (input.model.features.thinking ? 8192 : 4096),
   );
 
   const stream = input.adapter.chat(input.ctx, {

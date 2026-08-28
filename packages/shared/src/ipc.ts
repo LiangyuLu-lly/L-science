@@ -513,6 +513,47 @@ export const requestSchema = z.discriminatedUnion('method', [
     planId: idSchema,
     spec: z.unknown(),
   }),
+
+  /* --- 审查与 findings（任务 12.8，需求 11）--- */
+
+  /** 某个会话的发现。省略 status 时返回未关闭的（open + claimed-fixed）。 */
+  z.object({
+    method: z.literal('finding.list'),
+    projectId: idSchema,
+    conversationId: idSchema,
+    status: z.enum(['open', 'claimed-fixed', 'resolved', 'dismissed', 'unresolved']).optional(),
+    limit: z.number().int().min(1).max(500).default(200),
+  }),
+
+  /**
+   * 用户对某条发现的处置。
+   *
+   * `dismiss`（判为误报）与 `resolve`（确认已修）都**只有用户能做**：agent 只能
+   * 自报待复核（`mark_finding_addressed`），因为被审查者给自己判分会让一次错误的
+   * 判断永久掩盖问题。`reopen` 用于用户不同意审查者的关闭判定。
+   */
+  z.object({
+    method: z.literal('finding.decide'),
+    projectId: idSchema,
+    findingId: idSchema,
+    decision: z.enum(['resolve', 'dismiss', 'reopen']),
+    note: z.string().max(2000).optional(),
+  }),
+
+  /** 显式请求一次审查（需求 11.3）。后台跑，结果经 reviewer.finished 事件通知。 */
+  z.object({
+    method: z.literal('reviewer.run'),
+    projectId: idSchema,
+    conversationId: idSchema,
+  }),
+
+  /** 审查历史。模型 id 在这里可见，异厂商约束因此可核查（需求 11.2）。 */
+  z.object({
+    method: z.literal('reviewer.runs'),
+    projectId: idSchema,
+    conversationId: idSchema,
+    limit: z.number().int().min(1).max(100).default(20),
+  }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

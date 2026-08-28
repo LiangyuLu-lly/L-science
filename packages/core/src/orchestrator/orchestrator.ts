@@ -81,6 +81,20 @@ export interface OrchestratorDeps {
   projectId?: string;
   /** 子 agent 委派（需求 10.5-10.7）。缺省时 delegate 工具不注册。 */
   subAgents?: SubAgentRunner;
+  /**
+   * 回合结束回调（需求 11.3 的「轮次结束」触发点）。
+   *
+   * 在摘要落库之后、`turn.end` 事件之前调用，且**必须立即返回**——审查是后台任务，
+   * 在这里 await 它等于让用户多等几十秒看不到回合结束。
+   *
+   * 中断结束的回合也会回调：中断之前产出的分析结果照样需要被审查，用户中断的是
+   * 等待而不是已经算出来的东西。
+   */
+  onTurnEnd?: (input: {
+    conversationId: string;
+    stopReason: TurnSummary['stopReason'];
+    toolCalls: number;
+  }) => void;
 }
 
 interface ActiveTurn {
@@ -369,6 +383,22 @@ export class Orchestrator {
 
     // 中断时已产出的内容必须保留：用户中断是因为不想等了，不是要撤销
     this.#persistSummary(conversationId, summary);
+
+    /*
+     * 触发回合结束审查（需求 11.3）。
+     *
+     * 包在 try 里：审查是旁路，它的调度失败不该让一个已经跑完的回合以异常收场——
+     * 那会让用户丢掉刚产出的结果，而原因只是一个通知没送出去。
+     */
+    try {
+      this.#deps.onTurnEnd?.({
+        conversationId,
+        stopReason: summary.stopReason,
+        toolCalls: summary.toolCalls,
+      });
+    } catch {
+      // 上层自己记日志；这里不能让它影响回合收尾
+    }
 
     yield {
       kind: 'turn.end',

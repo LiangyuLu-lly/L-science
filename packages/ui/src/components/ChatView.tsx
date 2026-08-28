@@ -64,6 +64,21 @@ function SystemItem({ item }: { item: ChatItem }): React.JSX.Element {
     );
   }
 
+  /*
+   * 审查阻断（需求 11.5）。
+   *
+   * 用 role="alert" 而不是 note：它意味着当前结论不成立，而且可能刚刚打断了一个
+   * 正在跑的回合。落到默认分支的话它长得和一条普通系统提示一样，用户会划过去。
+   */
+  if (system?.kind === 'reviewer-block') {
+    return (
+      <div className="msg msg--system msg--warn" role="alert">
+        <span className="msg__system-kind">独立审查：阻断级发现</span>
+        <pre className="msg__system-detail">{String(system.text ?? '')}</pre>
+      </div>
+    );
+  }
+
   return (
     <div className="msg msg--system" role="note">
       {item.text}

@@ -35,6 +35,22 @@ export interface SaveArtifactsToolOptions {
   resolvePath: (raw: string, ctx: ToolContext) => string;
   /** 当前工具调用 id，用于记录血缘。 */
   currentToolCallId?: () => string | null;
+  /**
+   * 保存成功后的回调（需求 11.3 的「Artifact 保存」触发点）。
+   *
+   * 一次调用可以保存多个文件，因此在**全部处理完之后**回调一次并带上所有版本 id，
+   * 而不是每个文件回调一次：Reviewer 的触发按次合并，逐个回调只会让它把同一批
+   * 产物分成几次审查，而每次的输入都不完整。
+   *
+   * 回调抛错不影响保存结果——文件已经进库了，让工具因为一个通知失败而报错
+   * 会促使模型重试，于是同一份内容被保存两次。
+   */
+  onSaved?: (input: {
+    ctx: ToolContext;
+    versionIds: readonly string[];
+    /** 血缘不完整的说明，已在输出里给过模型。 */
+    gaps: readonly string[];
+  }) => void;
 }
 
 export function createSaveArtifactsTool(
@@ -112,6 +128,7 @@ export function createSaveArtifactsTool(
     async execute(input, ctx): Promise<ToolResult> {
       const lines: string[] = [];
       const gaps: string[] = [];
+      const savedVersionIds: string[] = [];
       let saved = 0;
 
       for (const rawPath of input.paths) {
@@ -155,6 +172,7 @@ export function createSaveArtifactsTool(
           });
 
           saved += 1;
+          savedVersionIds.push(result.version.id);
           lines.push(
             `${result.artifact.filename}：已保存为 v${String(result.version.versionNo)}，` +
               `版本 id ${result.version.id}${result.deduped ? '（内容与已有 blob 相同，未重复占用空间）' : ''}`,
@@ -172,6 +190,15 @@ export function createSaveArtifactsTool(
       if (gaps.length > 0) {
         // 血缘缺口不是错误，但必须被看到：Reviewer 会据此提出发现
         parts.push('', '血缘不完整（Reviewer 会就此提出发现）：', ...gaps.map((g) => `  · ${g}`));
+      }
+
+      if (savedVersionIds.length > 0 && options.onSaved !== undefined) {
+        try {
+          options.onSaved({ ctx, versionIds: savedVersionIds, gaps });
+        } catch {
+          // 文件已经进库了。让工具因为一个通知失败而报错会促使模型重试，
+          // 于是同一份内容被保存两次
+        }
       }
 
       return {

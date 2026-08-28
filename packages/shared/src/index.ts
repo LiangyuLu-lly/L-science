@@ -198,25 +198,48 @@ export type ToolOutput =
   | { kind: 'rich'; data: MimeBundle }
   | { kind: 'error'; ename: string; evalue: string; traceback: readonly string[] };
 
-export type FindingSeverity = 'WARN' | 'FAIL';
+/**
+ * 发现的严重度（需求 11.5）。
+ *
+ * 设计文档里写作 `WARN` / `FAIL`，这里用小写：它要作为 SQLite 里的列值存储，
+ * 而大小写不同的同义值最终会变成「查出来少了一半」这类问题。
+ */
+export type FindingSeverity = 'warn' | 'fail';
 
 export type FindingCategory =
   'evidence' | 'statistics' | 'reproducibility' | 'consistency' | 'integrity';
 
+/**
+ * 发现的状态（需求 11.7）。
+ *
+ * `claimed-fixed` 是独立状态而不是 `resolved` 的一种：agent 说它修好了不等于修好了，
+ * 关闭权在审查者。少了这个中间态，一次错误的自我判断会永久掩盖问题。
+ */
+export type FindingStatus = 'open' | 'claimed-fixed' | 'resolved' | 'dismissed';
+
+/** 证据指向。必须给出具体 id（需求 11.8）。 */
+export interface FindingEvidence {
+  kind: 'artifact-version' | 'message' | 'claim' | 'plan-step';
+  id: string;
+  /** 为什么这条证据支持该发现。 */
+  note?: string;
+}
+
 export interface Finding {
   id: string;
   conversationId: string;
+  /** 哪次审查提出的。为 null 表示提出它的审查运行已被删除。 */
+  reviewerRunId: string | null;
   severity: FindingSeverity;
   category: FindingCategory;
   title: string;
-  detail: string;
-  evidence: ReadonlyArray<{
-    kind: 'artifact' | 'message' | 'claim';
-    ref: string;
-    excerpt?: string;
-  }>;
-  status: 'open' | 'addressed_pending_review' | 'confirmed_fixed' | 'dismissed';
-  reviewerModelId: string;
+  detail: string | null;
+  evidence: readonly FindingEvidence[];
+  status: FindingStatus;
+  /** agent 自报的修复说明，或审查者的复核依据。 */
+  addressedNote: string | null;
+  addressedAt: number | null;
+  createdAt: number;
 }
 
 export interface ArtifactVersionRef {

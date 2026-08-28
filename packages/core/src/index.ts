@@ -67,6 +67,8 @@ export * from './plan/index.js';
 
 export * from './hostapi/index.js';
 
+export * from './reviewer/index.js';
+
 export { PlanRepo, planStepId } from './repo/plans.js';
 export type { PlanRecord, PlanStepRecord } from './repo/plans.js';
 
