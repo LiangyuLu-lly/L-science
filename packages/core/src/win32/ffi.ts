@@ -17,7 +17,14 @@
  *
  * 非 Windows 平台或 koffi 不可用时，全部能力优雅降级为不可用，由调用方决定
  * 如何如实告知用户，而不是在这里假装成功。
+ *
+ * 降级**必须带原因**。这里曾经是两个 `catch { return null }`，结果一个
+ * 「ESM 里 require 未定义」的 ReferenceError 被静默吞掉，Job Object 与内核真
+ * 中断两项能力长期无声失效，而所有上层报告都只显示「koffi 不可用」这个结论，
+ * 看不出它其实与 koffi 毫无关系。诊断信息比优雅本身重要。
  */
+
+import { createRequire } from 'node:module';
 
 export interface Win32Api {
   createJobObject(): unknown;
@@ -94,18 +101,29 @@ interface Koffi {
 }
 
 let cached: Win32Api | null | undefined;
+/** 上一次加载失败的原因。null 表示加载成功或尚未尝试。 */
+let loadFailure: string | null = null;
 
 function loadApi(): Win32Api | null {
-  if (process.platform !== 'win32') return null;
+  if (process.platform !== 'win32') {
+    loadFailure = `平台为 ${process.platform}，Windows 原生 API 不适用`;
+    return null;
+  }
 
   let koffi: Koffi;
   try {
-    // require 而非静态 import：koffi 不可用时必须能优雅降级，
-    // 静态导入会让整个模块加载失败。
-    const { createRequire } = require('node:module') as typeof import('node:module');
+    /*
+     * 动态 require 而非静态 import：koffi 是原生模块，加载失败时必须能优雅
+     * 降级，而静态 import 会让整个模块图加载失败。
+     *
+     * `createRequire` 本身必须走静态 import。这里原先写的是
+     * `require('node:module')`——在 ESM 里 `require` 这个标识符根本不存在，
+     * 于是抛 ReferenceError 而不是任何与 koffi 有关的错误。
+     */
     const req = createRequire(import.meta.url);
     koffi = req('koffi') as Koffi;
-  } catch {
+  } catch (err) {
+    loadFailure = `加载 koffi 失败：${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`;
     return null;
   }
 
@@ -132,10 +150,12 @@ function loadApi(): Win32Api | null {
       ) as Kernel32Funcs['CreateEventW'],
       SetEvent: k32.func('bool SetEvent(void* h)') as Kernel32Funcs['SetEvent'],
     };
-  } catch {
+  } catch (err) {
+    loadFailure = `绑定 kernel32.dll 失败：${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`;
     return null;
   }
 
+  loadFailure = null;
   const isNull = (ptr: unknown): boolean => koffi.address(ptr) === 0n;
 
   return {
@@ -217,4 +237,22 @@ export function win32(): Win32Api | null {
 
 export function win32Available(): boolean {
   return win32() !== null;
+}
+
+/**
+ * 原生 API 不可用的具体原因；可用时返回 null。
+ *
+ * 单独暴露而不是只给一个布尔值：「不可用」有至少三种成因（非 Windows、koffi
+ * 装不上、kernel32 签名绑定失败），三者的处置办法完全不同，而只报布尔值时
+ * 用户唯一能做的就是猜。
+ */
+export function win32UnavailableReason(): string | null {
+  if (win32() !== null) return null;
+  return loadFailure ?? '原因未知';
+}
+
+/** 仅供测试：清掉缓存，让下一次调用重新尝试加载。 */
+export function resetWin32Cache(): void {
+  cached = undefined;
+  loadFailure = null;
 }

@@ -18,6 +18,8 @@
     "verify:backend": "npm run build && node scripts/verify-backend.mjs",
     "verify:providers": "npm run build && node scripts/verify-providers.mjs",
     "verify:turn": "npm run build && node scripts/verify-turn.mjs",
+    "check:deps": "node scripts/check-deps.mjs",
+    "verify:smoke": "npm run build && node scripts/verify-smoke.mjs",
     "credential": "node scripts/credential.mjs",
     "build": "tsc --build",
     "build:clean": "tsc --build --clean",

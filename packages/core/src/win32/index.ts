@@ -5,9 +5,9 @@
  * 比「知道没有限额」危险得多。
  */
 
-import { win32, win32Available, type Win32Api } from './ffi.js';
+import { win32, win32Available, win32UnavailableReason, type Win32Api } from './ffi.js';
 
-export { win32, win32Available } from './ffi.js';
+export { win32, win32Available, win32UnavailableReason, resetWin32Cache } from './ffi.js';
 export type { Win32Api } from './ffi.js';
 
 /* ------------------------------------------------------------------ *
@@ -174,8 +174,11 @@ export function nativeCapabilities(): NativeCapabilities {
     notes.push('非 Windows 平台：资源限额应改用 cgroups/ulimit，内核中断走 POSIX 信号');
   } else if (!available) {
     notes.push(
-      'koffi FFI 不可用：资源限额退化为轮询检查（存在超限窗口），内核中断退化为重启（丢失内存状态）',
+      '原生 API 不可用：资源限额退化为轮询检查（存在超限窗口），' +
+        '内核中断退化为重启（丢失内存状态）',
     );
+    // 把具体原因带上。只说「不可用」时用户唯一能做的就是猜
+    notes.push(win32UnavailableReason() ?? '原因未知');
   }
 
   return {

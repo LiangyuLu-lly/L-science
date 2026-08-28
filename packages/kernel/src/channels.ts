@@ -36,6 +36,9 @@ interface Pending {
 
 const HEARTBEAT_PAYLOAD = Buffer.from('lsci-ping', 'utf8');
 
+/** 「回复无人等待」的 msg_id 记录上限。见 #noteUnwaited。 */
+const MAX_UNWAITED = 256;
+
 export class Channels {
   readonly #info: ConnectionInfo;
   readonly #session: string;
@@ -48,6 +51,8 @@ export class Channels {
   readonly #hb = new Dealer();
 
   readonly #pending = new Map<string, Pending>();
+  /** 经 sendRequest 发出、回复无人等待的 msg_id。用于区分正常回复与迟到回复。 */
+  readonly #unwaited = new Set<string>();
   readonly #iopubListeners = new Set<(msg: DecodedMessage) => void>();
 
   #opened = false;
@@ -97,6 +102,10 @@ export class Channels {
    * 需要在消息真正出去之前就拿到 msg_id 来建立 iopub 过滤器。若等 `await send()`
    * 之后才知道 id，快内核可能在这个窗口里已经把输出推完，那些消息会被过滤器
    * 当作「不是我的」而永久丢弃。
+   *
+   * 「不等回复」不等于「不会有回复」：`execute_request` 一定会收到
+   * `execute_reply`。因此这里要登记一声「这个回复没人等，是预期的」，否则
+   * 回复泵会把每一次正常执行都报成无主回复。
    */
   sendRequest(
     channel: RequestChannel,
@@ -106,10 +115,26 @@ export class Channels {
     this.#assertOpen();
     const header = createHeader(msgType, this.#session);
     const parts = encodeMessage({ key: this.#info.key, header, content });
+    this.#noteUnwaited(header.msg_id);
     return {
       msgId: header.msg_id,
       sent: this.#socket(channel).send(parts),
     };
+  }
+
+  /**
+   * 记下一个「回复无人等待」的 msg_id。
+   *
+   * 有上限并按插入序淘汰：内核在回复到达前死掉时对应的条目没人来清，不设上限
+   * 就是一条随会话时长线性增长的泄漏。淘汰掉最老的条目最坏后果只是那条回复
+   * 万一迟到会被误报为无主，代价远小于无界增长。
+   */
+  #noteUnwaited(msgId: string): void {
+    if (this.#unwaited.size >= MAX_UNWAITED) {
+      const oldest = this.#unwaited.values().next();
+      if (!(oldest.done ?? false)) this.#unwaited.delete(oldest.value);
+    }
+    this.#unwaited.add(msgId);
   }
 
   /**
@@ -181,6 +206,7 @@ export class Channels {
       pending.reject(new Error('通道已关闭'));
     }
     this.#pending.clear();
+    this.#unwaited.clear();
     this.#iopubListeners.clear();
 
     for (const socket of [this.#shell, this.#control, this.#stdin, this.#iopub, this.#hb]) {
@@ -234,7 +260,13 @@ export class Channels {
 
       const pending = this.#pending.get(parentId);
       if (pending === undefined) {
-        // 超时后迟到的回复。记录下来便于发现超时阈值设得过紧。
+        if (this.#unwaited.delete(parentId)) {
+          // 由 sendRequest 发出的请求，其回复本就无人等待（执行的完成由 iopub
+          // 的 status:idle 判定）。这是正常路径，不是异常
+          continue;
+        }
+        // 到这里才是真的异常：超时后迟到的回复。记录下来便于发现超时阈值
+        // 设得过紧
         this.#onIssue(`${label} 通道收到无主回复 parent=${parentId}（可能已超时）`);
         continue;
       }

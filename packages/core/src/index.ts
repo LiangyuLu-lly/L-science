@@ -84,8 +84,10 @@ export {
   JobObject,
   InterruptEvent,
   nativeCapabilities,
+  resetWin32Cache,
   win32,
   win32Available,
+  win32UnavailableReason,
 } from './win32/index.js';
 export type { JobLimits, NativeCapabilities, Win32Api } from './win32/index.js';
 

@@ -30,7 +30,19 @@ import {
 
 const available = detectKernels();
 const canRun = available.python !== null && win32Available();
-const SLOW = 90_000;
+
+/*
+ * 单个用例的预算。
+ *
+ * 按最坏合法情况算：Python 内核冷启动预算本身是 30s，而「退化为重启」这条路径
+ * 要启一次再重启一次，加上 3s 宽限期就已经占掉 ~65s。留 90s 意味着三次执行只有
+ * 二十来秒余量——冷缓存且多个测试文件并行抢 CPU 时就会超时（实测撞过一次）。
+ *
+ * 放宽预算不会让断言变松：这些用例对速度的要求是用显式的
+ * `expect(elapsed).toBeLessThan(...)` 表达的，那才是「中断没有等满 30 秒」这条
+ * 性质的守卫。用例总时限只负责在真卡死时把测试停下来。
+ */
+const SLOW = 150_000;
 
 let root: string;
 

@@ -12,7 +12,7 @@
 
 import { createRequire } from 'node:module';
 import { existsSync, statfsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 import {
@@ -198,6 +198,33 @@ function probeElevation() {
   return { admin: capture('net', ['session']) !== null };
 }
 
+/**
+ * 原生 API 能力（Job Object 限额、内核真中断）。
+ *
+ * 刻意调用编译产物里真正的 `nativeCapabilities()`，而不是在这里重写一遍探测：
+ * 这两项能力曾因一个「ESM 里 require 未定义」的错误被静默降级，而 doctor 当时
+ * 把 native 后端的说明写成了硬编码字符串，于是自检一路显示正常。真正能发现
+ * 这类问题的只有「问被测代码本人」。
+ */
+async function probeWin32Api() {
+  const entry = resolve(repoRoot, 'packages', 'core', 'dist', 'index.js');
+  if (!existsSync(entry)) {
+    return { available: null, reason: '控制平面尚未构建，先跑 npm run build' };
+  }
+  try {
+    const core = await import(pathToFileURL(entry).href);
+    const caps = core.nativeCapabilities();
+    return {
+      available: caps.ffi,
+      jobObject: caps.jobObject,
+      kernelInterrupt: caps.kernelInterrupt,
+      reason: caps.ffi ? null : (core.win32UnavailableReason() ?? '原因未知'),
+    };
+  } catch (err) {
+    return { available: false, reason: `加载控制平面失败：${err.message}` };
+  }
+}
+
 /* ---------------------------------------------------------------- *
  * 汇总
  * ---------------------------------------------------------------- */
@@ -218,7 +245,9 @@ const report = {
       return `SQLite ${v}`;
     }),
     zeromq: probeNativeModule('zeromq', (z) => (z.version ? `libzmq ${z.version}` : null)),
+    koffi: probeNativeModule('koffi', (k) => (k.version ? `koffi ${k.version}` : null)),
   },
+  win32Api: await probeWin32Api(),
   conda: { exe: conda.exe, base: conda.base, envCount: conda.envs?.length ?? 0 },
   uv: firstLine(capture('uv', ['--version'])),
   managedEnv: managed,
@@ -236,7 +265,12 @@ report.sandbox = {
   native: {
     usable: true,
     isolation: 'weak',
-    note: '用户态：Job Object 限额 + 路径白名单 + 代理出口，可被绕过',
+    // 说明按实测能力生成而不是写死：Job Object 拿不到时限额退化成轮询，
+    // 那与「有硬限额」在用户看来是两件事
+    note:
+      report.win32Api.jobObject === true
+        ? '用户态：Job Object 限额 + 路径白名单 + 代理出口，可被绕过'
+        : '用户态且原生 API 不可用：限额退化为轮询检查、内核中断退化为重启，可被绕过',
   },
   wsl2: {
     usable: report.wsl.usable,
@@ -279,6 +313,14 @@ line(OK, 'Node', `${node.version}  ABI ${node.abi}  ${node.platform}  npm ${node
 for (const [name, res] of Object.entries(report.native)) {
   line(res.available ? OK : NO, name, res.available ? (res.detail ?? '已加载') : res.error);
 }
+
+line(
+  report.win32Api.available === true ? OK : WARN,
+  '原生 API',
+  report.win32Api.available === true
+    ? 'Job Object 硬限额 + 内核真中断（中断后内存状态保留）'
+    : `不可用，限额退化为轮询、中断退化为重启：${report.win32Api.reason}`,
+);
 
 line(
   conda.base !== null ? OK : WARN,
