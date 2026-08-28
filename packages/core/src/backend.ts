@@ -27,6 +27,8 @@ import { ConversationBusyError, Orchestrator } from './orchestrator/index.js';
 import { ApprovalRepo } from './repo/approvals.js';
 import { GrantRepo } from './repo/grants.js';
 import { RegistryRepo, buildRouterView } from './repo/registry.js';
+import { RoutingRepo } from './repo/routing.js';
+import { UsageRepo } from './repo/usage.js';
 import { isolationStrength } from './sandbox/backend.js';
 import { requestHostAccess } from './sandbox/host-access.js';
 import { selectBackend } from './sandbox/index.js';
@@ -182,6 +184,8 @@ function main(): void {
    * 有 `r` 工具而模型那边没有——用户会以为是模型不肯用它。
    */
   const toolRegistries = new Map<string, ToolRegistry>();
+  const usageRepos = new Map<string, UsageRepo>();
+  const routingRepos = new Map<string, RoutingRepo>();
   const vault = new CredentialVault();
   const capabilities = detectCapabilities();
   const adapters = createDefaultRegistry();
@@ -193,6 +197,12 @@ function main(): void {
     const project = openProject(store, projectId);
     const registryRepo = new RegistryRepo(store.db);
     const artifactStore = new ArtifactStore(project.db, project.paths.blobs);
+    // 用量与路由记录都在项目库里：成本要按项目汇总，而决策要与该项目的
+    // 会话关联
+    const usageRepo = new UsageRepo(project.db);
+    const routingRepo = new RoutingRepo(project.db);
+    usageRepos.set(projectId, usageRepo);
+    routingRepos.set(projectId, routingRepo);
 
     const tools = new ToolRegistry({ probe: capabilityProbe(capabilities) });
 
@@ -225,6 +235,11 @@ function main(): void {
       toolCalls: project.toolCalls,
       tools,
       adapters,
+      usage: usageRepo,
+      routing: routingRepo,
+      // 每次路由都重新汇总反馈：缓存它会让刚刚产生的信号在下一次决策时
+      // 不生效，而「用户重试后立刻换个模型」正是反馈闭环最该起作用的时刻
+      experience: () => routingRepo.experience(),
       routerView: () =>
         buildRouterView({
           repo: registryRepo,
@@ -374,6 +389,63 @@ function main(): void {
       pythonEnv: capabilities.pythonEnv,
       rEnv: capabilities.rEnv,
     };
+  });
+
+  /* --- 用量与成本（任务 11.10）--- */
+
+  /** 确保项目的仓储已建好。它们随编排器一起懒加载。 */
+  const usageFor = (projectId: string): UsageRepo => {
+    orchestratorFor(projectId);
+    const repo = usageRepos.get(projectId);
+    if (repo === undefined) throw notFound(`项目不可用：${projectId}`);
+    return repo;
+  };
+
+  const routingFor = (projectId: string): RoutingRepo => {
+    orchestratorFor(projectId);
+    const repo = routingRepos.get(projectId);
+    if (repo === undefined) throw notFound(`项目不可用：${projectId}`);
+    return repo;
+  };
+
+  d.register('usage.summary', async (req) => {
+    const usage = usageFor(req.projectId);
+    const range = {
+      ...(req.from === undefined ? {} : { from: req.from }),
+      ...(req.to === undefined ? {} : { to: req.to }),
+    };
+
+    return {
+      scope: req.conversationId === undefined ? 'project' : 'conversation',
+      summary:
+        req.conversationId === undefined
+          ? usage.byProject(range)
+          : usage.byConversation(req.conversationId, range),
+    };
+  });
+
+  d.register('usage.breakdown', async (req) => {
+    const usage = usageFor(req.projectId);
+    const range = {
+      ...(req.from === undefined ? {} : { from: req.from }),
+      ...(req.to === undefined ? {} : { to: req.to }),
+    };
+
+    return {
+      byModel: usage.byModel(range),
+      failures: usage.failures(range),
+      daily: usage.daily(range),
+      recent: usage.recent(30),
+    };
+  });
+
+  d.register('routing.history', async (req) => ({
+    decisions: routingFor(req.projectId).byConversation(req.conversationId, req.limit),
+  }));
+
+  d.register('routing.feedback', async (req) => {
+    routingFor(req.projectId).addSignal(req.routingDecisionId, req.signal, req.source);
+    return { recorded: true };
   });
 
   d.register('conversation.interrupt', async (req) => {

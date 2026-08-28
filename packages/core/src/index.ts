@@ -47,6 +47,20 @@ export * from './router/index.js';
 export { RegistryRepo, RegistrySync, buildRouterView, HEALTH_TTL_MS } from './repo/registry.js';
 export type { ProviderRecord, ModelRecord, ModelHealth, SyncResult } from './repo/registry.js';
 
+export { UsageRepo, classifyFailure, redactError } from './repo/usage.js';
+export type {
+  CallStatus,
+  FailureBreakdown,
+  ModelUsageSummary,
+  TimeRange,
+  UsageRecord,
+  UsageRow,
+  UsageSummary,
+} from './repo/usage.js';
+
+export { RoutingRepo, SIGNAL_WEIGHT } from './repo/routing.js';
+export type { FeedbackRecord, FeedbackSignal, FeedbackSource } from './repo/routing.js';
+
 export * from './approval/index.js';
 export { ApprovalRepo } from './repo/approvals.js';
 export type { ApprovalRow, ApprovalState } from './repo/approvals.js';

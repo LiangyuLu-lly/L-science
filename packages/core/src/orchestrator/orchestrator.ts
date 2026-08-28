@@ -21,6 +21,8 @@ import type { AdapterContext, AdapterRegistry, ChatMessage, ChatChunk } from '@l
 
 import type { ConversationRepo, MessageRepo, ToolCallRepo } from '../repo/conversations.js';
 import type { ConversationStatus } from '../repo/conversations.js';
+import type { RoutingRepo } from '../repo/routing.js';
+import { classifyFailure, type UsageRepo } from '../repo/usage.js';
 import { buildTaskProfile, route, type ModelRuntimeState } from '../router/index.js';
 import type { ExperienceAdjustment } from '../router/index.js';
 import { ToolInputError, ToolRegistry, ToolUnavailableError } from '../tools/index.js';
@@ -44,6 +46,13 @@ export interface OrchestratorDeps {
   toolCalls: ToolCallRepo;
   tools: ToolRegistry;
   adapters: AdapterRegistry;
+  /**
+   * 用量记录（需求 18.1）。可选是为了让单元测试不必都建一个库，
+   * 但生产路径必须提供——不提供意味着成本无从核算。
+   */
+  usage?: UsageRepo;
+  /** 路由决策落库（需求 7.6、18.3）。 */
+  routing?: RoutingRepo;
   /** 取当前可用模型与运行时状态。通常接 buildRouterView。 */
   routerView: () => {
     models: readonly ModelDescriptor[];
@@ -384,6 +393,13 @@ export class Orchestrator {
 
     const decisionEvent: TurnEvent = { kind: 'routing.decision', decision: routed.decision };
 
+    // 决策先落库再执行。反过来的话，模型调用崩溃时决策记录就没了，
+    // 而那恰恰是最需要事后追溯的情况
+    this.#deps.routing?.record(routed.decision, {
+      conversationId: input.conversationId,
+      messageId: input.userMessageId,
+    });
+
     if (routed.decision.chosenModelId === null) {
       return {
         kind: 'no-model',
@@ -423,6 +439,10 @@ export class Orchestrator {
         continue;
       }
 
+      // 延迟要实测而不是取模型描述里的先验值：先验用于路由打分，
+      // 而用量记录的价值恰恰在于反映真实表现
+      const startedAt = Date.now();
+
       try {
         const collected = await this.#streamModel({
           adapter,
@@ -431,6 +451,17 @@ export class Orchestrator {
           history: input.history,
           toolSchemas,
           signal: input.signal,
+        });
+
+        this.#deps.usage?.record({
+          conversationId: input.conversationId,
+          providerId: model.providerId,
+          modelId: model.id,
+          tokensIn: collected.usage.tokensIn,
+          tokensOut: collected.usage.tokensOut,
+          cost: collected.usage.cost,
+          latencyMs: Date.now() - startedAt,
+          status: collected.stopReason === 'content_filter' ? 'content-filtered' : 'ok',
         });
 
         // 落库：助手消息带上用了哪个模型，用量核算与事后追溯都要它
@@ -475,8 +506,38 @@ export class Orchestrator {
           retryable?: boolean;
           isContentFilter?: boolean;
           message?: string;
+          status?: number;
         };
         lastError = providerError.message ?? String(err);
+
+        /*
+         * 失败也记一条（需求 18.3）。只记成功的调用会让降级链分析无从下手：
+         * 「为什么这个供应商老是被降级掉」需要失败次数与失败类别，而那些数据
+         * 在只记成功的表里根本不存在。
+         *
+         * token 与成本记 0：请求失败时供应商通常不计费，而记一个猜测值会让成本
+         * 汇总失准——宁可少算也不要凭空加。
+         */
+        this.#deps.usage?.record({
+          conversationId: input.conversationId,
+          providerId: model.providerId,
+          modelId: model.id,
+          tokensIn: 0,
+          tokensOut: 0,
+          cost: 0,
+          latencyMs: Date.now() - startedAt,
+          status: classifyFailure({
+            ...(providerError.status === undefined ? {} : { status: providerError.status }),
+            ...(providerError.isContentFilter === undefined
+              ? {}
+              : { isContentFilter: providerError.isContentFilter }),
+            aborted: input.signal.aborted,
+            message: lastError,
+          }),
+          // 原文传进去，UsageRepo 在写入前脱敏——读取时脱敏意味着敏感内容
+          // 已经落盘，而落盘的东西会被备份、导出、贴进 issue
+          error: lastError,
+        });
 
         // 内容安全拒答绝不换模型绕过（需求 7.8）
         if (providerError.isContentFilter === true) {

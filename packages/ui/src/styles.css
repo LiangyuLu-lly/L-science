@@ -1474,3 +1474,242 @@ code {
   padding: 0;
   white-space: pre-wrap;
 }
+
+/* 用量与成本 ------------------------------------------------------- */
+
+.turn-usage {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+
+.turn-usage__label {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.turn-usage__cost,
+.usage__cost {
+  color: #7ee2a8;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  margin-left: auto;
+}
+
+.usage__cost {
+  margin-left: 0;
+}
+
+/* 失败次数与总数并列。只给总数会让「大部分调用都失败了」被藏起来 */
+.usage__failed {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #ffb4a2;
+}
+
+.usage__hint {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.usage__provider {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.usage-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+
+.usage-table caption {
+  text-align: left;
+  color: var(--fg-dim);
+  font-size: 11px;
+  padding-bottom: 6px;
+}
+
+.usage-table th,
+.usage-table td {
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  text-align: left;
+}
+
+.usage-table thead th {
+  background: var(--bg);
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.usage-table tbody th {
+  font-weight: 400;
+}
+
+.usage-table code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+}
+
+/* 失败分布 */
+.failures {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.failures__item {
+  border-left: 2px solid #5f382f;
+  padding-left: 10px;
+}
+
+.failures__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.failures__status {
+  font-weight: 600;
+  color: #ffb4a2;
+}
+
+.failures__count {
+  color: var(--fg);
+}
+
+.failures__time {
+  color: var(--fg-dim);
+  font-size: 11px;
+  margin-left: auto;
+}
+
+/* 运维动作提示。只报分类不给动作，用户不知道该做什么 */
+.failures__action {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #e2d27e;
+}
+
+.failures__detail {
+  margin-top: 6px;
+}
+
+.failures__detail summary {
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+
+.failures__detail pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 240px;
+}
+
+/* 最近调用 */
+.usage-recent {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+}
+
+.usage-recent__item {
+  display: grid;
+  grid-template-columns: 70px 1fr 90px 90px 90px 70px;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: baseline;
+}
+
+.usage-recent__item--bad .usage-recent__status {
+  color: #ffb4a2;
+}
+
+.usage-recent__item--ok .usage-recent__status {
+  color: #7ee2a8;
+}
+
+.usage-recent__time,
+.usage-recent__latency {
+  color: var(--fg-dim);
+}
+
+.usage-recent__model {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 每日趋势。条形图只是辅助，数值同时以文字给出 */
+.daily {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+}
+
+.daily__row {
+  display: grid;
+  grid-template-columns: 90px 1fr 90px 60px;
+  gap: 10px;
+  align-items: center;
+  padding: 3px 0;
+}
+
+.daily__date {
+  color: var(--fg-dim);
+  font-family: 'Cascadia Code', Consolas, monospace;
+}
+
+.daily__bar-wrap {
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+  block-size: 10px;
+}
+
+.daily__bar {
+  display: block;
+  block-size: 100%;
+  background: linear-gradient(90deg, #2f5f45, #7ee2a8);
+}
+
+.daily__value {
+  color: #7ee2a8;
+  font-family: 'Cascadia Code', Consolas, monospace;
+}
+
+.daily__calls {
+  color: var(--fg-dim);
+  text-align: right;
+}

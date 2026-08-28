@@ -218,6 +218,59 @@ export const requestSchema = z.discriminatedUnion('method', [
 
   /** 可用与不可用的工具清单。不可用的要带上安装指引（需求 9.6）。 */
   z.object({ method: z.literal('tool.list'), projectId: idSchema }),
+
+  /* --- 用量与成本（任务 11.10，需求 18）--- */
+
+  /**
+   * 用量汇总。
+   *
+   * `conversationId` 省略时返回整个项目的汇总。时间区间用毫秒时间戳，
+   * 两端都可省略。
+   */
+  z.object({
+    method: z.literal('usage.summary'),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+    from: z.number().int().nonnegative().optional(),
+    to: z.number().int().nonnegative().optional(),
+  }),
+
+  /** 按模型分组的用量、失败分布与按天趋势。诊断面板用。 */
+  z.object({
+    method: z.literal('usage.breakdown'),
+    projectId: idSchema,
+    from: z.number().int().nonnegative().optional(),
+    to: z.number().int().nonnegative().optional(),
+  }),
+
+  /** 某个会话的路由决策历史（需求 7.6 的事后可解释）。 */
+  z.object({
+    method: z.literal('routing.history'),
+    projectId: idSchema,
+    conversationId: idSchema,
+    limit: z.number().int().min(1).max(200).default(50),
+  }),
+
+  /**
+   * 记录一条反馈信号（需求 7.11）。
+   *
+   * 由 UI 在用户点「重试」「接受」等动作时发起。信号必须挂在具体决策上——
+   * 「用户重试了」本身不说明什么，「用户重试了那次选中 X 的决策」才是训练信号。
+   */
+  z.object({
+    method: z.literal('routing.feedback'),
+    projectId: idSchema,
+    routingDecisionId: idSchema,
+    signal: z.enum([
+      'accepted',
+      'retried',
+      'edited',
+      'reviewer-finding',
+      'tool-failure',
+      'user-override',
+    ]),
+    source: z.enum(['user', 'reviewer', 'system']),
+  }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

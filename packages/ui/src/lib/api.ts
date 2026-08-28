@@ -297,3 +297,107 @@ export function isTurnEvent(payload: unknown): payload is TurnEvent {
     typeof (payload as { kind?: unknown }).kind === 'string'
   );
 }
+
+/* ------------------------------------------------------------------ *
+ * 用量与成本（需求 18）
+ * ------------------------------------------------------------------ */
+
+export type CallStatus =
+  | 'ok'
+  | 'rate-limited'
+  | 'server-error'
+  | 'timeout'
+  | 'aborted'
+  | 'auth-failed'
+  | 'content-filtered'
+  | 'bad-request'
+  | 'network-error'
+  | 'unknown-error';
+
+export interface UsageSummary {
+  calls: number;
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+  succeeded: number;
+  medianLatencyMs: number;
+}
+
+export interface ModelUsageSummary extends UsageSummary {
+  providerId: string;
+  modelId: string;
+}
+
+export interface FailureBreakdown {
+  status: CallStatus;
+  count: number;
+  lastError: string | null;
+  lastAt: number;
+}
+
+export interface UsageRow {
+  id: number;
+  ts: number;
+  conversationId: string | null;
+  providerId: string;
+  modelId: string;
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+  latencyMs: number;
+  status: CallStatus;
+  error: string | null;
+}
+
+export type FeedbackSignal =
+  'accepted' | 'retried' | 'edited' | 'reviewer-finding' | 'tool-failure' | 'user-override';
+
+export const loadUsageSummary = (
+  projectId: string,
+  options: { conversationId?: string; from?: number; to?: number } = {},
+) =>
+  invoke<{ scope: 'project' | 'conversation'; summary: UsageSummary }>({
+    method: 'usage.summary',
+    projectId,
+    ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
+    ...(options.from === undefined ? {} : { from: options.from }),
+    ...(options.to === undefined ? {} : { to: options.to }),
+  });
+
+export const loadUsageBreakdown = (
+  projectId: string,
+  options: { from?: number; to?: number } = {},
+) =>
+  invoke<{
+    byModel: ModelUsageSummary[];
+    failures: FailureBreakdown[];
+    daily: Array<{ date: string; calls: number; cost: number }>;
+    recent: UsageRow[];
+  }>({
+    method: 'usage.breakdown',
+    projectId,
+    ...(options.from === undefined ? {} : { from: options.from }),
+    ...(options.to === undefined ? {} : { to: options.to }),
+  });
+
+export const loadRoutingHistory = (projectId: string, conversationId: string, limit = 50) =>
+  invoke<{ decisions: RoutingDecision[] }>({
+    method: 'routing.history',
+    projectId,
+    conversationId,
+    limit,
+  });
+
+export const sendFeedback = (
+  projectId: string,
+  routingDecisionId: string,
+  signal: FeedbackSignal,
+  source: 'user' | 'reviewer' | 'system' = 'user',
+) =>
+  invoke<{ recorded: true }>({
+    method: 'routing.feedback',
+    projectId,
+    routingDecisionId,
+    signal,
+    source,
+  });

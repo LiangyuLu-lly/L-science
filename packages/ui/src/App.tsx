@@ -13,6 +13,7 @@ import { ArtifactsView } from './components/ArtifactsView.js';
 import { ChatView } from './components/ChatView.js';
 import { IsolationBadge } from './components/IsolationBadge.js';
 import { ToolsPanel } from './components/ToolsPanel.js';
+import { TurnUsageBar, UsagePanel } from './components/UsagePanel.js';
 import {
   answerQuestion,
   createConversation,
@@ -27,11 +28,12 @@ import { hasBackend } from './lib/backend.js';
 import { useBackend } from './lib/useBackend.js';
 import { useTurn } from './lib/useTurn.js';
 
-type ViewId = 'chat' | 'artifacts' | 'tools' | 'settings';
+type ViewId = 'chat' | 'artifacts' | 'usage' | 'tools' | 'settings';
 
 const VIEWS: ReadonlyArray<{ id: ViewId; label: string; ready: boolean }> = [
   { id: 'chat', label: '会话', ready: true },
   { id: 'artifacts', label: 'Artifacts', ready: true },
+  { id: 'usage', label: '用量与成本', ready: true },
   { id: 'tools', label: '工具与环境', ready: true },
   { id: 'settings', label: '设置', ready: false },
 ];
@@ -435,6 +437,8 @@ export function App(): React.JSX.Element {
                 decisions={turn.decisions}
                 running={turn.running}
               />
+              {/* 本轮累计用量常驻在输入区上方（需求 18.4） */}
+              <TurnUsageBar usage={turn.lastUsage} />
               <Composer
                 disabled={composerBlockedReason !== null}
                 disabledReason={composerBlockedReason}
@@ -446,6 +450,8 @@ export function App(): React.JSX.Element {
           )}
 
           {view === 'artifacts' && <ArtifactsView projectId={projectId} />}
+
+          {view === 'usage' && <UsagePanel projectId={projectId} conversationId={conversationId} />}
 
           {view === 'tools' && (
             <>
