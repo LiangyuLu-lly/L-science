@@ -27,6 +27,8 @@ export interface Conversation {
   createdAt: number;
   updatedAt: number;
   archivedAt: number | null;
+  /** 父会话 id。非 null 表示这是一个子 agent 的会话（需求 10.5）。 */
+  parentConversationId: string | null;
 }
 
 interface ConversationRow {
@@ -37,6 +39,7 @@ interface ConversationRow {
   created_at: number;
   updated_at: number;
   archived_at: number | null;
+  parent_conversation_id: string | null;
 }
 
 function toConversation(row: ConversationRow): Conversation {
@@ -48,6 +51,7 @@ function toConversation(row: ConversationRow): Conversation {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
+    parentConversationId: row.parent_conversation_id,
   };
 }
 
@@ -58,15 +62,31 @@ export class ConversationRepo {
     this.#db = db;
   }
 
-  create(input: { title?: string; agentId?: string; id?: string } = {}): Conversation {
+  create(
+    input: {
+      title?: string;
+      agentId?: string;
+      id?: string;
+      /** 父会话 id。给了它就是一个子 agent 会话，默认不出现在会话列表里。 */
+      parentConversationId?: string;
+    } = {},
+  ): Conversation {
     const now = Date.now();
     const id = input.id ?? randomUUID();
     this.#db
       .prepare(
-        `INSERT INTO conversations (id, title, agent_id, status, created_at, updated_at)
-         VALUES (?, ?, ?, 'idle', ?, ?)`,
+        `INSERT INTO conversations
+           (id, title, agent_id, status, created_at, updated_at, parent_conversation_id)
+         VALUES (?, ?, ?, 'idle', ?, ?, ?)`,
       )
-      .run(id, input.title ?? null, input.agentId ?? null, now, now);
+      .run(
+        id,
+        input.title ?? null,
+        input.agentId ?? null,
+        now,
+        now,
+        input.parentConversationId ?? null,
+      );
 
     const created = this.get(id);
     if (created === null) throw new Error('会话创建后立即读取失败');
@@ -79,13 +99,38 @@ export class ConversationRepo {
     return row === undefined ? null : toConversation(row);
   }
 
-  list(opts: { includeArchived?: boolean; limit?: number } = {}): Conversation[] {
+  /**
+   * 列出会话。
+   *
+   * **默认排除子 agent 会话**：五个并行子任务各自一个会话，混进侧栏之后用户找不到
+   * 自己的主线对话。要看子任务用 `children()`，它们按父会话分组。
+   */
+  list(
+    opts: { includeArchived?: boolean; includeChildren?: boolean; limit?: number } = {},
+  ): Conversation[] {
     const limit = opts.limit ?? 200;
-    const sql =
-      opts.includeArchived === true
-        ? 'SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?'
-        : 'SELECT * FROM conversations WHERE archived_at IS NULL ORDER BY updated_at DESC LIMIT ?';
-    return (this.#db.prepare(sql).all(limit) as ConversationRow[]).map(toConversation);
+    const clauses: string[] = [];
+    if (opts.includeArchived !== true) clauses.push('archived_at IS NULL');
+    if (opts.includeChildren !== true) clauses.push('parent_conversation_id IS NULL');
+
+    const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
+    return (
+      this.#db
+        .prepare(`SELECT * FROM conversations${where} ORDER BY updated_at DESC LIMIT ?`)
+        .all(limit) as ConversationRow[]
+    ).map(toConversation);
+  }
+
+  /** 某个会话的子 agent 会话，最早在前（与委派发起顺序一致）。 */
+  children(parentConversationId: string): Conversation[] {
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM conversations WHERE parent_conversation_id = ?
+           ORDER BY created_at, rowid`,
+        )
+        .all(parentConversationId) as ConversationRow[]
+    ).map(toConversation);
   }
 
   setStatus(id: string, status: ConversationStatus): void {

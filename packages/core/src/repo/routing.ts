@@ -133,11 +133,18 @@ export class RoutingRepo {
     };
   }
 
-  /** 某个会话的决策历史，最新在前。 */
+  /**
+   * 某个会话的决策历史，最新在前。
+   *
+   * 次级排序用 `rowid`：`created_at` 只到毫秒，而降级重试与被降级的原决策经常落在
+   * 同一毫秒里。此时 `id` 的后缀是随机的，排序结果任意——界面上「最新在前」会把
+   * 原决策显示在重试之后。rowid 就是插入顺序。
+   */
   byConversation(conversationId: string, limit = 50): readonly RoutingDecision[] {
     const rows = this.#db
       .prepare(
-        'SELECT id FROM routing_decisions WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?',
+        `SELECT id FROM routing_decisions WHERE conversation_id = ?
+         ORDER BY created_at DESC, rowid DESC LIMIT ?`,
       )
       .all(conversationId, Math.max(1, Math.min(limit, 500))) as Array<{ id: string }>;
 

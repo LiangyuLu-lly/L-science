@@ -168,6 +168,18 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('project.archive'), projectId: idSchema }),
 
   z.object({ method: z.literal('conversation.list'), projectId: idSchema }),
+
+  /**
+   * 某个会话派出的子 agent 会话（需求 10.5）。
+   *
+   * 子会话默认不出现在会话列表里——五个并行子任务混进侧栏之后用户找不到主线对话。
+   * 要看它们做了什么走这条。
+   */
+  z.object({
+    method: z.literal('conversation.children'),
+    projectId: idSchema,
+    conversationId: idSchema,
+  }),
   z.object({
     method: z.literal('conversation.create'),
     projectId: idSchema,
@@ -460,6 +472,46 @@ export const requestSchema = z.discriminatedUnion('method', [
     projectId: idSchema,
     conversationId: idSchema,
     limit: z.number().int().min(1).max(500).default(200),
+  }),
+
+  /* --- 计划（任务 12.5，需求 10.1、10.4）--- */
+
+  /** 某个会话的计划及各步实时状态。 */
+  z.object({
+    method: z.literal('plan.list'),
+    projectId: idSchema,
+    conversationId: idSchema,
+    limit: z.number().int().min(1).max(50).default(20),
+  }),
+
+  z.object({ method: z.literal('plan.get'), projectId: idSchema, planId: idSchema }),
+
+  /**
+   * 批准或拒绝计划（需求 10.4）。
+   *
+   * **批准是用户动作，模型不能自己批准自己的计划**——否则「可审阅」只是个说法。
+   * 因此它是一个 IPC 方法而不是工具。
+   */
+  z.object({
+    method: z.literal('plan.decide'),
+    projectId: idSchema,
+    planId: idSchema,
+    decision: z.enum(['approve', 'reject']),
+    /** 拒绝时给出理由，会作为下一轮生成的输入。 */
+    note: z.string().max(2000).optional(),
+  }),
+
+  /**
+   * 执行前修改计划（需求 10.4）。
+   *
+   * 只在草稿状态下可用。载荷是完整的计划本体——局部补丁在「删掉一个被依赖的步骤」
+   * 这类改动上无法表达，而那正是用户最想做的修改之一。
+   */
+  z.object({
+    method: z.literal('plan.replace'),
+    projectId: idSchema,
+    planId: idSchema,
+    spec: z.unknown(),
   }),
 ]);
 

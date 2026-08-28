@@ -24,7 +24,7 @@ import type {
   TurnEvent,
   Usage,
 } from '@l-science/shared';
-import type { AdapterContext, AdapterRegistry, ChatMessage, ChatChunk } from '@l-science/adapters';
+import type { AdapterContext, AdapterRegistry, ChatMessage } from '@l-science/adapters';
 
 import type { ConversationRepo, MessageRepo, ToolCallRepo } from '../repo/conversations.js';
 import type { ConversationStatus } from '../repo/conversations.js';
@@ -32,8 +32,9 @@ import type { RoutingRepo } from '../repo/routing.js';
 import { classifyFailure, type UsageRepo } from '../repo/usage.js';
 import { buildTaskProfile, route, type ModelRuntimeState } from '../router/index.js';
 import type { ExperienceAdjustment } from '../router/index.js';
-import { ToolInputError, ToolRegistry, ToolUnavailableError } from '../tools/index.js';
-import type { ToolContext } from '../tools/index.js';
+import { ToolRegistry } from '../tools/index.js';
+import { executeToolCall, streamModel } from './agent-runtime.js';
+import type { SubAgentRunner } from './subagent.js';
 import {
   ConversationBusyError,
   IllegalTransitionError,
@@ -43,9 +44,6 @@ import {
 
 /** 默认回合上限。见文件头对「必须存在」的说明。 */
 const DEFAULT_MAX_TURNS = 24;
-
-/** 单个工具输出回灌给模型时的字符上限。 */
-const MAX_TOOL_OUTPUT_CHARS = 40_000;
 
 export interface OrchestratorDeps {
   conversations: ConversationRepo;
@@ -74,6 +72,15 @@ export interface OrchestratorDeps {
   /** 系统提示词。 */
   systemPrompt?: (conversationId: string) => string;
   maxTurns?: number;
+  /**
+   * 项目 id，透传进 ToolContext。
+   *
+   * 此前这里恒为空串——没有工具用到它，所以没人发现。留着空串是个定时炸弹：
+   * 第一个真的按项目分流的工具会拿到空串然后去找一个不存在的项目。
+   */
+  projectId?: string;
+  /** 子 agent 委派（需求 10.5-10.7）。缺省时 delegate 工具不注册。 */
+  subAgents?: SubAgentRunner;
 }
 
 interface ActiveTurn {
@@ -165,8 +172,18 @@ export class Orchestrator {
    * 必然非法（idle → idle 虽然允许，但如果第一次设成了别的就会抛错）。
    */
   async interrupt(conversationId: string): Promise<boolean> {
+    /*
+     * 阻塞式子 agent 随中断一起取消，非阻塞的不动（需求 10.7）。
+     *
+     * 这一步放在活跃回合检查**之前**：非阻塞子 agent 可能在主回合已经结束之后
+     * 仍在跑，此时 `#active` 里没有条目，但用户点停止的意图显然包含「把还在等的
+     * 那些停掉」。而非阻塞的刻意留着——它们是用户显式转后台的，一次中断不该把
+     * 两小时的作业杀掉，这与「会话中断不取消后台任务」是同一条取舍。
+     */
+    const cancelled = this.#deps.subAgents?.cancelBlocking(conversationId, '用户中断了会话') ?? 0;
+
     const active = this.#active.get(conversationId);
-    if (active === undefined) return false;
+    if (active === undefined) return cancelled > 0;
     active.controller.abort();
     return true;
   }
@@ -629,62 +646,8 @@ export class Orchestrator {
     stopReason: string;
     events: readonly TurnEvent[];
   }> {
-    const events: TurnEvent[] = [];
-    const toolCalls: Array<{ id: string; name: string; argumentsJson: string }> = [];
-    let text = '';
-    let thinking = '';
-    let usage: Usage = { tokensIn: 0, tokensOut: 0, cost: 0, currency: 'USD' };
-    let stopReason = 'end_turn';
-
-    // 输出上限要为思维模式留余量。thinking 模型先消耗配额做思考再产出答案，
-    // 给太小会得到一堆思考而正文为空
-    const maxOutputTokens = Math.min(
-      model_maxOutput(input.model),
-      input.model.features.thinking ? 8192 : 4096,
-    );
-
-    const stream = input.adapter.chat(input.ctx, {
-      modelName: input.model.id,
-      messages: input.history,
-      ...(input.toolSchemas.length > 0
-        ? {
-            tools: input.toolSchemas.map((t) => ({
-              name: t.name,
-              description: t.description,
-              parameters: t.parameters,
-            })),
-          }
-        : {}),
-      maxOutputTokens,
-      stream: true,
-      signal: input.signal,
-    });
-
-    for await (const chunk of stream as AsyncIterable<ChatChunk>) {
-      switch (chunk.kind) {
-        case 'text': {
-          text += chunk.text;
-          events.push({ kind: 'text.delta', text: chunk.text });
-          break;
-        }
-        case 'thinking': {
-          thinking += chunk.text;
-          events.push({ kind: 'thinking.delta', text: chunk.text });
-          break;
-        }
-        case 'tool_call': {
-          toolCalls.push({ id: chunk.id, name: chunk.name, argumentsJson: chunk.argumentsJson });
-          break;
-        }
-        case 'done': {
-          usage = chunk.usage;
-          stopReason = chunk.stopReason;
-          break;
-        }
-      }
-    }
-
-    return { text, thinking, toolCalls, usage, stopReason, events };
+    // 实现在 agent-runtime.ts，与子 agent 共用
+    return streamModel(input);
   }
 
   /* ---------------- 工具执行 ---------------- */
@@ -695,65 +658,19 @@ export class Orchestrator {
     call: { id: string; name: string; argumentsJson: string };
     signal: AbortSignal;
   }): Promise<{ output: ToolOutput; forModel: string }> {
-    const record = this.#deps.toolCalls.start({
+    // 实现在 agent-runtime.ts，与子 agent 共用
+    return executeToolCall({
+      tools: this.#deps.tools,
+      toolCalls: this.#deps.toolCalls,
       messageId: input.messageId,
-      toolName: input.call.name,
-      input: input.call.argumentsJson,
+      call: input.call,
+      ctx: {
+        projectId: this.#deps.projectId ?? '',
+        conversationId: input.conversationId,
+        workspaceDir: this.#deps.workspaceDir(input.conversationId),
+        signal: input.signal,
+      },
     });
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(input.call.argumentsJson);
-    } catch {
-      // 参数不是合法 JSON 说明适配器的分片累积出了问题，或模型产出了畸形参数。
-      // 这个错误要如实回灌，让模型知道是它的参数格式问题而不是工具坏了
-      const message =
-        `工具参数不是合法的 JSON：${input.call.argumentsJson.slice(0, 200)}。` +
-        '请重新生成完整、合法的 JSON 参数。';
-      this.#deps.toolCalls.finish(record.id, { status: 'error', output: message });
-      return {
-        output: { kind: 'error', ename: 'InvalidToolArguments', evalue: message, traceback: [] },
-        forModel: message,
-      };
-    }
-
-    const ctx: ToolContext = {
-      projectId: '',
-      conversationId: input.conversationId,
-      workspaceDir: this.#deps.workspaceDir(input.conversationId),
-      signal: input.signal,
-    };
-
-    try {
-      const result = await this.#deps.tools.invoke(input.call.name, parsed, ctx);
-      this.#deps.toolCalls.finish(record.id, {
-        status: result.ok ? 'ok' : 'error',
-        output: result.output,
-      });
-      return { output: result.output, forModel: toolOutputForModel(result.output) };
-    } catch (err) {
-      // 三类错误分别给不同的回灌文本：模型需要知道该改参数、该换工具，
-      // 还是该报告环境问题
-      let message: string;
-      let ename: string;
-
-      if (err instanceof ToolInputError) {
-        ename = 'InvalidToolArguments';
-        message = `${err.message}\n请按工具的 JSON Schema 修正参数后重试。`;
-      } else if (err instanceof ToolUnavailableError) {
-        ename = 'ToolUnavailable';
-        message = `${err.message}\n这个工具在当前环境不可用，请改用其他方式，或告知用户需要先配置环境。`;
-      } else {
-        ename = 'ToolExecutionFailed';
-        message = err instanceof Error ? err.message : String(err);
-      }
-
-      this.#deps.toolCalls.finish(record.id, { status: 'error', output: message });
-      return {
-        output: { kind: 'error', ename, evalue: message, traceback: [] },
-        forModel: message,
-      };
-    }
   }
 
   /** 把回合摘要落库。撞上限或出错时的说明必须留下来。 */
@@ -785,46 +702,12 @@ export class Orchestrator {
  * 辅助
  * ------------------------------------------------------------------ */
 
-function model_maxOutput(model: ModelDescriptor): number {
-  return model.maxOutputTokens;
-}
-
-/**
- * 把工具输出转成回灌给模型的文本。
- *
- * 富输出降级为描述而不是原始数据：几百 KB 的 base64 图像会挤掉上下文，
- * 而模型读不出图里画了什么。
+/*
+ * `toolOutputForModel` 与 `truncateForModel` 已移到 agent-runtime.ts，
+ * 与子 agent 共用一份实现——两份的行为分歧会让子 agent 在某些失败上的表现与
+ * 主 agent 不同，而那种差异极难被注意到，因为两边都「能跑」。
  */
-export function toolOutputForModel(output: ToolOutput): string {
-  switch (output.kind) {
-    case 'text':
-      return truncateForModel(output.text);
-    case 'error':
-      return truncateForModel(
-        [
-          `${output.ename}: ${output.evalue}`,
-          ...(output.traceback.length > 0 ? ['', ...output.traceback] : []),
-        ].join('\n'),
-      );
-    case 'rich': {
-      const plain = output.data['text/plain'];
-      if (typeof plain === 'string') return truncateForModel(plain);
-      const keys = Object.keys(output.data);
-      return `[富输出：${keys.join('、')}]`;
-    }
-  }
-}
-
-function truncateForModel(text: string): string {
-  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
-  const head = Math.floor(MAX_TOOL_OUTPUT_CHARS * 0.4);
-  const tail = MAX_TOOL_OUTPUT_CHARS - head;
-  return [
-    text.slice(0, head),
-    `\n\n[... 省略 ${String(text.length - MAX_TOOL_OUTPUT_CHARS)} 字符 ...]\n\n`,
-    text.slice(text.length - tail),
-  ].join('');
-}
+export { toolOutputForModel, truncateForModel } from './agent-runtime.js';
 
 /**
  * 从对话历史粗略推断任务类型。

@@ -259,3 +259,63 @@ describe('无中断事件时的降级', () => {
     SLOW,
   );
 });
+
+describe.skipIf(available.python === null)('重启的自递归防护', () => {
+  /*
+   * 这条曾经是个真死锁：重启 → #spawn → #runInit 的初始化代码超时 → interrupt()
+   * → 中断不生效 → restart()。此时 `#restarting` 非空，「复用在途重启」把那个
+   * **正在等自己的** promise 返回给了自己，await 它就永久挂死。
+   *
+   * 症状是用户点重启内核之后再也没有回来，且没有任何错误——测试里表现为随机
+   * 某个内核用例卡到超时（同一文件里不同的用例，看哪次重启走了慢路径）。
+   */
+  let kernel: JupyterKernel;
+
+  beforeAll(async () => {
+    kernel = await JupyterKernel.start({
+      spec: pythonLaunchSpec(available.python!),
+      runtimeDir: join(root, 'reentrant-rt'),
+      cwd: join(root, 'reentrant-ws'),
+    });
+  }, SLOW);
+
+  afterAll(async () => {
+    await kernel.shutdown();
+  }, SLOW);
+
+  it(
+    '重启过程中再次请求重启会快速失败而不是挂死',
+    async () => {
+      // 不 await：让第一次重启处在执行体内
+      const first = kernel.restart();
+
+      // 紧接着在同一微任务批次里再要求一次。它必须立刻决出胜负，不能挂住
+      const second = kernel.restart();
+      const outcome = await Promise.race([
+        second.then(() => 'resolved' as const).catch(() => 'rejected' as const),
+        new Promise<'hung'>((r) => setTimeout(() => r('hung'), 5000)),
+      ]);
+
+      // resolved（复用在途重启）与 rejected（拒绝自递归）都可接受，hung 不可
+      expect(outcome).not.toBe('hung');
+
+      await first;
+      // 重启之后内核仍然可用——防护不能把正常重启一起挡掉
+      expect(stdoutOf(await kernel.executeToCompletion('print("alive-after-restart")'))).toBe(
+        'alive-after-restart',
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    '连续重启多次都能正常收敛',
+    async () => {
+      for (let i = 0; i < 3; i += 1) {
+        await kernel.restart();
+        expect(stdoutOf(await kernel.executeToCompletion(`print(${String(i)})`))).toBe(String(i));
+      }
+    },
+    SLOW,
+  );
+});

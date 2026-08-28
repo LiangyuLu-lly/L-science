@@ -25,8 +25,26 @@ import { createDeleteArtifactsTool, createSaveArtifactsTool } from './artifact/t
 import { CredentialVault } from './credentials/vault.js';
 import { DispatchError } from './dispatcher.js';
 import { schemaVersion, sqliteVersion } from './db.js';
-import { ConversationBusyError, Orchestrator } from './orchestrator/index.js';
+import {
+  ConversationBusyError,
+  Orchestrator,
+  SubAgentRunner,
+  createAgentStatusTool,
+  createDelegateTool,
+  createGuideAgentTool,
+  createStopAgentTool,
+} from './orchestrator/index.js';
+import {
+  createGeneratePlanTool,
+  createPlanStatusTool,
+  parsePlanSpec,
+  PlanSpecError,
+  validatePlan,
+  describeIssues as describePlanIssues,
+  planExecutable,
+} from './plan/index.js';
 import { ApprovalRepo } from './repo/approvals.js';
+import { PlanRepo } from './repo/plans.js';
 import { GrantRepo } from './repo/grants.js';
 import {
   RegistryRepo,
@@ -47,6 +65,7 @@ import {
   createLoadSkillReferenceTool,
   createOllamaEmbedder,
   createSearchSkillsTool,
+  describeMissing,
   installBuiltinSkills,
   probeCommands,
   probePythonModules,
@@ -158,6 +177,28 @@ function main(): void {
     return { conversations: project.conversations.list() };
   });
 
+  d.register('conversation.children', async (req) => {
+    const project = openProject(store, req.projectId);
+    const children = project.conversations.children(req.conversationId);
+    // 在跑的子 agent 附上运行状态：库里只有会话行，不知道它此刻是否还活着
+    const runner = subAgentRunners.get(req.projectId);
+    const live = new Map(
+      (runner?.list(req.conversationId) ?? []).map((h) => [h.conversationId, h]),
+    );
+
+    return {
+      children: children.map((c) => {
+        const handle = live.get(c.id);
+        return {
+          ...c,
+          running: handle !== undefined,
+          agentStatus: handle?.status ?? null,
+          blocking: handle?.blocking ?? null,
+        };
+      }),
+    };
+  });
+
   d.register('conversation.create', async (req) => {
     const project = openProject(store, req.projectId);
     const conversation = project.conversations.create(
@@ -208,6 +249,8 @@ function main(): void {
   const usageRepos = new Map<string, UsageRepo>();
   const routingRepos = new Map<string, RoutingRepo>();
   const skillAudits = new Map<string, SkillAuditRepo>();
+  const planRepos = new Map<string, PlanRepo>();
+  const subAgentRunners = new Map<string, SubAgentRunner>();
   const vault = new CredentialVault();
   const capabilities = detectCapabilities();
   const adapters = createDefaultRegistry();
@@ -380,7 +423,110 @@ function main(): void {
     tools.register(createSearchSkillsTool({ manager: skills, audit: auditSkillLoad }));
     tools.register(createLoadSkillReferenceTool({ manager: skills, audit: auditSkillLoad }));
 
+    /* --- 计划（任务 12.5）------------------------------------------- */
+
+    const planRepo = new PlanRepo(project.db);
+    planRepos.set(projectId, planRepo);
+
+    const planToolOptions = {
+      repo: () => planRepo,
+      availableSkills: () =>
+        new Set(
+          skills
+            .records()
+            .filter((r) => r.enabled)
+            .map((r) => r.slug),
+        ),
+      disabledSkills: () =>
+        new Set(
+          skills
+            .records()
+            .filter((r) => !r.enabled)
+            .map((r) => r.slug),
+        ),
+      // 用编排器实际持有的那份工具注册表，而不是另建一个：两处分歧会让计划校验
+      // 说某个工具可用而执行时它并不存在
+      availableTools: () => new Set(tools.toolSchemas().map((s) => s.name)),
+      skillsWithMissingRequirements: (): ReadonlyMap<string, string> => {
+        const out = new Map<string, string>();
+        for (const record of skills.records()) {
+          const report = skills.requirementsOf(record.slug);
+          if (report === null || report.satisfied) continue;
+          out.set(record.slug, describeMissing(report));
+        }
+        return out;
+      },
+      onPlanCreated: (planId: string, conversationId: string) => {
+        // 广播而不是挂请求：计划生成发生在工具执行里，而 UI 需要立刻显示它
+        d.broadcast({ kind: 'plan.created', planId, conversationId, projectId });
+      },
+    };
+
+    tools.register(createGeneratePlanTool(planToolOptions));
+    tools.register(createPlanStatusTool(planToolOptions));
+
+    /* --- 子 agent 委派（任务 12.6）---------------------------------- */
+
+    /*
+     * 子 agent 与主 agent 共用同一份工具注册表。共用是刻意的：子 agent 能做的事
+     * 不该比主 agent 多也不该少，而两份注册表的条件注册结果可能分歧
+     * （比如探测缓存在两次构造之间失效）。
+     *
+     * 委派工具本身在下面注册进同一份注册表——因此子 agent 也能再委派。深度不设限
+     * 但并发有上限，实际上限由并发额度自然形成。
+     */
+    const subAgents = new SubAgentRunner({
+      conversations: project.conversations,
+      messages: project.messages,
+      toolCalls: project.toolCalls,
+      tools,
+      adapters,
+      usage: usageRepo,
+      routing: routingRepo,
+      skills,
+      routerView: routerViewNow,
+      adapterContext: adapterContextFor,
+      experience: () => routingRepo.experience(),
+      // 子 agent 各有自己的工作目录：共用目录时两个并行 agent 各写一份同名文件，
+      // 后写的赢，且没有任何地方会报
+      workspaceDir: (agentId) => {
+        const dir = joinPath(project.paths.workspace, `sub_${agentId}`);
+        mkdirSync(dir, { recursive: true });
+        return dir;
+      },
+      projectId,
+      onLog: log,
+    });
+    subAgentRunners.set(projectId, subAgents);
+
+    const delegateOptions = {
+      runner: subAgents,
+      availableSkills: () =>
+        new Set(
+          skills
+            .records()
+            .filter((r) => r.enabled)
+            .map((r) => r.slug),
+        ),
+      onEvent: (event: {
+        kind: 'agent.started' | 'agent.finished';
+        agentId: string;
+        conversationId: string;
+        parentConversationId: string;
+        detail?: string;
+      }) => {
+        d.broadcast({ ...event, projectId });
+      },
+    };
+
+    tools.register(createDelegateTool(delegateOptions));
+    tools.register(createAgentStatusTool(delegateOptions));
+    tools.register(createGuideAgentTool(delegateOptions));
+    tools.register(createStopAgentTool(delegateOptions));
+
     const orchestrator = new Orchestrator({
+      projectId,
+      subAgents,
       conversations: project.conversations,
       messages: project.messages,
       toolCalls: project.toolCalls,
@@ -951,6 +1097,128 @@ function main(): void {
     };
   });
 
+  /* --- 计划（任务 12.5）--- */
+
+  const planFor = (projectId: string): PlanRepo => {
+    orchestratorFor(projectId);
+    const repo = planRepos.get(projectId);
+    if (repo === undefined) throw notFound(`项目不可用：${projectId}`);
+    return repo;
+  };
+
+  /** 计划 + 各步状态 + 进度。UI 要的是这三者的组合，分三次请求没有意义。 */
+  const planView = (
+    repo: PlanRepo,
+    plan: NonNullable<ReturnType<PlanRepo['get']>>,
+  ): Record<string, unknown> => ({
+    id: plan.id,
+    conversationId: plan.conversationId,
+    status: plan.status,
+    createdAt: plan.createdAt,
+    spec: plan.spec,
+    steps: repo.steps(plan.id),
+    progress: repo.progress(plan.id),
+  });
+
+  d.register('plan.list', async (req) => {
+    const repo = planFor(req.projectId);
+    return {
+      plans: repo.byConversation(req.conversationId, req.limit).map((plan) => planView(repo, plan)),
+    };
+  });
+
+  d.register('plan.get', async (req) => {
+    const repo = planFor(req.projectId);
+    const plan = repo.get(req.planId);
+    if (plan === null) throw notFound(`计划不存在：${req.planId}`);
+    return { plan: planView(repo, plan) };
+  });
+
+  d.register('plan.decide', async (req) => {
+    const repo = planFor(req.projectId);
+    const plan = repo.get(req.planId);
+    if (plan === null) throw notFound(`计划不存在：${req.planId}`);
+
+    if (plan.status !== 'draft') {
+      // 已经批准过的计划再批准一次是无操作，但静默成功会掩盖「UI 显示的状态是旧的」
+      throw new DispatchError(
+        makeError('conflict', `计划已是 ${plan.status} 状态，不能再次决议`, {
+          remediation: '刷新后查看当前状态。需要改动请重新生成一份计划。',
+        }),
+      );
+    }
+
+    repo.setStatus(req.planId, req.decision === 'approve' ? 'approved' : 'rejected');
+
+    // 决议推给会话：模型需要知道用户批准了没有，以及拒绝的理由
+    d.broadcast({
+      kind: 'plan.decided',
+      planId: req.planId,
+      conversationId: plan.conversationId,
+      projectId: req.projectId,
+      decision: req.decision,
+      note: req.note ?? null,
+    });
+
+    return { planId: req.planId, status: req.decision === 'approve' ? 'approved' : 'rejected' };
+  });
+
+  d.register('plan.replace', async (req) => {
+    const repo = planFor(req.projectId);
+    const plan = repo.get(req.planId);
+    if (plan === null) throw notFound(`计划不存在：${req.planId}`);
+
+    let spec;
+    try {
+      spec = parsePlanSpec(req.spec);
+    } catch (err) {
+      throw new DispatchError(
+        makeError(
+          'bad_request',
+          err instanceof PlanSpecError ? `计划结构不合法：${err.message}` : '计划解析失败',
+        ),
+      );
+    }
+
+    // 用户改的计划同样要过校验：手改很容易把某个 dependsOn 指向已删掉的步骤
+    const tools = toolRegistries.get(req.projectId);
+    const issues = validatePlan({
+      spec,
+      availableSkills: new Set(
+        skills
+          .records()
+          .filter((r) => r.enabled)
+          .map((r) => r.slug),
+      ),
+      disabledSkills: new Set(
+        skills
+          .records()
+          .filter((r) => !r.enabled)
+          .map((r) => r.slug),
+      ),
+      availableTools: new Set((tools?.toolSchemas() ?? []).map((s) => s.name)),
+    });
+
+    if (!planExecutable(issues)) {
+      throw new DispatchError(
+        makeError('bad_request', '修改后的计划无法执行', {
+          detail: describePlanIssues(issues),
+        }),
+      );
+    }
+
+    const result = repo.replaceSpec(req.planId, spec);
+    if (!result.ok) {
+      throw new DispatchError(makeError('conflict', result.reason));
+    }
+
+    const updated = repo.get(req.planId);
+    return {
+      plan: updated === null ? null : planView(repo, updated),
+      issues,
+    };
+  });
+
   d.register('credential.delete', async (req) => {
     requireVault();
 
@@ -1089,6 +1357,15 @@ function main(): void {
     // await 它们的编排逻辑永久挂起，进程也就关不掉
     for (const service of approvalsByProject.values()) service.close();
     questions.close();
+
+    /*
+     * 子 agent 全部停掉，含非阻塞的。
+     *
+     * 这里与「用户中断不取消非阻塞子 agent」不冲突：那条保护的是「一次闲聊式的
+     * 中断不该杀掉长作业」，而这里进程本身要退了，留着它们只会变成孤儿——它们的
+     * 内核进程还在，但没有任何东西会去收结果。
+     */
+    for (const runner of subAgentRunners.values()) runner.stopAll('后端正在关闭');
 
     void transport.close().then(() => {
       store.close();

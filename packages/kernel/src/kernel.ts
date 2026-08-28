@@ -184,6 +184,14 @@ export class JupyterKernel {
   /** 在途的重启任务。期间通道断开，execute 需要先等它完成。 */
   #restarting: Promise<void> | null = null;
   /**
+   * 是否正处在重启的执行体内。
+   *
+   * 与 `#restarting` 分开是为了挡住自递归：重启过程里的初始化代码超时会走
+   * interrupt → restart，而那时复用「在途重启」等于 await 自己。见 restart() 里
+   * 的详细说明。
+   */
+  #restartInProgress = false;
+  /**
    * 当前执行的标识。
    *
    * `interrupt()` 必须按「具体哪一次执行」判断是否成功，不能看全局的
@@ -366,6 +374,22 @@ export class JupyterKernel {
   async restart(): Promise<void> {
     if (this.#closed) throw new Error('内核已关闭');
 
+    /*
+     * 重启期间再次请求重启是**死锁**，必须挡住。
+     *
+     * 实测撞到过：重启 → #spawn → #runInit 的初始化代码超时 → interrupt() →
+     * 中断不生效 → restart()。此时 `#restarting` 非空，于是「复用在途重启」把
+     * 那个**正在等自己的** promise 返回给了自己，await 它就永久挂死——症状是
+     * 用户点重启内核之后再也没有回来，且没有任何错误。
+     *
+     * 复用在途重启这件事本身是对的（并发重启会起出两个进程），错在没有区分
+     * 「别人的重启」与「我自己这一层的重启」。用一个标志把后者变成快速失败：
+     * 重启已经在做了，再要求一次没有意义。
+     */
+    if (this.#restartInProgress) {
+      throw new Error('内核正在重启中，不能在重启过程内再次触发重启');
+    }
+
     // 已有重启在途时复用它，避免并发重启起出两个进程
     const inFlight = this.#restarting;
     if (inFlight !== null) return inFlight;
@@ -376,11 +400,13 @@ export class JupyterKernel {
     this.#executing = false;
     this.#executionToken = null;
 
+    this.#restartInProgress = true;
     const task = (async (): Promise<void> => {
       await this.#teardown();
       await this.#spawn();
     })().finally(() => {
       this.#restarting = null;
+      this.#restartInProgress = false;
     });
 
     this.#restarting = task;
@@ -446,6 +472,19 @@ export class JupyterKernel {
         ? '中断未生效且未注入中断事件机制，改为重启内核；内存状态将丢失'
         : '中断在宽限期内未生效，改为重启内核；内存状态将丢失',
     );
+
+    /*
+     * 已有重启在途时等它而不是再发起一次。
+     *
+     * 这条路径真实存在：重启过程中的初始化代码超时会触发中断，中断不生效就要重启
+     * ——而那时 restart() 会拒绝（防自递归死锁）。等在途的那次是正确处理：它同样
+     * 会清空状态，所以报 'restarted' 是准确的，不是敷衍。
+     */
+    if (this.#restartInProgress) {
+      await this.ready().catch(() => undefined);
+      return 'restarted';
+    }
+
     await this.restart();
     return 'restarted';
   }
@@ -625,11 +664,38 @@ export class JupyterKernel {
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
           this.#onLog(`执行超过 ${String(timeoutMs)}ms，发起中断`);
-          // interrupt() 自己负责「中断不生效就重启」，而重启会强制收尾在途执行，
-          // 因此这里不需要额外的宽限定时器。
-          void this.interrupt().catch((err: unknown) => {
-            finish(err instanceof Error ? err : new Error(String(err)));
-          });
+
+          /*
+           * internal 执行不走中断，直接收尾。
+           *
+           * 这是个踩出来的死结：internal 执行刻意不占用户执行槽位，因此既不设
+           * `#executionToken` 也不设 `#finishExecution`。于是 `interrupt()` 在
+           * 第一行就因为 `#executionToken === null` 返回 'idle' 什么都不做，
+           * 而 `restart()` 想强制收尾也找不到 `#finishExecution`——两条收尾路径
+           * 同时失效，输出队列永远不结束。
+           *
+           * 后果是 `#runInit` 永久挂死，进而 `#spawn` 挂死、`pool.acquire` 挂死。
+           * 症状是「点重启内核之后再也没有回来」，或者新会话第一次执行代码时
+           * 永久转圈，而日志里只有一行「执行超过 20000ms，发起中断」。
+           * 初始化代码超时并不影响内核可用，如实收尾即可。
+           */
+          if (internal) {
+            finish(new Error(`初始化代码执行超过 ${String(timeoutMs)}ms，已放弃`));
+            return;
+          }
+
+          // interrupt() 自己负责「中断不生效就重启」，而重启会强制收尾在途执行。
+          // 但它也可能报 'idle'（那次执行已经不是当前执行了），此时必须自己收尾，
+          // 否则同样会挂住
+          void this.interrupt()
+            .then((outcome) => {
+              if (outcome === 'idle') {
+                finish(new Error(`执行超过 ${String(timeoutMs)}ms 且已无法中断`));
+              }
+            })
+            .catch((err: unknown) => {
+              finish(err instanceof Error ? err : new Error(String(err)));
+            });
         }, timeoutMs);
       }
     })();

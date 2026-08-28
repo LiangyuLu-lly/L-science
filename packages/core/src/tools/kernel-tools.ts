@@ -251,8 +251,11 @@ export function createKernelTool(options: KernelToolOptions): ToolDefinition<Cod
 
     async execute(input, ctx): Promise<ToolResult> {
       let kernel: JupyterKernel;
+      // 内核按 kernelKey 复用。子 agent 各有自己的键，否则并行时第二个必然撞上
+      // 「该内核已有执行在途」
+      const kernelKey = ctx.kernelKey ?? ctx.conversationId;
       try {
-        kernel = await options.pool.acquire(ctx.conversationId, options.language);
+        kernel = await options.pool.acquire(kernelKey, options.language);
       } catch (err) {
         return {
           ok: false,
@@ -288,6 +291,18 @@ export function createKernelTool(options: KernelToolOptions): ToolDefinition<Cod
         };
       }
 
+      /*
+       * 会话中断要传到内核。
+       *
+       * 没有这一步的话，用户点「中断」只会 abort 编排器的控制器，而正在跑的
+       * Python cell 完全不受影响——它会继续跑到结束，期间内核被占住，
+       * 用户的下一条消息还会撞上「该内核已有执行在途」。表现是「点了停止没反应」。
+       */
+      const onAbort = (): void => {
+        void options.pool.interrupt(kernelKey, options.language).catch(() => undefined);
+      };
+      ctx.signal?.addEventListener('abort', onAbort, { once: true });
+
       try {
         const outputs = kernel.execute(
           input.code,
@@ -307,6 +322,10 @@ export function createKernelTool(options: KernelToolOptions): ToolDefinition<Cod
             traceback: [],
           },
         };
+      } finally {
+        // 摘掉监听器。不摘的话一个长会话里的每次执行都会往同一个 signal 上挂一个，
+        // 而它们全都指向已经结束的执行
+        ctx.signal?.removeEventListener('abort', onAbort);
       }
     },
   };

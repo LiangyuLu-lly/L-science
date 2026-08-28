@@ -63,6 +63,11 @@ export type { FeedbackRecord, FeedbackSignal, FeedbackSource } from './repo/rout
 
 export * from './skills/index.js';
 
+export * from './plan/index.js';
+
+export { PlanRepo, planStepId } from './repo/plans.js';
+export type { PlanRecord, PlanStepRecord } from './repo/plans.js';
+
 export { SkillAuditRepo, SkillRepo } from './repo/skills.js';
 export type {
   SkillLoadEvent,

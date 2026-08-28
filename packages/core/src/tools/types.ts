@@ -30,6 +30,15 @@ export interface ToolContext {
   conversationId: string;
   /** 会话的工作目录。工具的相对路径以此为基准。 */
   workspaceDir: string;
+  /**
+   * 内核池的取用键。省略时用 `conversationId`。
+   *
+   * 子 agent 需要它：内核按键复用，而一个内核**不允许并发执行**（会抛「该内核已有
+   * 执行在途」）。若并行的子 agent 共用会话的键，第二个开始跑的必然失败——而失败
+   * 原因看起来像是内核问题，不像是并行设计的问题。给每个子 agent 一个自己的键，
+   * 它就有自己的内核与自己的工作目录。
+   */
+  kernelKey?: string;
   /** 中断信号。阻塞式工具必须响应它。 */
   signal?: AbortSignal;
   /** 流式输出回调。不提供时工具只在结束时返回完整结果。 */

@@ -316,8 +316,31 @@ CREATE INDEX idx_skill_loads_conv ON skill_loads (conversation_id, at DESC);
 CREATE INDEX idx_skill_loads_slug ON skill_loads (slug);
 `;
 
+/**
+ * 子 agent 会话（需求 10.5、10.6）。
+ *
+ * 子 agent 拿到自己的会话行，而不是把消息混进父会话。三个理由：
+ *
+ * 1. `tool_calls.message_id` 有外键指向 `messages`，子 agent 的工具调用必须挂在
+ *    真实存在的消息上。给它一个合成 id 会违反外键。
+ * 2. 父会话的对话记录要保持可读。五个并行子 agent 的几十轮工具调用交错插进去之后，
+ *    用户看不出主线在说什么。
+ * 3. 子 agent 做了什么必须可查（它可能产出了进入结论的制品）。独立会话让它的完整
+ *    过程可以像普通会话一样被翻看。
+ *
+ * `parent_conversation_id` 让默认列表能把子会话排除掉——否则会话侧栏会被子任务淹没。
+ * 级联删除是刻意的：删父会话时子 agent 的记录一起走，它们不能独立存在。
+ */
+const M004 = `
+ALTER TABLE conversations
+  ADD COLUMN parent_conversation_id TEXT REFERENCES conversations (id) ON DELETE CASCADE;
+CREATE INDEX idx_conversations_children ON conversations (parent_conversation_id)
+  WHERE parent_conversation_id IS NOT NULL;
+`;
+
 export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'project-initial', sql: M001 },
   { version: 2, name: 'blob-eviction', sql: M002 },
   { version: 3, name: 'skill-load-audit', sql: M003 },
+  { version: 4, name: 'subagent-conversations', sql: M004 },
 ];
