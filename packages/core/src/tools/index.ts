@@ -70,3 +70,6 @@ export type {
   ReadFileToolOptions,
   ReplaceOutcome,
 } from './files.js';
+
+export { createAskUserTool } from './ask-user.js';
+export type { AskUserInput, AskUserToolOptions } from './ask-user.js';

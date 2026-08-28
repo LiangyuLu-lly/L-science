@@ -65,8 +65,22 @@ export * from './skills/index.js';
 
 export * from './plan/index.js';
 
+export * from './hostapi/index.js';
+
 export { PlanRepo, planStepId } from './repo/plans.js';
 export type { PlanRecord, PlanStepRecord } from './repo/plans.js';
+
+export { FindingsRepo } from './repo/findings.js';
+export type {
+  Finding,
+  FindingCategory,
+  FindingEvidence,
+  FindingSeverity,
+  FindingStatus,
+  ReviewerRun,
+  ReviewerRunStatus,
+  ReviewerTrigger,
+} from './repo/findings.js';
 
 export { SkillAuditRepo, SkillRepo } from './repo/skills.js';
 export type {

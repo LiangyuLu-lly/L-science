@@ -11,11 +11,12 @@
 import { makeError } from '@l-science/shared';
 
 import { mkdirSync } from 'node:fs';
-import { dirname, join as joinPath, resolve as resolvePath, sep } from 'node:path';
+import { dirname, join as joinPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createDefaultRegistry } from '@l-science/adapters';
-import { detectKernels } from '@l-science/kernel';
+import { KernelPool, detectKernels } from '@l-science/kernel';
+import type { JupyterKernel, KernelLanguage, KernelOutput } from '@l-science/kernel';
 import type { TurnEvent } from '@l-science/shared';
 
 import { ApprovalService } from './approval/service.js';
@@ -54,11 +55,22 @@ import {
   type ProviderRecord,
 } from './repo/registry.js';
 import { buildTaskProfile, route } from './router/index.js';
+import { FindingsRepo } from './repo/findings.js';
 import { RoutingRepo } from './repo/routing.js';
 import { UsageRepo } from './repo/usage.js';
 import { isolationStrength } from './sandbox/backend.js';
+import { EgressProxy } from './sandbox/egress-proxy.js';
 import { requestHostAccess } from './sandbox/host-access.js';
-import { selectBackend } from './sandbox/index.js';
+import { NativeBackend, nativeIsolationReport } from './sandbox/native.js';
+import { PathGuard } from './sandbox/path-guard.js';
+import { listWslDistros } from './sandbox/wsl2.js';
+import {
+  ControlRepl,
+  HostRpcServer,
+  createControlReplAdminTool,
+  createControlReplTool,
+  registerHostMethods,
+} from './hostapi/index.js';
 import { AppStore, type ProjectStore } from './store.js';
 import { SkillAuditRepo } from './repo/skills.js';
 import {
@@ -73,10 +85,15 @@ import {
   SkillManager,
   type Embedder,
 } from './skills/index.js';
+import { createAskUserTool } from './tools/ask-user.js';
+import { BackgroundRunner } from './tools/background.js';
 import { capabilityProbe, detectCapabilities, REMEDIATION } from './tools/capabilities.js';
 import { createEditFileTool, createReadFileTool } from './tools/files.js';
+import { collectExecution, createKernelTool, formatExecution } from './tools/kernel-tools.js';
 import { ToolRegistry } from './tools/registry.js';
+import { createShellTool } from './tools/shell.js';
 import { StdioTransport } from './transport.js';
+import { InterruptEvent } from './win32/index.js';
 
 /** 日志一律走 stderr，见文件头说明。 */
 function log(msg: string): void {
@@ -104,7 +121,7 @@ function openProject(store: AppStore, projectId: string): ProjectStore {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const startedAt = Date.now();
   const store = AppStore.open();
 
@@ -250,10 +267,48 @@ function main(): void {
   const routingRepos = new Map<string, RoutingRepo>();
   const skillAudits = new Map<string, SkillAuditRepo>();
   const planRepos = new Map<string, PlanRepo>();
+  const findingsRepos = new Map<string, FindingsRepo>();
   const subAgentRunners = new Map<string, SubAgentRunner>();
+
+  /**
+   * 每个项目的执行平面资源，退出时要逐个关掉。
+   *
+   * 内核是独立进程，控制面 RPC 是监听中的服务，出口代理也是。不显式关掉的话，
+   * 后端退出后它们仍然活着——内核会占着几百 MB 内存，而两个监听端口会让下一次
+   * 启动看起来「莫名其妙有个旧实例在」。
+   */
+  interface ComputePlane {
+    /** 分析内核池。每会话、每子 agent 各一个内核。 */
+    pool: KernelPool;
+    /** 控制面内核池。独立实例，理由见构造处。 */
+    controlPool: KernelPool;
+    repl: ControlRepl;
+    hostServer: HostRpcServer;
+    proxy: EgressProxy;
+    background: BackgroundRunner;
+    sandbox: NativeBackend;
+  }
+  const computePlanes = new Map<string, ComputePlane>();
+
   const vault = new CredentialVault();
   const capabilities = detectCapabilities();
   const adapters = createDefaultRegistry();
+
+  /*
+   * WSL2 发行版是否存在。只影响 `bash` 工具能不能选 bash，**不**影响内核——
+   * 内核跑在 Windows 上的 conda 环境里。
+   *
+   * 这里刻意不用 `selectBackend()`：它在有 WSL2 时会返回 wsl2 后端，于是隔离徽章
+   * 显示「命名空间级隔离」，而实际上内核仍在 Windows 上裸跑。把弱隔离报成强隔离
+   * 正是设计目标里明确要避免的事。要真用上 WSL2 的边界，整个执行平面（内核、
+   * 工作目录、制品）都得搬进去，那是另一件工作。
+   */
+  let wslAvailable = false;
+  try {
+    wslAvailable = (await listWslDistros()).length > 0;
+  } catch {
+    wslAvailable = false;
+  }
 
   /*
    * 供应商与模型注册表在**应用库**里，与项目无关：一份凭据配置服务所有项目。
@@ -365,10 +420,7 @@ function main(): void {
       .catch(() => undefined);
   }
 
-  const orchestratorFor = (projectId: string): Orchestrator => {
-    const existing = orchestrators.get(projectId);
-    if (existing !== undefined) return existing;
-
+  const buildOrchestrator = async (projectId: string): Promise<Orchestrator> => {
     const project = openProject(store, projectId);
     const artifactStore = new ArtifactStore(project.db, project.paths.blobs);
     // 用量与路由记录都在项目库里：成本要按项目汇总，而决策要与该项目的
@@ -380,28 +432,227 @@ function main(): void {
 
     const tools = new ToolRegistry({ probe: capabilityProbe(capabilities) });
 
-    // 工具的路径解析统一走会话工作目录。PathGuard 的接入属于后续任务，
-    // 这里先做最基本的边界检查，避免 `..` 逃出工作目录
-    const resolveWithin = (raw: string, ctx: { workspaceDir: string }): string => {
-      const resolved = resolvePath(ctx.workspaceDir, raw);
-      const base = resolvePath(ctx.workspaceDir);
-      if (resolved !== base && !resolved.startsWith(base + sep)) {
-        throw new Error(`路径超出会话工作目录：${raw}`);
+    /* --- 出口代理（任务 5.6，需求 5.8、5.9）------------------------- */
+
+    /*
+     * 每个项目一个代理实例。
+     *
+     * 共用一个全局代理能省一个端口，代价是拿不到归属：`EgressAttempt` 里只有主机
+     * 与端口，无从知道是哪个项目的内核发起的，于是审批既不知道该记进谁的审计，
+     * 也无法在卡片上说明是哪个项目要连这个域名。域名授权本身仍是全局的
+     * （批准一次到处有效），这也是刻意的——同一个用户对 pypi.org 的判断不会
+     * 因项目而异。
+     */
+    const proxy = new EgressProxy({
+      grants,
+      projectId,
+      requestApproval: async (attempt) => {
+        const result = await approvalFor(projectId).request({
+          kind: 'domain-allowlist',
+          title: `允许访问 ${attempt.host}:${String(attempt.port)}？`,
+          detail:
+            '执行平面里的代码正在尝试' +
+            (attempt.tunnel
+              ? `建立 HTTPS 隧道到 ${attempt.host}:${String(attempt.port)}`
+              : `向 ${attempt.host}:${String(attempt.port)} 发起 ${attempt.method} 请求`) +
+            '。\n这个域名不在白名单里。常见原因是装包（pip/conda）、下载数据集，' +
+            '或者某个库在上报统计。',
+          impact:
+            '批准后执行平面可以与该域名通信：既可能把工作区里的数据发出去，' +
+            '也可能把外部代码拉进执行环境。',
+          reversible: true,
+          undoHint: '在设置的授权列表里撤销该域名。',
+          scopeOptions: ['once', 'project', 'always'],
+          payload: { host: attempt.host, port: attempt.port },
+        });
+
+        if (result.state !== 'approved') return false;
+
+        // once 不落授权记录：它的意义正是「放行这一次但不建立长期授权」
+        if (result.scope !== 'once') {
+          try {
+            grants.allowDomain({
+              domain: attempt.host,
+              mode: 'rw',
+              scope: result.scope,
+              scopeId: result.scope === 'project' ? projectId : null,
+              reason: `用户在项目 ${projectId} 内批准`,
+            });
+          } catch (err) {
+            // 写授权失败不该反过来否掉用户刚做的决定，但要留痕
+            log(`域名授权写入失败：${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        return true;
+      },
+      onAttempt: (attempt, verdict) => {
+        if (!verdict.allowed) {
+          log(
+            `出口拦截 ${attempt.host}:${String(attempt.port)}（${verdict.reason}）${verdict.detail}`,
+          );
+        }
+      },
+    });
+
+    /*
+     * 必须在内核池之前把代理起起来。
+     *
+     * `extraEnv` 在内核启动那一刻才被调用，但它是同步函数——代理还没监听时它返回
+     * 空对象，于是那个内核的全部网络访问完全绕过管控，**而且不会有任何报错**。
+     * 这类静默失效在这个代码库里反复出现过，所以这里用 await 把顺序变成结构性的，
+     * 而不是靠「实际上内核启动要三秒，代理一毫秒就起来了」这种时序巧合。
+     */
+    await proxy.start();
+    const proxyUrl = `http://127.0.0.1:${String(proxy.port)}`;
+
+    /* --- 沙箱后端与路径边界（任务 5.2-5.4、6.3）--------------------- */
+
+    const sandbox = new NativeBackend({
+      wslAvailable,
+      proxyUrl,
+      noProxy: ['localhost', '127.0.0.1', '::1'],
+    });
+
+    /**
+     * 构造本次调用的路径校验器。
+     *
+     * 每次重建而不是缓存一份：允许的根随会话工作目录与宿主授权变化，而授权是
+     * 用户随时可以新增或撤销的。缓存下来的那份会在撤销之后继续放行——那正是
+     * 「随时可撤销」这条承诺失效的地方。构造成本是几次 realpath，与一次文件
+     * 读写相比可以忽略。
+     */
+    const guardFor = (ctx: { workspaceDir: string }): PathGuard => {
+      const readWrite: string[] = [ctx.workspaceDir];
+      const readOnly: string[] = [];
+      for (const grant of grants.listHostGrants({ includeInactive: false })) {
+        // project 作用域的授权只在它自己的项目里生效
+        if (grant.scope === 'project' && grant.scopeId !== projectId) continue;
+        if (grant.mode === 'rw') readWrite.push(grant.hostPath);
+        else readOnly.push(grant.hostPath);
       }
-      return resolved;
+      return new PathGuard({
+        roots: [...readWrite, ...readOnly],
+        readOnlyRoots: readOnly,
+        // 平台自己的数据目录不能被执行平面改：制品库与凭据都在里面
+        protectedPaths: [store.paths.root],
+      });
     };
+
+    const resolveForWrite = (raw: string, ctx: { workspaceDir: string }): string =>
+      guardFor(ctx).assert(raw, 'write');
+
+    /** 读取按只读模式校验：只读授权下的目录能读但不能写。 */
+    const resolveForRead = (raw: string, ctx: { workspaceDir: string }): string =>
+      guardFor(ctx).assert(raw, 'read');
 
     tools.register(
       createReadFileTool({
-        resolvePath: resolveWithin,
+        resolvePath: resolveForRead,
         resolveVersion: (versionId) => artifactStore.versionPath(versionId),
       }),
     );
-    tools.register(createEditFileTool({ resolvePath: resolveWithin }));
-    tools.register(createSaveArtifactsTool({ store: artifactStore, resolvePath: resolveWithin }));
+    tools.register(createEditFileTool({ resolvePath: resolveForWrite }));
+    tools.register(createSaveArtifactsTool({ store: artifactStore, resolvePath: resolveForRead }));
     tools.register(
       createDeleteArtifactsTool({ store: artifactStore, approvals: approvalFor(projectId) }),
     );
+
+    /* --- 内核、shell 与后台任务（任务 6.2、6.3、6.5）---------------- */
+
+    const background = new BackgroundRunner({
+      deliver: (notice) => {
+        // UI 要立刻看到；模型要在下一回合的历史里看到。两者都需要，缺一个的表现
+        // 分别是「跑完了但界面上没动静」和「模型不知道它派出去的任务有结果了」
+        d.broadcast({
+          kind: 'background.notice',
+          projectId,
+          conversationId: notice.conversationId,
+          taskId: notice.taskId,
+          label: notice.label,
+          state: notice.state,
+          output: notice.output,
+          durationMs: notice.durationMs,
+        });
+
+        const orchestrator = orchestrators.get(projectId);
+        if (orchestrator === undefined) return;
+        try {
+          orchestrator.deliverNotification(notice.conversationId, {
+            // 状态进标签：成功与失败的区别必须出现在模型能看到的那条消息里，
+            // 否则它会把一个失败的后台任务当成有结果
+            label: `${notice.label}（${notice.state}）`,
+            output: notice.output,
+            durationMs: notice.durationMs,
+          });
+        } catch (err) {
+          log(`后台结果投递失败：${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+    });
+
+    const pool = new KernelPool({
+      runtimeDir: joinPath(project.paths.root, 'runtime'),
+      workspaceRoot: project.paths.workspace,
+      onLog: (line) => {
+        log(`[kernel ${projectId}] ${line}`);
+      },
+      // Windows 上真中断依赖 FFI 创建的可继承 Event 句柄。拿不到时内核层会如实
+      // 退化成重启并说明状态已丢失
+      interrupterFactory: () => InterruptEvent.create(),
+      extraEnv: () => proxy.env(),
+    });
+
+    /*
+     * 后台任务跑在**独立的一次性内核**上。
+     *
+     * 不能用会话内核：一个内核不允许并发执行，后台任务占住它之后用户的下一条消息
+     * 会撞上「该内核已有执行在途」——那就不叫后台了。代价是后台代码看不到会话里的
+     * 变量，这一点写进了工具描述，否则模型会理所当然地以为状态共享。
+     *
+     * 每个任务一个键并在结束时关掉：固定键会让两个并发后台任务撞在一起，不关掉则
+     * 每个后台任务泄漏一个几百 MB 的 Python 进程。
+     */
+    let backgroundSeq = 0;
+    const submitBackground = (
+      run: (kernel: JupyterKernel) => AsyncIterable<KernelOutput>,
+      meta: { language: KernelLanguage; code: string; conversationId: string; kernelKey: string },
+    ): string => {
+      backgroundSeq += 1;
+      const key = `${meta.kernelKey}#bg${String(backgroundSeq)}`;
+
+      return background.submit({
+        conversationId: meta.conversationId,
+        label: `${meta.language} 后台任务`,
+        run: async (signal) => {
+          const onAbort = (): void => {
+            void pool.interrupt(key, meta.language).catch(() => undefined);
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+          try {
+            const kernel = await pool.acquire(key, meta.language);
+            const collected = await collectExecution(run(kernel));
+            return formatExecution(collected).output;
+          } finally {
+            signal.removeEventListener('abort', onAbort);
+            await pool.shutdown(key, meta.language).catch(() => undefined);
+          }
+        },
+      });
+    };
+
+    tools.register(createKernelTool({ pool, language: 'python', submitBackground }));
+    tools.register(createKernelTool({ pool, language: 'r', submitBackground }));
+    tools.register(
+      createShellTool({
+        backend: sandbox,
+        resolveCwd: (raw, ctx) =>
+          raw === undefined || raw.trim() === '' ? ctx.workspaceDir : resolveForWrite(raw, ctx),
+      }),
+    );
+
+    /* --- 向用户提问（任务 8.2，需求 17.4）--------------------------- */
+
+    tools.register(createAskUserTool({ questions }));
 
     /*
      * 技能工具（任务 12.2、12.3）。
@@ -524,6 +775,74 @@ function main(): void {
     tools.register(createGuideAgentTool(delegateOptions));
     tools.register(createStopAgentTool(delegateOptions));
 
+    /* --- 控制面 REPL 与 host 对象（任务 12.7，需求 10.8）------------ */
+
+    const findingsRepo = new FindingsRepo(project.db);
+    findingsRepos.set(projectId, findingsRepo);
+
+    const hostServer = new HostRpcServer({
+      onLog: (line) => {
+        log(`[host ${projectId}] ${line}`);
+      },
+    });
+    await hostServer.start();
+
+    const host = registerHostMethods(hostServer, {
+      projectId,
+      db: project.db,
+      artifacts: artifactStore,
+      plans: planRepo,
+      findings: findingsRepo,
+      skills,
+      skillAudit,
+      usage: usageRepo,
+      registry: modelRegistry,
+      subAgents,
+    });
+
+    /*
+     * 控制面用**独立的内核池实例**。
+     *
+     * 同一个池加「按 key 决定是否注入 token」也能做到，但那让特权边界取决于一处
+     * 条件判断——漏掉一个分支就等于把控制面 token 注入了普通分析内核，于是模型在
+     * 普通 cell 里就能拿到平台的全部管理能力。用池的边界表达这件事，结构上就不可能
+     * 漏：这个池里的每个内核都有 token，那个池里的每个都没有。
+     */
+    const controlPool = new KernelPool({
+      runtimeDir: joinPath(project.paths.root, 'runtime-control'),
+      workspaceRoot: joinPath(project.paths.workspace, '.control'),
+      onLog: (line) => {
+        log(`[control-kernel ${projectId}] ${line}`);
+      },
+      interrupterFactory: () => InterruptEvent.create(),
+      // 代理环境变量照样注入：控制面代码也可能联网，网络管控不该因为它是特权面而放松
+      extraEnv: () => ({ ...proxy.env(), ...repl.env() }),
+      extraInitCode: () => ControlRepl.initCode(),
+    });
+
+    const repl = new ControlRepl({
+      pool: controlPool,
+      server: hostServer,
+      surfaces: host.surfaces,
+      pending: host.pending,
+      shimDir: joinPath(project.paths.root, 'runtime-control', 'shim'),
+      onLog: log,
+    });
+
+    const replToolOptions = { repl, surfaces: host.surfaces, pending: host.pending };
+    tools.register(createControlReplTool(replToolOptions));
+    tools.register(createControlReplAdminTool(replToolOptions));
+
+    computePlanes.set(projectId, {
+      pool,
+      controlPool,
+      repl,
+      hostServer,
+      proxy,
+      background,
+      sandbox,
+    });
+
     const orchestrator = new Orchestrator({
       projectId,
       subAgents,
@@ -552,6 +871,29 @@ function main(): void {
     return orchestrator;
   };
 
+  /**
+   * 取得（必要时构建）项目的编排器与整套执行平面。
+   *
+   * 构建是异步的（出口代理与控制面 RPC 都要先监听起来），因此缓存的必须是
+   * **Promise** 而不是结果：缓存结果的话两个并发请求会各自走一遍构建，同一个项目
+   * 就多出一整套内核池、代理与控制面服务，而先建好的那套被覆盖后再没人关得掉。
+   */
+  const building = new Map<string, Promise<Orchestrator>>();
+
+  const orchestratorFor = async (projectId: string): Promise<Orchestrator> => {
+    const existing = orchestrators.get(projectId);
+    if (existing !== undefined) return existing;
+
+    const inFlight = building.get(projectId);
+    if (inFlight !== undefined) return inFlight;
+
+    const promise = buildOrchestrator(projectId).finally(() => {
+      building.delete(projectId);
+    });
+    building.set(projectId, promise);
+    return promise;
+  };
+
   /** 会话 id 全局唯一但库按项目分，因此需要定位它属于哪个项目。 */
   const findProjectOf = (conversationId: string): string | null => {
     for (const p of store.projects.list({ includeArchived: true })) {
@@ -568,7 +910,7 @@ function main(): void {
     const projectId = findProjectOf(req.conversationId);
     if (projectId === null) throw notFound(`会话不存在：${req.conversationId}`);
 
-    const orchestrator = orchestratorFor(projectId);
+    const orchestrator = await orchestratorFor(projectId);
 
     let events: AsyncIterable<TurnEvent>;
     try {
@@ -644,24 +986,47 @@ function main(): void {
 
   /* --- 环境与能力（任务 9.4）--- */
 
+  /*
+   * 隔离报告必须描述**执行平面实际用的那个后端**。
+   *
+   * 早先这里调 `selectBackend()` 现场选一个，于是在装了 WSL2 的机器上返回 wsl2 的
+   * 报告（命名空间级文件系统与网络边界），而内核实际上跑在 Windows 的 conda 环境里、
+   * 只有工具层的路径校验和代理级出口管控。徽章因此比现实强两档——正好是「诚实降级」
+   * 这条设计目标要防的事。
+   *
+   * 报告由 `nativeIsolationReport` 统一产出，与 NativeBackend 构造时用的是同一个
+   * 函数，两处不可能分歧。
+   */
   d.register('sandbox.isolation', async () => {
-    const selection = await selectBackend();
-    try {
-      return {
-        backend: selection.backend.id,
-        isolation: selection.backend.isolation,
-        strength: isolationStrength(selection.backend.isolation),
-        skipped: selection.skipped,
-      };
-    } finally {
-      // 只是查询隔离强度，不需要留着后端实例
-      await selection.backend.dispose();
-    }
+    const isolation = nativeIsolationReport({ proxyEnabled: true });
+    return {
+      backend: 'native' as const,
+      isolation,
+      strength: isolationStrength(isolation),
+      skipped: wslAvailable
+        ? [
+            {
+              id: 'wsl2' as const,
+              reason:
+                '已安装 WSL2 发行版，但执行平面（内核与工作目录）仍在 Windows 上运行，' +
+                '因此不能声称拥有它的命名空间边界。把内核搬进 WSL2 是一项独立工作。' +
+                'bash 工具仍可显式选择在 WSL2 里执行命令。',
+            },
+          ]
+        : [
+            {
+              id: 'wsl2' as const,
+              reason:
+                'WSL2 无已安装发行版。执行 wsl --install -d Ubuntu（需管理员 + 重启）' +
+                '后可获得内核级文件系统与网络边界。',
+            },
+          ],
+    };
   });
 
   d.register('tool.list', async (req) => {
     // 复用编排器持有的注册表，避免两处注册出现分歧
-    orchestratorFor(req.projectId);
+    await orchestratorFor(req.projectId);
     const registry = toolRegistries.get(req.projectId);
     return {
       available: registry?.toolSchemas() ?? [],
@@ -679,22 +1044,22 @@ function main(): void {
   /* --- 用量与成本（任务 11.10）--- */
 
   /** 确保项目的仓储已建好。它们随编排器一起懒加载。 */
-  const usageFor = (projectId: string): UsageRepo => {
-    orchestratorFor(projectId);
+  const usageFor = async (projectId: string): Promise<UsageRepo> => {
+    await orchestratorFor(projectId);
     const repo = usageRepos.get(projectId);
     if (repo === undefined) throw notFound(`项目不可用：${projectId}`);
     return repo;
   };
 
-  const routingFor = (projectId: string): RoutingRepo => {
-    orchestratorFor(projectId);
+  const routingFor = async (projectId: string): Promise<RoutingRepo> => {
+    await orchestratorFor(projectId);
     const repo = routingRepos.get(projectId);
     if (repo === undefined) throw notFound(`项目不可用：${projectId}`);
     return repo;
   };
 
   d.register('usage.summary', async (req) => {
-    const usage = usageFor(req.projectId);
+    const usage = await usageFor(req.projectId);
     const range = {
       ...(req.from === undefined ? {} : { from: req.from }),
       ...(req.to === undefined ? {} : { to: req.to }),
@@ -710,7 +1075,7 @@ function main(): void {
   });
 
   d.register('usage.breakdown', async (req) => {
-    const usage = usageFor(req.projectId);
+    const usage = await usageFor(req.projectId);
     const range = {
       ...(req.from === undefined ? {} : { from: req.from }),
       ...(req.to === undefined ? {} : { to: req.to }),
@@ -725,11 +1090,11 @@ function main(): void {
   });
 
   d.register('routing.history', async (req) => ({
-    decisions: routingFor(req.projectId).byConversation(req.conversationId, req.limit),
+    decisions: (await routingFor(req.projectId)).byConversation(req.conversationId, req.limit),
   }));
 
   d.register('routing.feedback', async (req) => {
-    routingFor(req.projectId).addSignal(req.routingDecisionId, req.signal, req.source);
+    (await routingFor(req.projectId)).addSignal(req.routingDecisionId, req.signal, req.source);
     return { recorded: true };
   });
 
@@ -765,7 +1130,7 @@ function main(): void {
      * 每次预览给出不同结果，用户无法据此判断自己调的权重起了什么作用。
      */
     const experience =
-      req.projectId === undefined ? undefined : routingFor(req.projectId).experience();
+      req.projectId === undefined ? undefined : (await routingFor(req.projectId)).experience();
 
     const result = route({
       models: view.models,
@@ -1087,7 +1452,7 @@ function main(): void {
 
   d.register('skill.audit', async (req) => {
     // 审计仓储随编排器一起懒加载
-    orchestratorFor(req.projectId);
+    await orchestratorFor(req.projectId);
     const audit = skillAudits.get(req.projectId);
     if (audit === undefined) throw notFound(`项目不可用：${req.projectId}`);
 
@@ -1099,8 +1464,8 @@ function main(): void {
 
   /* --- 计划（任务 12.5）--- */
 
-  const planFor = (projectId: string): PlanRepo => {
-    orchestratorFor(projectId);
+  const planFor = async (projectId: string): Promise<PlanRepo> => {
+    await orchestratorFor(projectId);
     const repo = planRepos.get(projectId);
     if (repo === undefined) throw notFound(`项目不可用：${projectId}`);
     return repo;
@@ -1121,21 +1486,21 @@ function main(): void {
   });
 
   d.register('plan.list', async (req) => {
-    const repo = planFor(req.projectId);
+    const repo = await planFor(req.projectId);
     return {
       plans: repo.byConversation(req.conversationId, req.limit).map((plan) => planView(repo, plan)),
     };
   });
 
   d.register('plan.get', async (req) => {
-    const repo = planFor(req.projectId);
+    const repo = await planFor(req.projectId);
     const plan = repo.get(req.planId);
     if (plan === null) throw notFound(`计划不存在：${req.planId}`);
     return { plan: planView(repo, plan) };
   });
 
   d.register('plan.decide', async (req) => {
-    const repo = planFor(req.projectId);
+    const repo = await planFor(req.projectId);
     const plan = repo.get(req.planId);
     if (plan === null) throw notFound(`计划不存在：${req.planId}`);
 
@@ -1164,7 +1529,7 @@ function main(): void {
   });
 
   d.register('plan.replace', async (req) => {
-    const repo = planFor(req.projectId);
+    const repo = await planFor(req.projectId);
     const plan = repo.get(req.planId);
     if (plan === null) throw notFound(`计划不存在：${req.planId}`);
 
@@ -1243,7 +1608,7 @@ function main(): void {
     const projectId = findProjectOf(req.conversationId);
     if (projectId === null) throw notFound(`会话不存在：${req.conversationId}`);
 
-    const interrupted = await orchestratorFor(projectId).interrupt(req.conversationId);
+    const interrupted = await (await orchestratorFor(projectId)).interrupt(req.conversationId);
     // 没在跑也返回成功：中断一个已经停下的东西不该报错，
     // 用户点停止时并不知道它是不是刚好结束了
     return { interrupted };
@@ -1367,10 +1732,39 @@ function main(): void {
      */
     for (const runner of subAgentRunners.values()) runner.stopAll('后端正在关闭');
 
-    void transport.close().then(() => {
-      store.close();
-      process.exit(0);
+    /*
+     * 执行平面要显式收掉。
+     *
+     * 内核是独立进程，控制面 RPC 与出口代理是监听中的服务。不关的话：Job Object
+     * 支持时内核会随本进程一起死（KILL_ON_JOB_CLOSE），不支持时它们变成孤儿并占着
+     * 内存；而两个监听端口会让下一次启动看起来「莫名有个旧实例在」。
+     *
+     * 整体设 5 秒上限：某个内核卡在不可中断的系统调用里时，等它等到天亮不如
+     * 直接退出——进程退出会连带收掉 Job Object 里的一切。
+     */
+    const closers: Array<Promise<unknown>> = [];
+    for (const plane of computePlanes.values()) {
+      plane.background.close();
+      closers.push(plane.repl.close());
+      closers.push(plane.pool.close());
+      closers.push(plane.controlPool.close());
+      closers.push(plane.hostServer.stop());
+      closers.push(plane.proxy.stop());
+      closers.push(plane.sandbox.dispose());
+    }
+
+    const cleanup = Promise.allSettled(closers);
+    const deadline = new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, 5000);
+      t.unref();
     });
+
+    void Promise.race([cleanup, deadline])
+      .then(() => transport.close())
+      .then(() => {
+        store.close();
+        process.exit(0);
+      });
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
@@ -1379,4 +1773,9 @@ function main(): void {
   process.stdin.on('end', () => shutdown('stdin EOF'));
 }
 
-main();
+main().catch((err: unknown) => {
+  // 启动阶段抛错必须能被看见并让进程真的退出。吞掉它的结果是一个「起来了但什么
+  // 请求都不响应」的后端，而外壳侧只能看到超时
+  log(`后端启动失败：${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  process.exit(1);
+});

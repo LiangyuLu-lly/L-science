@@ -21,6 +21,7 @@
     "check:deps": "node scripts/check-deps.mjs",
     "verify:smoke": "npm run build && node scripts/verify-smoke.mjs",
     "verify:registry": "npm run build && node scripts/verify-registry.mjs",
+    "verify:hostapi": "npm run build && node scripts/verify-hostapi.mjs",
     "credential": "node scripts/credential.mjs",
     "build": "tsc --build",
     "build:clean": "tsc --build --clean",

@@ -24,7 +24,7 @@ export type { AccessMode, PathDecision, PathDenyReason, PathGuardOptions } from 
 export { runSupervised, killTree } from './supervisor.js';
 export type { LimitEnforcement, SupervisedResult, SupervisedSpawn } from './supervisor.js';
 
-export { NativeBackend } from './native.js';
+export { NativeBackend, nativeIsolationReport } from './native.js';
 export type { NativeBackendOptions } from './native.js';
 
 export { Wsl2Backend, listWslDistros, toWslPath } from './wsl2.js';

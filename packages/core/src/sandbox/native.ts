@@ -61,6 +61,47 @@ function findPowerShell(): string {
   return existsSync(legacy) ? legacy : pwsh;
 }
 
+/**
+ * 构造 native 后端的隔离报告。
+ *
+ * 单独导出是因为有第二个调用方：`sandbox.isolation` 这个 IPC 要在还没打开任何
+ * 项目时就回答「当前隔离强度是什么」。让它自己拼一份报告的话，两份实现迟早
+ * 分歧——而分歧的表现是 UI 上的隔离徽章与执行平面的实际管控不一致，也就是
+ * 「诚实降级」这条设计目标正好失效的地方。
+ */
+export function nativeIsolationReport(opts: {
+  proxyEnabled: boolean;
+  memoryMb?: number;
+  wallClockSec?: number;
+}): IsolationReport {
+  const caps = nativeCapabilities();
+  const memoryMb = opts.memoryMb ?? DEFAULT_MEMORY_MB;
+  const wallClockSec = opts.wallClockSec ?? DEFAULT_WALL_CLOCK_SEC;
+
+  const caveats = [
+    '文件系统边界只由工具层的路径校验保证；内核或 shell 里的代码可以绕过工具直接访问任意路径',
+    opts.proxyEnabled
+      ? '网络出口只靠注入代理环境变量；代码可以直接建 socket 绕过'
+      : '未启用出口代理：执行平面的网络访问不受管控',
+    '没有 CPU 配额，只有墙钟上限',
+    ...caps.notes,
+  ];
+  if (caps.jobObject) {
+    caveats.push(
+      '内存限额与「退出不留孤儿」由 Windows Job Object 内核级强制执行（含 KILL_ON_JOB_CLOSE）',
+    );
+  }
+
+  return {
+    backend: 'native',
+    filesystem: 'advisory',
+    network: opts.proxyEnabled ? 'proxy' : 'none',
+    process: caps.jobObject ? 'job-object' : 'monitor',
+    resourceLimits: { memoryMb, wallClockSec },
+    caveats,
+  };
+}
+
 export class NativeBackend implements SandboxBackend {
   readonly id = 'native' as const;
   readonly isolation: IsolationReport;
@@ -72,32 +113,13 @@ export class NativeBackend implements SandboxBackend {
     this.#opts = opts;
     this.#wslAvailable = opts.wslAvailable ?? false;
 
-    const caps = nativeCapabilities();
-    const memoryMb = opts.defaults?.memoryMb ?? DEFAULT_MEMORY_MB;
-    const wallClockSec = opts.defaults?.wallClockSec ?? DEFAULT_WALL_CLOCK_SEC;
-
-    const caveats = [
-      '文件系统边界只由工具层的路径校验保证；内核或 shell 里的代码可以绕过工具直接访问任意路径',
-      opts.proxyUrl === undefined
-        ? '未启用出口代理：执行平面的网络访问不受管控'
-        : '网络出口只靠注入代理环境变量；代码可以直接建 socket 绕过',
-      '没有 CPU 配额，只有墙钟上限',
-      ...caps.notes,
-    ];
-    if (caps.jobObject) {
-      caveats.push(
-        '内存限额与「退出不留孤儿」由 Windows Job Object 内核级强制执行（含 KILL_ON_JOB_CLOSE）',
-      );
-    }
-
-    this.isolation = {
-      backend: 'native',
-      filesystem: 'advisory',
-      network: opts.proxyUrl === undefined ? 'none' : 'proxy',
-      process: caps.jobObject ? 'job-object' : 'monitor',
-      resourceLimits: { memoryMb, wallClockSec },
-      caveats,
-    };
+    this.isolation = nativeIsolationReport({
+      proxyEnabled: opts.proxyUrl !== undefined,
+      ...(opts.defaults?.memoryMb === undefined ? {} : { memoryMb: opts.defaults.memoryMb }),
+      ...(opts.defaults?.wallClockSec === undefined
+        ? {}
+        : { wallClockSec: opts.defaults.wallClockSec }),
+    });
   }
 
   supportsShell(kind: ShellKind): boolean {

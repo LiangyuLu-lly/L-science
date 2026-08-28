@@ -157,10 +157,22 @@ export function formatExecution(collected: ExecutionCollected): ToolResult {
 export interface KernelToolOptions {
   pool: KernelPool;
   language: KernelLanguage;
-  /** 提交后台任务。返回任务 id。缺省时 background 参数不可用。 */
+  /**
+   * 提交后台任务。返回任务 id。缺省时 background 参数不可用。
+   *
+   * `run` 收到的内核由**调用方**提供，不是本会话的那个：后台任务若占住会话内核，
+   * 用户的下一条消息就会撞上「该内核已有执行在途」，那就不叫后台了。代价是后台
+   * 代码看不到会话里的变量，这一点必须写进工具描述——模型默认会以为状态是共享的。
+   */
   submitBackground?: (
     run: (kernel: JupyterKernel) => AsyncIterable<KernelOutput>,
-    meta: { language: KernelLanguage; code: string; conversationId: string },
+    meta: {
+      language: KernelLanguage;
+      code: string;
+      conversationId: string;
+      /** 会话（或子 agent）的内核取用键，供调用方派生后台内核的键。 */
+      kernelKey: string;
+    },
   ) => string;
 }
 
@@ -195,7 +207,10 @@ export function createKernelTool(options: KernelToolOptions): ToolDefinition<Cod
       '图表会作为制品保存，用户能看到它们。' +
       (options.submitBackground === undefined
         ? ''
-        : '预计跑很久的任务请设 background=true，它会转入后台，完成后结果自动回到会话里。'),
+        : '预计跑很久的任务请设 background=true，它会转入后台，完成后结果自动回到会话里。' +
+          '**后台任务跑在一个干净的新内核里，看不到本会话的变量**——' +
+          '它必须自己从文件或制品重新读入需要的数据，也要自己把结果写成文件。' +
+          '这是「后台」的代价：占住会话内核的话你的下一条消息就得排队等它。'),
     inputSchema: {
       type: 'object',
       properties: {
@@ -271,14 +286,33 @@ export function createKernelTool(options: KernelToolOptions): ToolDefinition<Cod
       }
 
       if (input.background === true && options.submitBackground !== undefined) {
-        const taskId = options.submitBackground(
-          (k) =>
-            k.execute(
-              input.code,
-              input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs },
-            ),
-          { language: options.language, code: input.code, conversationId: ctx.conversationId },
-        );
+        let taskId: string;
+        try {
+          taskId = options.submitBackground(
+            (k) =>
+              k.execute(
+                input.code,
+                input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs },
+              ),
+            {
+              language: options.language,
+              code: input.code,
+              conversationId: ctx.conversationId,
+              kernelKey,
+            },
+          );
+        } catch (err) {
+          // 达到并发上限是正常结果（不是 bug），要如实回给模型让它等或改前台跑
+          return {
+            ok: false,
+            output: {
+              kind: 'error',
+              ename: 'BackgroundRejected',
+              evalue: err instanceof Error ? err.message : String(err),
+              traceback: [],
+            },
+          };
+        }
         return {
           ok: true,
           backgroundTaskId: taskId,
@@ -286,7 +320,8 @@ export function createKernelTool(options: KernelToolOptions): ToolDefinition<Cod
             kind: 'text',
             text:
               `已转入后台执行，任务 id ${taskId}。` +
-              '完成后结果会自动回到会话里，期间可以继续做别的事。',
+              '完成后结果会自动回到会话里，期间可以继续做别的事。' +
+              '注意它跑在新内核里，本会话的变量在那边不存在。',
           },
         };
       }

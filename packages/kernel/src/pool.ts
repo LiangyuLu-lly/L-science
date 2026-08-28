@@ -44,6 +44,15 @@ export interface KernelPoolOptions {
    * 请求完全绕过管控——而这件事不会有任何报错。
    */
   extraEnv?: () => Record<string, string>;
+  /**
+   * 追加到启动规格之后的初始化代码。
+   *
+   * 控制面 REPL 用它把 `host` 对象导入全局命名空间。做成池级选项而不是按 key 传参
+   * 是刻意的：控制面用**独立的池实例**，于是「哪些内核有控制面权限」由池的边界
+   * 决定而不是由一处条件判断决定——后者漏一个分支就等于把特权 token 注入了
+   * 普通分析内核。
+   */
+  extraInitCode?: () => readonly string[];
 }
 
 interface Entry {
@@ -154,10 +163,15 @@ export class KernelPool {
         );
       }
       const spec = pythonLaunchSpec(a.python);
+      const extraInit = this.#opts.extraInitCode?.() ?? [];
       return JupyterKernel.start({
         // 每次启动都重新取额外环境变量：出口代理的端口在启动时才确定，
         // 取快照会让先起来的内核拿到一个空的代理地址而静默绕过管控
-        spec: { ...spec, env: { ...spec.env, ...(this.#opts.extraEnv?.() ?? {}) } },
+        spec: {
+          ...spec,
+          env: { ...spec.env, ...(this.#opts.extraEnv?.() ?? {}) },
+          initCode: [...spec.initCode, ...extraInit],
+        },
         runtimeDir,
         cwd,
         onLog: this.#onLog,
