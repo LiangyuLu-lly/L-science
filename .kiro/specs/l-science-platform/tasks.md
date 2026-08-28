@@ -402,6 +402,25 @@
   - 会话 id 随每次调用带上，不在内核启动时固化：单例内核跨会话复用
   - 端到端：`npm run verify:hostapi`（21 项，含「普通内核手工导入 shim 也调不到控制面」）
   - _需求：10.8_
+- [x] 12.10 技能协议补齐：`provider.py` / `provider.json`
+  - 设计文档把 BYOC provider 列进目录约定，但 loader 从未实现
+  - `parseSkillProvider`：kind（inference / compute / dataset）、entrypoints（角色 → Python 函数名）、fields（字段名必须是合法 Python 标识符，choice 必须有 choices，name 去重）
+  - 「有声明没实现」与「有实现没声明」双向警告：前者会让用户填完一堆字段（可能含凭据）之后才在调用时失败，而那时报错来自 Python 侧的 ImportError，与真实原因对不上
+  - _需求：9.1、9.2_
+- [x] 12.11 结构生物学与组学模型技能（12 个）
+  - `alphafold2`、`esmfold`、`boltz-2`、`chai-1`、`openfold3`、`proteinmpnn`（含 LigandMPNN / SolubleMPNN）、`diffdock`、`esm2`、`evo2`、`borzoi`、`scgpt`、`scvi-tools`
+  - 每个都写足：参数取舍、置信度的正确读法、会让结论站不住的具体错误、验证清单、该存什么制品
+  - 按「所有用户都可能有完整环境」写，`requires` 如实声明依赖；本机跑不动的不裁剪内容
+  - 反复出现的三条纪律被写进每个相关技能：扩散一代必须采样 ≥5 且固定 seed；界面判据看链对 ipTM 分解而非全局标量；设计序列的 pLDDT 系统性虚高，判据是独立模型的自一致性
+  - _需求：9.7_
+- [x] 12.12 工作流技能：`literature-review` 与 `indication-dossier`
+  - 前者覆盖问题拆解 → 多源检索 → 去重 → 两阶段筛选 → 结构化抽取（每个数据点带原文引文与位置）→ GRADE 分级 → 综合成文
+  - 后者七个板块的靶点-适应症证据档案，每行带 `source` 与 `retrieved_at`，并强制 `evidence_type` 区分 direct / inferred / speculative
+  - 两者都用 `delegate` 并行，且明确要求「标准必须完整写在任务描述里」——子 agent 看不到父会话上下文
+  - _需求：9.7、12、13_
+- [x] 12.10b 内置技能目录验证 `scripts/verify-skills.mjs`
+  - 13 项检查：全部加载、无清单/文档不一致、文档有实质内容、triggers ≥3、tools 已声明、**技能间引用没拼错**（编辑距离检测，抓 `alphafodl2` 这类拼错——编译与单元测试都抓不到）、domain 齐全、对标的 14 项 featured 技能逐项核对、capabilities 与 tools 取值合法
+  - _需求：9.7、20.1_
 - [x] 12.7b 执行平面接线（计划外但必须做）
   - 组 5/6 的能力此前只在冒烟脚本里被组装过，真正的后端从未注册 `python` / `r` / `bash` / `ask_user`，也从未启动出口代理与内核池
   - 补齐：每项目一套出口代理 + 内核池 + 控制面池 + 后台执行器 + PathGuard 边界；`orchestratorFor` 改为异步以保证代理先于内核就绪

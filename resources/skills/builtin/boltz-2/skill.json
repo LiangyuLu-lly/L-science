@@ -1,0 +1,21 @@
+{
+  "slug": "boltz-2",
+  "name": "Boltz-2 复合物与亲和力预测",
+  "version": "1.0.0",
+  "domain": "结构与设计",
+  "description": "用 Boltz-2 做蛋白-配体-核酸联合结构预测与结合亲和力预测：YAML 输入写法、扩散采样与 recycle 的取舍、亲和力预测的适用边界，以及为什么它的亲和力数值只能做排序不能当绝对值报。",
+  "triggers": [
+    "Boltz / Boltz-2 / boltz predict",
+    "蛋白配体复合物结构预测 / holo 结构预测 / 共折叠 co-folding",
+    "结合亲和力预测 / binding affinity 预测 / IC50 pKd 预测",
+    "开源 AlphaFold3 替代 / 能算配体的结构预测",
+    "蛋白核酸复合物 / RNA DNA 结合预测",
+    "虚拟筛选打分 / 苗头化合物排序"
+  ],
+  "requires": {
+    "python": ["boltz", "torch", "rdkit", "numpy", "pandas"],
+    "commands": ["boltz"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "bash", "save_artifacts", "read_file"]
+}

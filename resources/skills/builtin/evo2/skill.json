@@ -1,0 +1,19 @@
+{
+  "slug": "evo2",
+  "name": "Evo 2 基因组语言模型",
+  "version": "1.0.0",
+  "domain": "组学与单细胞",
+  "description": "用 Evo 2 做基因组尺度的 DNA 序列打分与变异效应预测：单核苷酸分辨率与长上下文的用法、似然打分的正确归一化、与蛋白语言模型的分工，以及生成式用法在生物安全上的边界。",
+  "triggers": [
+    "Evo 2 / evo2 / DNA 语言模型 / 基因组语言模型",
+    "变异效应预测 DNA / 非编码变异打分 / BRCA1 变异打分",
+    "序列似然打分 / 基因组序列打分 / delta likelihood",
+    "长上下文 DNA 模型 / 百万碱基上下文",
+    "从序列预测功能影响 不用比对"
+  ],
+  "requires": {
+    "python": ["torch", "evo2", "numpy", "pandas", "sklearn"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts", "read_file"]
+}

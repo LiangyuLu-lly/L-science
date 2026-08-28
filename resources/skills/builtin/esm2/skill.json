@@ -1,0 +1,19 @@
+{
+  "slug": "esm2",
+  "name": "ESM-2 蛋白语言模型",
+  "version": "1.0.0",
+  "domain": "结构与设计",
+  "description": "用 ESM-2 取蛋白表示与做零样本变异效应预测：模型规模选择、逐残基与序列级嵌入的正确取法、掩码边际打分的算法，以及嵌入下游任务里最常见的数据泄漏（按序列相似性切分而不是随机切分）。",
+  "triggers": [
+    "ESM-2 / esm2 / 蛋白语言模型 嵌入",
+    "蛋白序列表示 / embedding / 特征提取 用于下游预测",
+    "变异效应预测 / 突变致病性 / zero-shot 变异打分 / masked marginal",
+    "蛋白性质预测 建模 / 用序列特征做分类回归",
+    "序列相似性切分 / 同源泄漏 / 蛋白数据集怎么划分"
+  ],
+  "requires": {
+    "python": ["torch", "esm", "numpy", "pandas", "sklearn"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

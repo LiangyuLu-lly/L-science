@@ -1,0 +1,19 @@
+{
+  "slug": "openfold3",
+  "name": "OpenFold3 开源 AF3 复现",
+  "version": "1.0.0",
+  "domain": "结构与设计",
+  "description": "用 OpenFold3 做 AlphaFold3 级别的生物分子联合预测：与 OpenFold（AF2 复现）的区分、输入 schema、扩散采样与集成、可训练性带来的微调路径，以及权重许可与基准泄漏这两个必须交代的问题。",
+  "triggers": [
+    "OpenFold / OpenFold3 / AlphaFold3 开源复现",
+    "AF3 级别预测 / 蛋白核酸配体离子一起预测",
+    "结构预测模型微调 / 在自己数据上训练折叠模型",
+    "开源可训练的结构预测 / 权重许可 能不能商用",
+    "OpenFold 与 OpenFold3 有什么区别"
+  ],
+  "requires": {
+    "python": ["openfold", "torch", "numpy", "pandas"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "bash", "save_artifacts", "read_file"]
+}

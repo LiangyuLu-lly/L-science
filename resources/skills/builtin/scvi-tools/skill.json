@@ -1,0 +1,20 @@
+{
+  "slug": "scvi-tools",
+  "name": "scvi-tools 概率单细胞建模",
+  "version": "1.0.0",
+  "domain": "组学与单细胞",
+  "description": "用 scvi-tools 做单细胞的批次整合、标签迁移与差异表达：原始计数输入的硬要求、协变量设置、后验采样式差异表达与伪重复问题、以及为什么 UMAP 上的分离程度不能作为整合成功的证据。",
+  "triggers": [
+    "scvi-tools / scVI / scANVI / totalVI / 概率单细胞模型",
+    "单细胞批次整合 / batch correction / 多数据集整合",
+    "标签迁移 / label transfer / 参考图谱映射 scArches",
+    "单细胞差异表达 / DE 分析 / 伪重复 pseudoreplication",
+    "CITE-seq 蛋白 RNA 联合建模 / 多模态整合",
+    "潜空间 latent representation 单细胞降维"
+  ],
+  "requires": {
+    "python": ["scvi", "scanpy", "anndata", "torch", "numpy", "pandas"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts", "read_file"]
+}

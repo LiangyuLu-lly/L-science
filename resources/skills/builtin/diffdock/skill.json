@@ -1,0 +1,20 @@
+{
+  "slug": "diffdock",
+  "name": "DiffDock 分子对接",
+  "version": "1.0.0",
+  "domain": "结构与设计",
+  "description": "用 DiffDock 做盲对接与口袋对接：输入准备（质子化、构象、受体处理）、采样数与置信度模型的读法、与传统对接（Vina/Gnina）的取舍，以及必须做的立体化学与 PoseBusters 检查——它会生成物理上不成立的构象。",
+  "triggers": [
+    "DiffDock / diffdock 对接",
+    "分子对接 / docking / 配体摆位 / 结合构象预测",
+    "盲对接 / blind docking 不知道口袋在哪",
+    "对接打分 / confidence score 怎么看 / 对接结果可信吗",
+    "PoseBusters / 对接构象合理性检查 / 立体化学检查",
+    "虚拟筛选 对接 与 Vina 比较"
+  ],
+  "requires": {
+    "python": ["torch", "rdkit", "numpy", "pandas", "posebusters"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "bash", "save_artifacts", "read_file"]
+}

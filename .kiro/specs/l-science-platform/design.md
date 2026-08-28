@@ -26,7 +26,7 @@ Claude Science 只能调用 Anthropic 自家模型。L-science 把模型抽象�
 | Artifact | 内容寻址存储 + 版本谱系，`{{artifact:VERSION_ID}}` 执行期解析为物理路径，代码血缘自动抽取，删除走用户批准卡片 | 同构，并强制要求图表 artifact 绑定生成代码与输入版本 |
 | Reviewer | 后台独立审查智能体，findings 分 WARN/FAIL，仅 FAIL 打断主 agent，`mark_addressed` 自报后由下一轮复核 | 同构，且 Reviewer 强制使用与主 agent **不同厂商**的模型以消除同源盲区 |
 | 编排 | 协调 agent → `generate_plan`（`phases[].delegations[]`）→ 子 agent 扇出 | 同构 |
-| 技能 | 60+ 按需加载技能，`search_skills` 发现，BYOC provider 用 `provider.py` + `provider.json` | 同构技能协议，内置目录换为睡眠/生理信号/神经科学 + 通用论文写作 |
+| 技能 | 60+ 按需加载技能（featured 含 literature review、indication dossier 与 AlphaFold2 / Boltz-2 / Chai-1 / ESMFold2 / OpenFold3 / ProteinMPNN(+LigandMPNN,SolubleMPNN) / DiffDock / ESM-2 / Evo 2 / Borzoi / scGPT / scvi-tools），`search_skills` 发现，BYOC provider 用 `provider.py` + `provider.json` | 同构技能协议 + **目录为超集**：对标的 14 项 featured 技能逐项实现（`scripts/verify-skills.mjs` 逐项核对），另加睡眠/生理信号/神经科学 + 论文写作 32 项。初版曾把目录「换成」睡眠方向，那与「功能只能多不能少」冲突，已改为超集 |
 | 安全边界 | host 路径授权（`request_host_access`，ro/rw）、域名白名单 + `egress_domains`、受保护路径黑名单、内容安全拒答视为安全边界 | 同构 |
 | 环境管理 | conda 托管环境 + 注册用户 venv（`--system-site-packages` 叠加 editable） | 同构，复用本机 `E:\anaconda` |
 
@@ -489,7 +489,15 @@ skills/<scope>/<slug>/
 
 按需加载：技能不常驻上下文。`search_skills` 用本地嵌入索引检索，命中后把 `SKILL.md` 注入上下文，`references/` 按需二次加载。
 
-内置技能目录（v1，睡眠/生理信号/神经科学 + 通用论文写作）：
+内置技能目录（v1，46 项，对标目录的超集）：
+
+**对标 Claude Science featured 技能的部分（14 项，逐项核对见 `scripts/verify-skills.mjs`）**
+
+- 结构与设计：`alphafold2`、`esmfold`、`boltz-2`、`chai-1`、`openfold3`、`proteinmpnn`（含 LigandMPNN / SolubleMPNN）、`diffdock`、`esm2`
+- 组学与单细胞：`evo2`、`borzoi`、`scgpt`、`scvi-tools`
+- 工作流：`literature-review`、`indication-dossier`
+
+**L-science 增补的部分（32 项，睡眠/生理信号/神经科学 + 论文写作）**
 
 - 信号与数据：`edf-psg-io`、`eeg-preprocess`、`sleep-staging`、`spectral-analysis`、`event-detection`、`hrv-analysis`、`actigraphy`
 - 统计与建模：`mixed-effects-models`、`multiple-comparisons`、`power-analysis`、`survival-analysis`、`bayesian-basics`、`ml-eval-protocol`
@@ -497,6 +505,10 @@ skills/<scope>/<slug>/
 - 写作与投稿：`manuscript-structure`、`imrad-drafting`、`figure-standards`、`table-standards`、`journal-templates`、`cover-letter`、`response-to-reviewers`、`plain-language-summary`
 - 规范与可复现：`data-availability-statement`、`reproducibility-checklist`、`consent-and-ethics`
 - 平台自身：`customize`（连接器/凭据/算力/agent/技能的管理 API 文档）、`compute-hpc`、`mcp-authoring`
+
+模型类技能的内容原则：按「用户可能拥有完整环境」编写，`requires` 如实声明 GPU / 权重 /
+包依赖，缺失时 `search_skills` 给出可执行的补齐指引而不是隐藏该技能。不因开发机跑不动
+某个模型而裁剪它的方法学内容——那会让平台在别人的机器上缺一块能力。
 
 ### 6. Reviewer Service
 

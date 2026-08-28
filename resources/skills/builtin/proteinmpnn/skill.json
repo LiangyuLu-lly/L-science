@@ -1,0 +1,20 @@
+{
+  "slug": "proteinmpnn",
+  "name": "ProteinMPNN 序列设计",
+  "version": "1.0.0",
+  "domain": "结构与设计",
+  "description": "用 ProteinMPNN / LigandMPNN / SolubleMPNN 做反向折叠与序列设计：温度与偏置参数、固定位点与对称性、三个变体各自的适用场景，以及必须做的自一致性验证回路——不做它就没有任何证据说明设计会折叠。",
+  "triggers": [
+    "ProteinMPNN / LigandMPNN / SolubleMPNN 序列设计",
+    "反向折叠 / inverse folding / 从结构设计序列",
+    "蛋白设计 / de novo design / 骨架重新设计序列",
+    "结合口袋设计 / 配体结合位点序列设计",
+    "提高可溶性表达 / 降低聚集倾向 的序列设计",
+    "设计序列怎么验证 / 自一致性 self-consistency RMSD"
+  ],
+  "requires": {
+    "python": ["torch", "numpy", "pandas", "Bio"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "bash", "save_artifacts", "read_file"]
+}

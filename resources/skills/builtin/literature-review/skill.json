@@ -1,0 +1,28 @@
+{
+  "slug": "literature-review",
+  "name": "文献综述工作流",
+  "version": "1.0.0",
+  "domain": "文献",
+  "description": "从一个研究问题走完整条综述流水线：拆解问题、多源检索、去重、两阶段筛选、结构化抽取、证据分级与综合成文。每条论断都绑定到具体文献与原文位置，不允许凭记忆写引用。",
+  "triggers": [
+    "写文献综述 / 综述怎么写 / literature review",
+    "帮我调研某个课题 / 梳理某个领域的研究现状",
+    "文献筛选流程 / 从检索到成文 整个流程",
+    "证据分级 / 证据强度怎么判断 / GRADE",
+    "综述里的引用怎么保证不编造",
+    "叙述性综述 与 系统综述 的区别"
+  ],
+  "requires": {
+    "python": ["pandas", "numpy"],
+    "connectors": ["pubmed", "openalex"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": [
+    "python",
+    "save_artifacts",
+    "read_file",
+    "search_skills",
+    "delegate",
+    "check_findings"
+  ]
+}

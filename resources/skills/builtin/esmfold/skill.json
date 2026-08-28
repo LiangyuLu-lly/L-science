@@ -1,0 +1,19 @@
+{
+  "slug": "esmfold",
+  "name": "ESMFold 单序列折叠",
+  "version": "1.0.0",
+  "domain": "结构与设计",
+  "description": "用 ESMFold 做无需 MSA 的单序列结构预测：适用边界（快、但对天然蛋白精度低于 AF2）、批量筛选场景下的用法、与 AlphaFold2 的取舍，以及它在设计序列上同样会给出虚高置信度这一点。",
+  "triggers": [
+    "ESMFold / esmfold 预测结构",
+    "不用 MSA 的结构预测 / 单序列折叠 / single sequence prediction",
+    "批量预测很多序列的结构 / 高通量结构筛选",
+    "孤儿蛋白 / 没有同源序列 怎么预测结构",
+    "ESMFold 与 AlphaFold 哪个准 / 怎么选"
+  ],
+  "requires": {
+    "python": ["torch", "esm", "numpy", "pandas"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts"]
+}

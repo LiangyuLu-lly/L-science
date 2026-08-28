@@ -1,0 +1,21 @@
+{
+  "slug": "alphafold2",
+  "name": "AlphaFold2 结构预测",
+  "version": "1.0.0",
+  "domain": "结构与设计",
+  "description": "用 AlphaFold2 / ColabFold 预测单体与复合物结构：MSA 策略、recycle 与模型选择、pLDDT/PAE/ipTM 的正确读法、relax 的必要性，以及「高 pLDDT 不等于折叠正确」这类会让结论完全站不住的误读。",
+  "triggers": [
+    "AlphaFold / AlphaFold2 / ColabFold 预测结构",
+    "蛋白结构预测 / 折叠预测 / 从序列预测三维结构",
+    "pLDDT / PAE / pTM / ipTM 怎么看 / 置信度多少算可信",
+    "蛋白复合物预测 / multimer / 二聚体 / 界面预测",
+    "MSA 深度 / Neff / 孤儿蛋白预测不准",
+    "预测结构能不能当实验结构用"
+  ],
+  "requires": {
+    "python": ["numpy", "pandas", "matplotlib", "Bio"],
+    "commands": ["colabfold_batch"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "bash", "save_artifacts", "read_file"]
+}

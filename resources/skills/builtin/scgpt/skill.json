@@ -1,0 +1,20 @@
+{
+  "slug": "scgpt",
+  "name": "scGPT 单细胞基础模型",
+  "version": "1.0.0",
+  "domain": "组学与单细胞",
+  "description": "用 scGPT 做单细胞数据的零样本嵌入、细胞类型标注与批次整合微调：基因词表对齐与预处理必须与预训练一致、零样本与微调的取舍、以及基础模型在单细胞上是否优于经典方法这一仍有争议的问题该怎么如实报告。",
+  "triggers": [
+    "scGPT / 单细胞基础模型 / single-cell foundation model",
+    "单细胞嵌入 / cell embedding / 零样本细胞表示",
+    "细胞类型标注 / cell type annotation 用基础模型",
+    "批次整合 / batch integration / 数据集整合",
+    "基因扰动预测 / perturbation prediction",
+    "scGPT 比 scVI Harmony 好吗 / 基础模型值得用吗"
+  ],
+  "requires": {
+    "python": ["torch", "scgpt", "scanpy", "anndata", "numpy", "pandas"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts", "read_file"]
+}

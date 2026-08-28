@@ -1,0 +1,19 @@
+{
+  "slug": "chai-1",
+  "name": "Chai-1 多模态结构预测",
+  "version": "1.0.0",
+  "domain": "结构与设计",
+  "description": "用 Chai-1 做蛋白/核酸/配体的联合结构预测：FASTA 多实体输入、单序列模式与 MSA 模式的差别、用实验约束（接触、口袋、共价键）引导预测，以及模板与约束用错时的静默失效。",
+  "triggers": [
+    "Chai-1 / chai_lab / chai predict",
+    "多模态结构预测 / 蛋白核酸配体一起预测",
+    "带约束的结构预测 / 交联质谱约束 / 已知接触残基 引导预测",
+    "口袋约束 / pocket constraint / 共价配体建模",
+    "不用 MSA 也能预测复合物"
+  ],
+  "requires": {
+    "python": ["chai_lab", "torch", "rdkit", "numpy"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts", "read_file"]
+}

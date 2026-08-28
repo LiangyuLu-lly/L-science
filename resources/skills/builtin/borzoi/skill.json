@@ -1,0 +1,20 @@
+{
+  "slug": "borzoi",
+  "name": "Borzoi 序列到表达预测",
+  "version": "1.0.0",
+  "domain": "组学与单细胞",
+  "description": "用 Borzoi 从 DNA 序列预测 RNA-seq 覆盖度与调控效应：输入窗口与分辨率、多组织多轨道输出的读法、in silico 突变与 ISM 归因、以及跨个体预测能力有限这一已知边界。",
+  "triggers": [
+    "Borzoi / borzoi / Enformer 序列到功能",
+    "从 DNA 序列预测表达 / RNA-seq 覆盖度预测",
+    "调控变异效应 / eQTL 预测 / 增强子活性预测",
+    "in silico 突变 / ISM / 归因分析 找关键碱基",
+    "剪接效应预测 / 多聚腺苷化 预测",
+    "序列模型 跨个体 个体化表达预测 能不能做"
+  ],
+  "requires": {
+    "python": ["torch", "numpy", "pandas", "matplotlib", "pysam"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": ["python", "save_artifacts", "read_file"]
+}

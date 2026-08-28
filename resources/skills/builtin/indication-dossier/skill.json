@@ -1,0 +1,29 @@
+{
+  "slug": "indication-dossier",
+  "name": "适应症证据档案",
+  "version": "1.0.0",
+  "domain": "文献",
+  "description": "为一个靶点-适应症组合汇编结构化证据档案：人类遗传学证据、表达与通路、可成药性、已有临床与竞争格局、安全信号与生物标志物策略，每条论断绑定数据源与查询日期，并明确区分证据强度与推测。",
+  "triggers": [
+    "适应症证据 / indication dossier / 靶点适应症评估",
+    "靶点验证 / target validation / 这个靶点值不值得做",
+    "药物重定位 / drug repurposing 证据梳理",
+    "竞争格局 / 已有临床试验 / 同靶点在研药物",
+    "遗传学证据支持 / GWAS 孟德尔随机化 支持靶点",
+    "安全信号 / 靶点相关不良反应 / 基因敲除表型"
+  ],
+  "requires": {
+    "python": ["pandas", "numpy", "matplotlib"],
+    "connectors": ["opentargets", "pubmed", "clinicaltrials", "chembl", "gnomad"],
+    "capabilities": ["kernel:python"]
+  },
+  "tools": [
+    "python",
+    "save_artifacts",
+    "read_file",
+    "search_skills",
+    "delegate",
+    "check_findings",
+    "ask_user"
+  ]
+}
