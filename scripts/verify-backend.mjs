@@ -137,7 +137,34 @@ try {
     '坏帧被拒且已记录    ',
     `stderr 中出现 ${(stderrText.match(/协议错误/g) ?? []).length} 次`,
   );
-  check(byId('bad') === undefined && byId('bad2') === undefined, '坏帧不产生响应帧    ', '');
+  /*
+   * 认得出 id 的坏帧必须回一条错误响应。
+   *
+   * 这条断言原先写的是「坏帧不产生响应帧」，那是修复之前的行为：只记日志然后丢掉，
+   * 调用方的 promise 永远不 settle，界面永久转圈而用户看不到任何错误。现在
+   * transport 在 `type==='request'` 且 id 合法时回 `errResponse`，因此这里要断言
+   * 的是「有响应且是 bad_request」。
+   *
+   * 不是 JSON 的那一行没有 id 可回，因此仍然只有日志。
+   */
+  await waitFor(
+    () => byId('bad') !== undefined && byId('bad2') !== undefined,
+    8000,
+    '坏帧的错误响应',
+  );
+  check(
+    byId('bad').ok === false &&
+      byId('bad').error?.code === 'bad_request' &&
+      byId('bad2').ok === false &&
+      byId('bad2').error?.code === 'bad_request',
+    '坏帧回错误响应不挂死',
+    `${byId('bad').error?.code} / ${byId('bad2').error?.code}`,
+  );
+  check(
+    stdoutFrames.every((f) => f.id !== 'unparsable'),
+    '无 id 的坏帧只记日志',
+    '',
+  );
 
   send(req('s3', { method: 'app.status' }));
   await waitFor(() => byId('s3') !== undefined, 8000, '坏帧之后的请求');
@@ -412,7 +439,129 @@ try {
   await waitFor(() => byId('g3') !== undefined, 8000, 'grant.revoke');
   check(byId('g3').ok === true && byId('g3').result?.revoked === true, '撤销授权成功        ', '');
 
-  // --- 9. stdin 关闭后自行退出 ---
+  /*
+   * --- 9. 工具面真的被注册了（任务 12.7b）---
+   *
+   * 组 5/6 的能力此前只在冒烟脚本里被组装过，真正的后端从未注册 python / r /
+   * bash。这条检查存在的意义就是防止那种情况再次出现：单元测试测的是工具本身，
+   * 而「后端有没有把它接上」只有走真实进程才能看出来。
+   */
+  send(req('t1', { method: 'tool.list', projectId: createdProject.id }));
+  await waitFor(() => byId('t1') !== undefined, 30000, 'tool.list');
+  const toolNames = (byId('t1').result?.available ?? []).map((t) => t.name).sort();
+  const expected = [
+    'ask_user',
+    'check_findings',
+    'control_repl',
+    'delegate',
+    'edit_file',
+    'generate_plan',
+    'python',
+    'read_file',
+    'remember',
+    'save_artifacts',
+    'search_skills',
+  ];
+  const missing = expected.filter((n) => !toolNames.includes(n));
+  check(
+    missing.length === 0,
+    '核心工具全部已注册  ',
+    missing.length === 0 ? `${toolNames.length} 个` : `缺 ${missing.join(', ')}`,
+  );
+
+  // --- 10. 记忆（任务 12.9，需求 16）---
+
+  send(req('m1', { method: 'memory.list', projectId: createdProject.id }));
+  await waitFor(() => byId('m1') !== undefined, 8000, 'memory.list');
+  check(
+    byId('m1').ok === true && byId('m1').result?.notes?.length === 0,
+    'memory.list 初始为空 ',
+    explain('m1'),
+  );
+
+  send(
+    req('m2', {
+      method: 'memory.upsert',
+      projectId: createdProject.id,
+      scope: 'project',
+      kind: 'convention',
+      content: '被试编号统一用 S01 到 S24，与原始文件名保持一致。',
+      reason: '改写会与采集记录对不上。',
+    }),
+  );
+  await waitFor(() => byId('m2') !== undefined, 8000, 'memory.upsert');
+  const memoryNote = byId('m2').result?.note;
+  check(
+    byId('m2').ok === true && memoryNote?.scope === 'project',
+    'memory.upsert       ',
+    explain('m2'),
+  );
+
+  // 需求 16.4：用户手工写入一次性细节也要被拒——膨胀与是谁写的无关
+  send(
+    req('m3', {
+      method: 'memory.upsert',
+      projectId: createdProject.id,
+      scope: 'project',
+      kind: 'decision',
+      content: '额叶的配对 t 检验 p = 0.03，因此干预有效。',
+      reason: '这是主要结果。',
+    }),
+  );
+  await waitFor(() => byId('m3') !== undefined, 8000, 'memory.upsert 一次性细节');
+  check(
+    byId('m3').ok === false && byId('m3').error?.code === 'bad_request',
+    '一次性细节被拒      ',
+    (byId('m3').error?.detail ?? '').slice(0, 50),
+  );
+
+  send(
+    req('m4', { method: 'memory.delete', projectId: createdProject.id, memoryId: memoryNote.id }),
+  );
+  await waitFor(() => byId('m4') !== undefined, 8000, 'memory.delete');
+  check(byId('m4').ok === true && byId('m4').result?.deleted === true, 'memory.delete       ', '');
+
+  send(
+    req('m5', { method: 'memory.delete', projectId: createdProject.id, memoryId: memoryNote.id }),
+  );
+  await waitFor(() => byId('m5') !== undefined, 8000, 'memory.delete 重复');
+  check(
+    byId('m5').ok === false && byId('m5').error?.code === 'not_found',
+    '删不存在的记忆报错  ',
+    '',
+  );
+
+  // --- 11. findings 面（任务 12.8）---
+
+  send(
+    req('f1', {
+      method: 'finding.list',
+      projectId: createdProject.id,
+      conversationId: conversation.id,
+    }),
+  );
+  await waitFor(() => byId('f1') !== undefined, 8000, 'finding.list');
+  check(
+    byId('f1').ok === true && byId('f1').result?.summary?.blocking === 0,
+    'finding.list 可用    ',
+    explain('f1'),
+  );
+
+  send(
+    req('f2', {
+      method: 'reviewer.runs',
+      projectId: createdProject.id,
+      conversationId: conversation.id,
+    }),
+  );
+  await waitFor(() => byId('f2') !== undefined, 8000, 'reviewer.runs');
+  check(
+    byId('f2').ok === true && Array.isArray(byId('f2').result?.runs),
+    'reviewer.runs 可用   ',
+    '',
+  );
+
+  // --- 12. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

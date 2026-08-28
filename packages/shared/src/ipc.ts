@@ -554,6 +554,39 @@ export const requestSchema = z.discriminatedUnion('method', [
     conversationId: idSchema,
     limit: z.number().int().min(1).max(100).default(20),
   }),
+
+  /* --- 记忆（任务 12.9，需求 16）--- */
+
+  /** 列出记忆。省略 scope 时返回全局 + 本项目 + 算力三类。 */
+  z.object({
+    method: z.literal('memory.list'),
+    projectId: idSchema,
+    scope: z.enum(['global', 'project', 'compute']).optional(),
+    scopeId: z.string().min(1).max(200).optional(),
+    kind: z
+      .enum(['preference', 'background', 'convention', 'decision', 'data', 'environment'])
+      .optional(),
+  }),
+
+  /**
+   * 用户新增或编辑一条记忆（需求 16.3）。
+   *
+   * 用户写入同样要过一次性细节的准入判定：他手工写一条「这次的 p 值是 0.03」也会
+   * 造成同样的膨胀，而准入的理由与是谁写的无关。
+   */
+  z.object({
+    method: z.literal('memory.upsert'),
+    projectId: idSchema,
+    scope: z.enum(['global', 'project', 'compute']),
+    scopeId: z.string().min(1).max(200).optional(),
+    kind: z.enum(['preference', 'background', 'convention', 'decision', 'data', 'environment']),
+    content: z.string().min(1).max(4000),
+    reason: z.string().min(1).max(2000),
+    /** 编辑时给出要覆盖的条目 id。 */
+    replaceId: idSchema.optional(),
+  }),
+
+  z.object({ method: z.literal('memory.delete'), projectId: idSchema, memoryId: idSchema }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

@@ -7,6 +7,8 @@
  * skills/<scope>/<slug>/
  *   SKILL.md            主指令文档，front matter 含元数据
  *   skill.json          结构化清单
+ *   provider.py         可选，BYOC / 推理供应商的 Python 侧实现
+ *   provider.json       可选，供应商声明
  *   scripts/            可选，技能自带脚本
  *   references/         可选，按需二次加载的参考文档
  * ```
@@ -53,6 +55,54 @@ export interface SkillManifest {
   tools: readonly string[];
 }
 
+/* ------------------------------------------------------------------ *
+ * BYOC / 推理供应商声明（provider.json）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 技能自带的供应商类型。
+ *
+ * - `inference`：把一个模型端点接进来（自建的 vLLM、公司内网的推理服务）。
+ * - `compute`：把一套算力接进来（自家云、实验室调度器）。
+ * - `dataset`：把一个数据源接进来（内部数据湖、仪器归档）。
+ *
+ * 三者共用同一个协议（`provider.py` 里的入口函数 + 声明式清单）而不是各设一套：
+ * 用户要写的其实是同一件事——「按这个协议实现几个函数」。分成三套协议只会让
+ * 「我该照哪份文档写」变成第一个障碍。
+ */
+export type SkillProviderKind = 'inference' | 'compute' | 'dataset';
+
+/** 供应商需要用户填的一项配置。 */
+export interface SkillProviderField {
+  name: string;
+  label: string;
+  /** `secret` 的值进凭据库，不落配置文件。 */
+  type: 'string' | 'number' | 'boolean' | 'secret' | 'path' | 'choice';
+  required: boolean;
+  /** `choice` 类型的可选值。 */
+  choices?: readonly string[];
+  default?: string;
+  help?: string;
+}
+
+export interface SkillProvider {
+  id: string;
+  name: string;
+  kind: SkillProviderKind;
+  /**
+   * `provider.py` 里的入口函数名。
+   *
+   * 显式声明而不是约定固定名字：一个文件里可以实现多个入口（比如 `list_models`
+   * 与 `invoke`），而固定名字的约定在需要第二个入口时就得再定一条约定。
+   */
+  entrypoints: Readonly<Record<string, string>>;
+  /** 用户需要填的配置项。 */
+  fields: readonly SkillProviderField[];
+  /** 该供应商自己的 Python 依赖。与 skill.requires.python 分开：它只在启用时才需要。 */
+  pythonRequires: readonly string[];
+  description: string;
+}
+
 export type SkillScope = 'builtin' | 'user';
 
 /** 加载后的技能。`instructions` 是 SKILL.md 正文，不含 front matter。 */
@@ -67,6 +117,15 @@ export interface LoadedSkill {
   references: readonly string[];
   /** `scripts/` 下的文件名。 */
   scripts: readonly string[];
+  /**
+   * `provider.json` 解析出的供应商声明。没有该文件时为 null。
+   *
+   * 与 `provider.py` 的存在性分开判断：只有声明没有实现是一种明确的错误状态
+   * （启用后调用必然失败），要在加载时就报出来，而不是等用户点了「启用」才发现。
+   */
+  provider: SkillProvider | null;
+  /** `provider.py` 的绝对路径。声明了供应商但文件缺失时为 null。 */
+  providerScript: string | null;
   /** 解析期发现的问题。不阻止加载，但要透出给用户。 */
   warnings: readonly string[];
 }
@@ -187,6 +246,140 @@ export function parseSkillManifest(raw: unknown, path: string): SkillManifest {
     triggers,
     requires: parseRequires(obj.requires, path),
     tools: asStringArray(obj.tools, 'tools', path),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * provider.json
+ * ------------------------------------------------------------------ */
+
+const PROVIDER_KINDS: readonly SkillProviderKind[] = ['inference', 'compute', 'dataset'];
+const FIELD_TYPES: readonly SkillProviderField['type'][] = [
+  'string',
+  'number',
+  'boolean',
+  'secret',
+  'path',
+  'choice',
+];
+
+function parseProviderField(raw: unknown, index: number, path: string): SkillProviderField {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new SkillManifestError(path, `fields[${String(index)}] 必须是对象`);
+  }
+  const obj = raw as Record<string, unknown>;
+
+  const name = typeof obj.name === 'string' ? obj.name.trim() : '';
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    // 字段名会作为 Python 侧的关键字参数传进去，因此必须是合法标识符
+    throw new SkillManifestError(
+      path,
+      `fields[${String(index)}].name ${JSON.stringify(obj.name)} 不是合法标识符。` +
+        '它会作为 Python 侧的关键字参数名传入',
+    );
+  }
+
+  const type = typeof obj.type === 'string' ? obj.type : '';
+  if (!FIELD_TYPES.includes(type as SkillProviderField['type'])) {
+    throw new SkillManifestError(
+      path,
+      `fields[${String(index)}].type 必须是 ${FIELD_TYPES.join(' / ')}`,
+    );
+  }
+
+  const choices = asStringArray(obj.choices, `fields[${String(index)}].choices`, path);
+  if (type === 'choice' && choices.length === 0) {
+    throw new SkillManifestError(
+      path,
+      `fields[${String(index)}] 是 choice 类型但没有 choices，用户无从选择`,
+    );
+  }
+
+  return {
+    name,
+    label: typeof obj.label === 'string' && obj.label.trim() !== '' ? obj.label.trim() : name,
+    type: type as SkillProviderField['type'],
+    required: obj.required !== false,
+    ...(choices.length > 0 ? { choices } : {}),
+    ...(typeof obj.default === 'string' ? { default: obj.default } : {}),
+    ...(typeof obj.help === 'string' && obj.help.trim() !== '' ? { help: obj.help.trim() } : {}),
+  };
+}
+
+/**
+ * 解析 `provider.json`。
+ *
+ * 校验失败抛错而不是忽略：一个声明写错的供应商在 UI 上会显示为可配置，用户填完
+ * 一堆字段之后调用才失败，而那时错误信息来自 Python 侧，与「声明写错了」这个
+ * 真实原因完全对不上。
+ */
+export function parseSkillProvider(raw: unknown, path: string): SkillProvider {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new SkillManifestError(path, 'provider.json 必须是对象');
+  }
+  const obj = raw as Record<string, unknown>;
+
+  const id = typeof obj.id === 'string' ? obj.id.trim() : '';
+  if (!isValidSlug(id)) {
+    throw new SkillManifestError(
+      path,
+      `id ${JSON.stringify(obj.id)} 不合法。只允许小写字母、数字与连字符`,
+    );
+  }
+
+  const name = typeof obj.name === 'string' ? obj.name.trim() : '';
+  if (name === '') throw new SkillManifestError(path, 'name 不能为空');
+
+  const kind = typeof obj.kind === 'string' ? obj.kind : '';
+  if (!PROVIDER_KINDS.includes(kind as SkillProviderKind)) {
+    throw new SkillManifestError(path, `kind 必须是 ${PROVIDER_KINDS.join(' / ')}`);
+  }
+
+  const rawEntrypoints = obj.entrypoints;
+  if (typeof rawEntrypoints !== 'object' || rawEntrypoints === null || Array.isArray(rawEntrypoints)) {
+    throw new SkillManifestError(path, 'entrypoints 必须是对象（角色名 → Python 函数名）');
+  }
+  const entrypoints: Record<string, string> = {};
+  for (const [role, fn] of Object.entries(rawEntrypoints as Record<string, unknown>)) {
+    if (typeof fn !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(fn)) {
+      throw new SkillManifestError(
+        path,
+        `entrypoints.${role} 必须是合法的 Python 函数名，实际是 ${JSON.stringify(fn)}`,
+      );
+    }
+    entrypoints[role] = fn;
+  }
+  if (Object.keys(entrypoints).length === 0) {
+    throw new SkillManifestError(path, 'entrypoints 至少要有一个入口，否则这个供应商无法被调用');
+  }
+
+  const rawFields = obj.fields;
+  if (rawFields !== undefined && rawFields !== null && !Array.isArray(rawFields)) {
+    throw new SkillManifestError(path, 'fields 必须是数组');
+  }
+  const fields = (Array.isArray(rawFields) ? rawFields : []).map((f, i) =>
+    parseProviderField(f, i, path),
+  );
+
+  const names = new Set<string>();
+  for (const field of fields) {
+    if (names.has(field.name)) {
+      // 重名字段在传参时后者覆盖前者，而 UI 上会显示两个输入框
+      throw new SkillManifestError(path, `fields 里有重复的 name：${field.name}`);
+    }
+    names.add(field.name);
+  }
+
+  const description = typeof obj.description === 'string' ? obj.description.trim() : '';
+
+  return {
+    id,
+    name,
+    kind: kind as SkillProviderKind,
+    entrypoints,
+    fields,
+    pythonRequires: asStringArray(obj.pythonRequires, 'pythonRequires', path),
+    description,
   };
 }
 

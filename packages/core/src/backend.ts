@@ -30,11 +30,19 @@ import {
   ConversationBusyError,
   Orchestrator,
   SubAgentRunner,
+  buildSystemPrompt,
   createAgentStatusTool,
   createDelegateTool,
   createGuideAgentTool,
   createStopAgentTool,
 } from './orchestrator/index.js';
+import {
+  MEMORY_LIMITS,
+  MemoryService,
+  createRecallMemoryTool,
+  createRememberTool,
+} from './memory/index.js';
+import { MemoryRepo, type MemoryKind, type MemoryScope } from './repo/memory.js';
 import {
   createGeneratePlanTool,
   createPlanStatusTool,
@@ -275,6 +283,7 @@ async function main(): Promise<void> {
   const planRepos = new Map<string, PlanRepo>();
   const findingsRepos = new Map<string, FindingsRepo>();
   const reviewers = new Map<string, ReviewerService>();
+  const memories = new Map<string, MemoryService>();
   const subAgentRunners = new Map<string, SubAgentRunner>();
 
   /**
@@ -766,6 +775,8 @@ async function main(): Promise<void> {
         return dir;
       },
       projectId,
+      // 记忆同样注入子 agent：它看不到父会话历史，项目约定只可能从记忆里来
+      memory: () => memory.injection(),
       onLog: log,
     });
     subAgentRunners.set(projectId, subAgents);
@@ -938,6 +949,32 @@ async function main(): Promise<void> {
     tools.register(createMarkFindingAddressedTool(findingToolOptions));
     tools.register(createRequestReviewTool(findingToolOptions));
 
+    /* --- 记忆（任务 12.9，需求 16.1-16.4）------------------------------ */
+
+    /*
+     * 全局与算力作用域在应用库，项目作用域在项目库。
+     *
+     * 前者与项目无关，放进项目库会让每个项目各存一份，改一处不影响其他项目；
+     * 后者跟着项目一起删，不会留下指向已不存在项目的孤儿记忆。
+     */
+    const memory = new MemoryService({
+      repo: new MemoryRepo({ appDb: store.db, projectDb: project.db, projectId }),
+      // 算力目标要到 M5 才有登记入口，此刻任何 id 都不存在——如实拒绝而不是放行，
+      // 否则会写出一批指向不存在目标的笔记
+      computeTargetExists: (targetId) =>
+        (store.db
+          .prepare('SELECT 1 FROM compute_targets WHERE id = ?')
+          .get(targetId) as unknown) !== undefined,
+      onLog: (line) => {
+        log(`[memory ${projectId}] ${line}`);
+      },
+    });
+    memories.set(projectId, memory);
+
+    const memoryToolOptions = { service: () => memory };
+    tools.register(createRememberTool(memoryToolOptions));
+    tools.register(createRecallMemoryTool(memoryToolOptions));
+
     computePlanes.set(projectId, {
       pool,
       controlPool,
@@ -969,6 +1006,26 @@ async function main(): Promise<void> {
         mkdirSync(dir, { recursive: true });
         return dir;
       },
+      /*
+       * 系统提示词。
+       *
+       * 每次回合重新生成而不是构造时算一次：工具集会随环境变化（装了 R 之后 `r`
+       * 工具才注册），记忆更是随时在变。缓存一份的后果是用户刚让 agent 记下一条
+       * 约定，下一个回合它并不知道——而那正是记忆最该起作用的时刻。
+       */
+      systemPrompt: () =>
+        buildSystemPrompt({
+          // 项目名在应用库里，每次现读：用户改了项目名之后提示词里该跟着变
+          ...(() => {
+            const name = store.projects.get(projectId)?.name;
+            return name === undefined ? {} : { projectName: name };
+          })(),
+          toolNames: tools.toolSchemas().map((s) => s.name),
+          memory: memory.injection(),
+          isolation: { backend: sandbox.id, network: sandbox.isolation.network },
+          pythonEnv: capabilities.pythonEnv,
+          rEnv: capabilities.rEnv,
+        }),
       /*
        * 回合结束触发审查（需求 11.3）。
        *
@@ -1767,6 +1824,70 @@ async function main(): Promise<void> {
   d.register('reviewer.runs', async (req) => {
     const repo = await findingsFor(req.projectId);
     return { runs: repo.runs(req.conversationId, req.limit) };
+  });
+
+  /* --- 记忆（任务 12.9，需求 16.3）--- */
+
+  const memoryFor = async (projectId: string): Promise<MemoryService> => {
+    await orchestratorFor(projectId);
+    const service = memories.get(projectId);
+    if (service === undefined) throw notFound(`项目不可用：${projectId}`);
+    return service;
+  };
+
+  d.register('memory.list', async (req) => {
+    const service = await memoryFor(req.projectId);
+    const notes = service.list({
+      ...(req.scope === undefined ? {} : { scope: req.scope as MemoryScope }),
+      ...(req.scopeId === undefined ? {} : { scopeId: req.scopeId }),
+      ...(req.kind === undefined ? {} : { kind: req.kind as MemoryKind }),
+    });
+    return {
+      notes,
+      limits: MEMORY_LIMITS,
+      counts: {
+        global: service.repo.count('global'),
+        project: service.repo.count('project'),
+      },
+    };
+  });
+
+  d.register('memory.upsert', async (req) => {
+    const service = await memoryFor(req.projectId);
+    const result = service.remember({
+      scope: req.scope as MemoryScope,
+      ...(req.scopeId === undefined ? {} : { scopeId: req.scopeId }),
+      kind: req.kind as MemoryKind,
+      content: req.content,
+      reason: req.reason,
+      ...(req.replaceId === undefined ? {} : { replaceId: req.replaceId }),
+    });
+
+    if (!result.ok) {
+      /*
+       * 用户手工写入也要过准入判定。
+       *
+       * 「这次的 p 值是 0.03」由用户写下来造成的膨胀与模型写的一样，而准入的理由
+       * 与是谁写的无关。用 bad_request 而不是静默接受：静默接受等于把需求 16.4
+       * 变成一句空话。
+       */
+      throw new DispatchError(
+        makeError('bad_request', '这条内容不适合写进长期记忆', {
+          detail: result.reason,
+          ...(result.rule === null ? {} : { remediation: `命中规则：${result.rule}` }),
+        }),
+      );
+    }
+
+    return { note: result.note, created: result.created, deduped: result.deduped };
+  });
+
+  d.register('memory.delete', async (req) => {
+    const service = await memoryFor(req.projectId);
+    if (!service.delete(req.memoryId)) {
+      throw notFound(`记忆不存在：${req.memoryId}`);
+    }
+    return { deleted: true };
   });
 
   d.register('credential.delete', async (req) => {

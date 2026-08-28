@@ -19,6 +19,7 @@ import {
   crossCheckFrontMatter,
   parseFrontMatter,
   parseSkillManifest,
+  parseSkillProvider,
   SkillManifestError,
   type LoadedSkill,
   type SkillScope,
@@ -115,6 +116,47 @@ export function loadSkill(dir: string, scope: SkillScope): LoadedSkill {
     warnings.push('SKILL.md 除 front matter 之外没有正文，命中后注入的内容会是空的');
   }
 
+  /* ---------------- BYOC 供应商（可选）---------------- */
+
+  const providerJsonPath = join(dir, 'provider.json');
+  const providerPyPath = join(dir, 'provider.py');
+  const hasProviderJson = existsSync(providerJsonPath);
+  const hasProviderPy = existsSync(providerPyPath);
+
+  let provider = null as ReturnType<typeof parseSkillProvider> | null;
+  let providerScript: string | null = null;
+
+  if (hasProviderJson) {
+    let providerRaw: unknown;
+    try {
+      providerRaw = JSON.parse(readFileSync(providerJsonPath, 'utf8'));
+    } catch (err) {
+      throw new SkillManifestError(
+        providerJsonPath,
+        `不是合法 JSON：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    provider = parseSkillProvider(providerRaw, providerJsonPath);
+
+    if (hasProviderPy) {
+      providerScript = providerPyPath;
+    } else {
+      /*
+       * 有声明没有实现。
+       *
+       * 这条必须在加载时就报出来：UI 会把它显示成一个可配置的供应商，用户填完
+       * 几个字段（可能含凭据）之后调用才失败，而那时的报错来自 Python 侧的
+       * ImportError，与「声明写错了」这个真实原因完全对不上。
+       */
+      warnings.push(
+        'provider.json 声明了供应商但目录里没有 provider.py，启用后调用必然失败',
+      );
+    }
+  } else if (hasProviderPy) {
+    // 反过来也要报：光有实现没有声明的话平台无从知道该调哪个函数、要用户填什么
+    warnings.push('目录里有 provider.py 但没有 provider.json，平台不知道该怎么调用它');
+  }
+
   return {
     manifest,
     scope,
@@ -122,6 +164,8 @@ export function loadSkill(dir: string, scope: SkillScope): LoadedSkill {
     instructions: body,
     references: listFiles(join(dir, 'references')),
     scripts: listFiles(join(dir, 'scripts')),
+    provider,
+    providerScript,
     warnings,
   };
 }

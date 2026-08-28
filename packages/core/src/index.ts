@@ -69,6 +69,11 @@ export * from './hostapi/index.js';
 
 export * from './reviewer/index.js';
 
+export * from './memory/index.js';
+
+export { MemoryRepo, normalizeMemoryContent } from './repo/memory.js';
+export type { MemoryKind, MemoryNote, MemoryRepoOptions, MemoryScope } from './repo/memory.js';
+
 export { PlanRepo, planStepId } from './repo/plans.js';
 export type { PlanRecord, PlanStepRecord } from './repo/plans.js';
 

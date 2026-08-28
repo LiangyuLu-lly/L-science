@@ -100,6 +100,13 @@ export interface SubAgentRunnerDeps {
   usage?: UsageRepo;
   routing?: RoutingRepo;
   skills?: SkillManager;
+  /**
+   * 记忆注入段落（需求 16.1）。
+   *
+   * 每次派子 agent 时现取而不是构造时算一次：主 agent 可能刚在这一轮里记下一条
+   * 约定，紧接着就派出子 agent 去执行——那正是这条约定最该生效的时刻。
+   */
+  memory?: () => string;
   /** 子 agent 的工作目录。按 agentId 隔离。 */
   workspaceDir: (agentId: string) => string;
   projectId?: string;
@@ -313,6 +320,25 @@ export class SubAgentRunner {
       '完成时给一段简短陈述：做了什么、产出了哪些制品、有什么需要协调方注意的问题。',
       '做不到时如实说做不到并说明原因，不要产出一个看起来完成了的结果。',
     ];
+
+    /*
+     * 记忆同样要注入子 agent（需求 16.1）。
+     *
+     * 术语约定与既定的方法选择对子 agent 更重要：它看不到父会话的历史，因此
+     * 「本项目被试编号是 S01-S24」这类约定只可能从记忆里来。不注入的结果是
+     * 主 agent 遵守约定而子 agent 不遵守，而两边的产物要拼在同一篇论文里。
+     */
+    const memory = this.#deps.memory?.() ?? '';
+    if (memory.trim() !== '') {
+      parts.push(
+        '',
+        '---',
+        '',
+        '本项目已经记住的约定与背景（它们是既定选择，按它们做）：',
+        '',
+        memory.trim(),
+      );
+    }
 
     if (spec.skillSlug !== undefined && spec.skillSlug !== null) {
       const injection = this.#deps.skills?.inject(spec.skillSlug);

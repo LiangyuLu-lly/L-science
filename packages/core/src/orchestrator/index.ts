@@ -15,6 +15,9 @@ export type { OrchestratorDeps } from './orchestrator.js';
 
 export { executeToolCall, modelMaxOutput, streamModel, truncateForModel } from './agent-runtime.js';
 
+export { buildSystemPrompt } from './system-prompt.js';
+export type { SystemPromptInput } from './system-prompt.js';
+
 export { SubAgentRunner, extractVersionIds } from './subagent.js';
 export type {
   SubAgentHandle,
