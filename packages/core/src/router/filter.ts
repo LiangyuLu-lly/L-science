@@ -17,6 +17,13 @@ import type { ExcludedCandidate, ModelDescriptor, TaskProfile } from '@l-science
 export interface ModelRuntimeState {
   /** 最近一次健康检查的结果。未检查过时视为健康——不能因为没检查就排除。 */
   healthy?: boolean;
+  /**
+   * 健康检查失败的具体原因。
+   *
+   * 「健康检查未通过」对用户毫无帮助——连不上、密钥过期、模型被下线三种情况的
+   * 处置办法完全不同。把探测时拿到的原文带上，用户才知道该改什么。
+   */
+  healthDetail?: string;
   /** 剩余速率余量（0-1）。低于阈值时排除，避免把请求打进必然限流的模型。 */
   rateHeadroom?: number;
   /** 用户是否在设置里禁用了该模型。 */
@@ -96,71 +103,78 @@ export function hardFilter(input: FilterInput): FilterResult {
   const candidates: ModelDescriptor[] = [];
   const excluded: ExcludedCandidate[] = [];
 
+  /*
+   * 统一从这里构造排除记录，`reasonText` 因此不可能漏填。
+   *
+   * 逐处 push 时手写文案的做法迟早会漏一处，而漏掉的表现是界面上冒出一个裸的
+   * 英文原因码——那正是最需要解释的时刻（用户在问「为什么没选它」）。
+   */
+  const exclude = (modelId: string, reason: ExcludedCandidate['reason'], detail?: string): void => {
+    excluded.push({
+      modelId,
+      reason,
+      reasonText: REASON_TEXT[reason],
+      ...(detail === undefined ? {} : { detail }),
+    });
+  };
+
   for (const model of pool) {
     const state = runtime?.get(model.id);
 
     if (state?.userDisabled === true) {
-      excluded.push({ modelId: model.id, reason: 'user-disabled' });
+      exclude(model.id, 'user-disabled');
       continue;
     }
 
     // 凭据检查放在健康检查之前：没凭据时健康检查必然失败，
     // 但报「缺凭据」比报「不健康」可执行得多
     if (state?.hasCredential === false) {
-      excluded.push({
-        modelId: model.id,
-        reason: 'no-credential',
-        detail: `供应商 ${model.providerId} 未配置凭据`,
-      });
+      exclude(model.id, 'no-credential', `供应商 ${model.providerId} 未配置凭据`);
       continue;
     }
 
     if (!supportsModalities(model, profile)) {
-      excluded.push({
-        modelId: model.id,
-        reason: 'modality-unsupported',
-        detail: `需要 ${profile.requiredModalities.join('、')}，该模型支持 ${model.modalities.join('、')}`,
-      });
+      exclude(
+        model.id,
+        'modality-unsupported',
+        `需要 ${profile.requiredModalities.join('、')}，该模型支持 ${model.modalities.join('、')}`,
+      );
       continue;
     }
 
     if (!fitsContext(model, profile)) {
       const needed = profile.estimatedInputTokens + profile.expectedOutputTokens;
-      excluded.push({
-        modelId: model.id,
-        reason: 'context-too-small',
-        detail: `需要 ${String(needed)} token（输入 ${String(profile.estimatedInputTokens)} + 预留输出 ${String(profile.expectedOutputTokens)}），窗口 ${String(model.contextWindow)}、输出上限 ${String(model.maxOutputTokens)}`,
-      });
+      exclude(
+        model.id,
+        'context-too-small',
+        `需要 ${String(needed)} token（输入 ${String(profile.estimatedInputTokens)} + 预留输出 ${String(profile.expectedOutputTokens)}），窗口 ${String(model.contextWindow)}、输出上限 ${String(model.maxOutputTokens)}`,
+      );
       continue;
     }
 
     if (profile.needToolUse && !model.features.toolUse) {
-      excluded.push({ modelId: model.id, reason: 'tool-use-unsupported' });
+      exclude(model.id, 'tool-use-unsupported');
       continue;
     }
 
     if (!satisfiesPolicy(model, profile)) {
-      excluded.push({
-        modelId: model.id,
-        reason: 'policy-mismatch',
-        detail: `会话要求供应商承诺不用于训练，该模型的策略为 ${model.policy.trainingUse}`,
-      });
+      exclude(
+        model.id,
+        'policy-mismatch',
+        `会话要求供应商承诺不用于训练，该模型的策略为 ${model.policy.trainingUse}`,
+      );
       continue;
     }
 
     // 健康状态未知时视为健康：没检查过不等于不可用，
     // 否则冷启动时全部模型都会被排除
     if (state?.healthy === false) {
-      excluded.push({ modelId: model.id, reason: 'unhealthy' });
+      exclude(model.id, 'unhealthy', state.healthDetail);
       continue;
     }
 
     if (state?.rateHeadroom !== undefined && state.rateHeadroom < MIN_RATE_HEADROOM) {
-      excluded.push({
-        modelId: model.id,
-        reason: 'rate-limited',
-        detail: `剩余余量 ${(state.rateHeadroom * 100).toFixed(0)}%`,
-      });
+      exclude(model.id, 'rate-limited', `剩余余量 ${(state.rateHeadroom * 100).toFixed(0)}%`);
       continue;
     }
 

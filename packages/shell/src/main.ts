@@ -86,25 +86,46 @@ function stopBackend(): void {
   backend = null;
 }
 
+/**
+ * 把完整错误信封编进 Error 的 message。
+ *
+ * Electron 的 `ipcMain.handle` 只能把 Error 传回渲染层，且只保留 message。原先
+ * 这里编的是 `code: message`，于是 `detail` 与 `remediation` 全部丢在这一跳——
+ * 而 remediation 存在的唯一目的就是给用户看「下一步该做什么」。整个信封序列化
+ * 成 JSON 并加一个哨兵前缀，渲染层据此还原；Electron 会给 message 加自己的前缀，
+ * 因此必须靠哨兵定位而不是假设 JSON 从头开始。
+ */
+const ERROR_SENTINEL = 'L-SCIENCE-ENVELOPE ';
+
+function encodeEnvelope(envelope: ErrorEnvelope): Error {
+  return new Error(`${ERROR_SENTINEL}${JSON.stringify(envelope)}`);
+}
+
 function registerIpc(): void {
   ipcMain.handle(IPC_INVOKE, async (_event, raw: unknown): Promise<unknown> => {
     // 渲染层是不可信输入源，在主进程侧先校验一遍再转发，
     // 不把「校验」这件事整个外包给后端。
     const parsed = parseRequest(raw);
     if (!parsed.ok) {
-      throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
+      throw encodeEnvelope(parsed.error);
     }
     if (client === null) {
-      throw new Error('internal: 后端未就绪');
+      throw encodeEnvelope({
+        code: 'internal',
+        message: '后端未就绪',
+        remediation: '稍等片刻后重试；若持续如此，请查看控制平面日志。',
+      });
     }
     try {
       return await client.invoke(parsed.value);
     } catch (err) {
       const envelope = err as Partial<ErrorEnvelope>;
-      const code = envelope.code ?? 'internal';
-      const message = envelope.message ?? String(err);
-      // Electron 的 invoke 只能传递 Error，把错误码编进 message 以便渲染层还原。
-      throw new Error(`${code}: ${message}`);
+      throw encodeEnvelope({
+        code: envelope.code ?? 'internal',
+        message: envelope.message ?? String(err),
+        ...(envelope.detail === undefined ? {} : { detail: envelope.detail }),
+        ...(envelope.remediation === undefined ? {} : { remediation: envelope.remediation }),
+      });
     }
   });
 }

@@ -11,7 +11,13 @@
 
 import type { Readable, Writable } from 'node:stream';
 
-import { makeError, parseFrame, type ErrorEnvelope, type EventFrame } from '@l-science/shared';
+import {
+  errResponse,
+  makeError,
+  parseFrame,
+  type ErrorEnvelope,
+  type EventFrame,
+} from '@l-science/shared';
 
 import { Dispatcher } from './dispatcher.js';
 
@@ -181,6 +187,22 @@ export class StdioTransport {
     const parsed = parseFrame(raw);
     if (!parsed.ok) {
       this.#onProtocolError(parsed.error);
+
+      /*
+       * 能认出这是「哪一次请求」时，必须回一条错误响应。
+       *
+       * 只记日志然后丢掉的做法有一个致命后果：调用方的 promise 永远不 settle。
+       * 参数校验失败是最常见的失败之一（UI 版本与后端不一致、字段拼错），而它的
+       * 表现会是界面永久转圈——用户看不到任何错误，开发者也不会想到去翻后端日志。
+       *
+       * 只在 id 是个合法字符串时回复，且不回显任何请求内容：错误信封由
+       * `parseFrame` 生成，只含字段路径与原因，不含值。
+       */
+      const id = (raw as { id?: unknown } | null)?.id;
+      const type = (raw as { type?: unknown } | null)?.type;
+      if (type === 'request' && typeof id === 'string' && id.length > 0 && id.length <= 128) {
+        this.#send(errResponse(id, parsed.error));
+      }
       return;
     }
 

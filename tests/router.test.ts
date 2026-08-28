@@ -680,9 +680,48 @@ describe('决策记录（需求 7.6）', () => {
 
     expect(result.decision.chosenModelId).toBe('ok');
     expect(result.decision.scores).toHaveLength(1);
-    expect(result.decision.excluded).toEqual([{ modelId: 'banned', reason: 'user-disabled' }]);
+    // reasonText 与决策一起落库，渲染层因此不需要自己维护一份原因码到文案的
+    // 映射表，历史记录也能自我解释
+    expect(result.decision.excluded).toEqual([
+      { modelId: 'banned', reason: 'user-disabled', reasonText: '被用户禁用' },
+    ]);
     expect(result.decision.taskType).toBe('stats.reason');
     expect(result.decision.createdAt).toBeGreaterThan(0);
+  });
+
+  it('每个排除项都带人类可读文案，一个不漏', () => {
+    /*
+     * 逐处 push 时手写文案迟早会漏一处，而漏掉的表现是界面上冒出一个裸的英文
+     * 原因码——恰好在用户问「为什么没选它」的时候。这条断言覆盖全部排除分支。
+     */
+    const runtime = new Map<string, ModelRuntimeState>([
+      ['disabled', { userDisabled: true }],
+      ['nokey', { hasCredential: false }],
+      ['sick', { healthy: false }],
+      ['throttled', { rateHeadroom: 0.01 }],
+    ]);
+
+    const result = route({
+      models: [
+        model({ id: 'disabled' }),
+        model({ id: 'nokey' }),
+        model({ id: 'sick' }),
+        model({ id: 'throttled' }),
+        model({ id: 'tiny', contextWindow: 100, maxOutputTokens: 50 }),
+        model({ id: 'blind', modalities: ['text'] }),
+        model({ id: 'ok' }),
+      ],
+      profile: { ...profileOf('stats.reason'), requiredModalities: ['text'] },
+      runtime,
+      explorationRate: 0,
+    });
+
+    expect(result.decision.excluded.length).toBeGreaterThan(0);
+    for (const item of result.decision.excluded) {
+      expect(item.reasonText, `${item.modelId} 缺文案`).toBeTruthy();
+      // 文案不能就是原因码本身
+      expect(item.reasonText).not.toBe(item.reason);
+    }
   });
 
   it('理由说明差距来自哪一项，而不只是「得分最高」', () => {

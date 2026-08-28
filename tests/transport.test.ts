@@ -407,6 +407,64 @@ describe('StdioTransport', () => {
 
     await vi.waitFor(() => expect(h.protocolErrors).toHaveLength(2));
     expect(h.protocolErrors.every((e) => e.code === 'bad_request')).toBe(true);
+    // 这两种帧不回响应：它们是出站方向，对端并没有在等回复，
+    // 回过去只会形成来回弹的噪声
+    expect(h.frames()).toHaveLength(0);
+    await h.close();
+  });
+
+  it('参数不合法的请求会收到错误响应，而不是被静默丢弃', async () => {
+    /*
+     * 这条曾经是个真问题：校验失败只记日志然后 return，调用方的 promise
+     * 永不 settle。参数校验失败是最常见的失败之一（UI 与后端版本不一致、
+     * 字段拼错），而它的表现会是界面永久转圈——用户看不到任何错误，
+     * 开发者也不会想到去翻后端日志。
+     */
+    const h = harness();
+
+    h.send({ v: 1, type: 'request', id: 'bad1', payload: { method: '不存在的方法' } });
+    await vi.waitFor(() => expect(h.frames()).toHaveLength(1));
+
+    const frame = h.frames()[0] as ResponseFrame;
+    expect(frame.type).toBe('response');
+    expect(frame.id).toBe('bad1');
+    expect(frame.ok).toBe(false);
+    if (frame.ok) return;
+    expect(frame.error.code).toBe('bad_request');
+    // 协议错误照样上报，日志与响应两条路都要有
+    expect(h.protocolErrors).toHaveLength(1);
+    await h.close();
+  });
+
+  it('字段类型错误的请求也会收到错误响应', async () => {
+    const h = harness();
+
+    h.send({
+      v: 1,
+      type: 'request',
+      id: 'bad2',
+      payload: { method: 'project.create', name: 12345 },
+    });
+    await vi.waitFor(() => expect(h.frames()).toHaveLength(1));
+
+    const frame = h.frames()[0] as ResponseFrame;
+    expect(frame.id).toBe('bad2');
+    expect(frame.ok).toBe(false);
+    if (frame.ok) return;
+    // 要指出是哪个字段，否则用户只知道「参数不合法」
+    expect(frame.error.detail).toContain('name');
+    await h.close();
+  });
+
+  it('认不出 id 的坏帧仍然只记日志，不凭空造响应', async () => {
+    const h = harness();
+
+    // id 缺失、id 不是字符串、id 超长：三种都无法对应到某次调用
+    h.send({ v: 1, type: 'request', payload: { method: 'app.status' } });
+    h.send({ v: 1, type: 'request', id: 42, payload: { method: 'app.status' } });
+    h.send({ v: 1, type: 'request', id: 'x'.repeat(200), payload: { method: 'app.status' } });
+
+    await vi.waitFor(() => expect(h.protocolErrors).toHaveLength(3));
     expect(h.frames()).toHaveLength(0);
     await h.close();
   });

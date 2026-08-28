@@ -16,7 +16,14 @@
  *    重新打开时它消失了——用户会怀疑自己看到的东西是不是真的发生过。
  */
 
-import type { ModelDescriptor, TaskType, ToolOutput, TurnEvent, Usage } from '@l-science/shared';
+import type {
+  ModelDescriptor,
+  RoutingOverride,
+  TaskType,
+  ToolOutput,
+  TurnEvent,
+  Usage,
+} from '@l-science/shared';
 import type { AdapterContext, AdapterRegistry, ChatMessage, ChatChunk } from '@l-science/adapters';
 
 import type { ConversationRepo, MessageRepo, ToolCallRepo } from '../repo/conversations.js';
@@ -112,7 +119,11 @@ export class Orchestrator {
    * 返回 AsyncIterable 而不是 Promise：调用方需要边跑边把事件推给渲染层，
    * 等整个回合结束再一次性返回会让流式输出这个核心体验消失。
    */
-  startTurn(conversationId: string, userText: string): AsyncIterable<TurnEvent> {
+  startTurn(
+    conversationId: string,
+    userText: string,
+    routing: RoutingOverride = {},
+  ): AsyncIterable<TurnEvent> {
     const conversation = this.#deps.conversations.get(conversationId);
     if (conversation === null) throw new Error(`会话不存在：${conversationId}`);
     if (this.#active.has(conversationId)) {
@@ -143,7 +154,7 @@ export class Orchestrator {
       content: { kind: 'text', text: userText },
     });
 
-    return this.#runTurn(conversationId, userText, controller, userMessage.id);
+    return this.#runTurn(conversationId, userText, controller, userMessage.id, routing);
   }
 
   /**
@@ -202,6 +213,7 @@ export class Orchestrator {
     userText: string,
     controller: AbortController,
     userMessageId: string,
+    routing: RoutingOverride,
   ): AsyncGenerator<TurnEvent> {
     const summary: TurnSummary = {
       stopReason: 'end-turn',
@@ -238,6 +250,7 @@ export class Orchestrator {
           history,
           signal: controller.signal,
           userMessageId,
+          routing,
         });
 
         // 路由决策也是事件：用户需要能看到为什么选了这个模型
@@ -358,6 +371,7 @@ export class Orchestrator {
     history: readonly ChatMessage[];
     signal: AbortSignal;
     userMessageId: string;
+    routing: RoutingOverride;
   }): Promise<
     | { kind: 'no-model'; detail: string; decisionEvent: TurnEvent | null }
     | {
@@ -378,10 +392,29 @@ export class Orchestrator {
     // 中文实际更接近 1.5 字符 1 token，因此这个估算对中文偏低。
     // 偏低的方向是安全的：它只会让路由选一个窗口更大的模型
     const historyChars = input.history.reduce((n, m) => n + m.content.length, 0);
-    const profile = buildTaskProfile(inferTaskType(input.history), {
+    const override = input.routing;
+
+    /*
+     * 用户的覆盖优先于推断（需求 7.14）。
+     *
+     * 任务类型也允许覆盖：`inferTaskType` 是关键词匹配，覆盖率有限（它会漏掉
+     * 「做个柱状图」这类说法）。用户明确说了这是什么任务时，猜测就不该再参与。
+     */
+    const profile = buildTaskProfile(override.taskType ?? inferTaskType(input.history), {
       estimatedInputTokens: Math.ceil(historyChars / 3),
       expectedOutputTokens: 4096,
       needToolUse: toolSchemas.length > 0,
+      ...(override.weightOverrides === undefined
+        ? {}
+        : { weightOverrides: override.weightOverrides }),
+      ...(override.preferLocal === undefined ? {} : { preferLocal: override.preferLocal }),
+      ...(override.requireTrainingOptOut === undefined
+        ? {}
+        : { requireTrainingOptOut: override.requireTrainingOptOut }),
+      ...(override.costBudget === undefined ? {} : { costBudget: override.costBudget }),
+      ...(override.latencyBudgetMs === undefined
+        ? {}
+        : { latencyBudgetMs: override.latencyBudgetMs }),
     });
 
     const routed = route({
@@ -389,6 +422,7 @@ export class Orchestrator {
       profile,
       runtime: view.runtime,
       ...(this.#deps.experience === undefined ? {} : { experience: this.#deps.experience() }),
+      ...(override.forcedModelId === undefined ? {} : { forcedModelId: override.forcedModelId }),
     });
 
     const decisionEvent: TurnEvent = { kind: 'routing.decision', decision: routed.decision };

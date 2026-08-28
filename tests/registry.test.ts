@@ -283,3 +283,112 @@ describe('路由视图', () => {
     expect(view().models.map((m) => m.id)).toContain('a');
   });
 });
+
+describe('凭据绑定', () => {
+  beforeEach(() => {
+    repo.upsertProvider(provider({ credentialRef: null }));
+  });
+
+  it('单独绑定引用名，不动其他字段', () => {
+    repo.setProviderCredentialRef('deepseek', 'provider:deepseek');
+    const p = repo.getProvider('deepseek');
+    expect(p?.credentialRef).toBe('provider:deepseek');
+    // 关键：其他字段没被顺带改写。走 upsertProvider 整条写回的做法会在
+    // 并发设置时互相覆盖，而丢失是静默的
+    expect(p?.name).toBe('DeepSeek');
+    expect(p?.enabled).toBe(true);
+    expect(p?.baseUrl).toBe('https://api.deepseek.com');
+  });
+
+  it('绑定后可解绑', () => {
+    repo.setProviderCredentialRef('deepseek', 'provider:deepseek');
+    expect(repo.setProviderCredentialRef('deepseek', null)).toBe(true);
+    expect(repo.getProvider('deepseek')?.credentialRef).toBeNull();
+  });
+
+  it('供应商不存在时返回 false 而不是静默成功', () => {
+    expect(repo.setProviderCredentialRef('nope', 'x')).toBe(false);
+  });
+
+  it('改凭据与改启用状态互不覆盖', () => {
+    repo.setProviderEnabled('deepseek', false);
+    repo.setProviderCredentialRef('deepseek', 'provider:deepseek');
+    const p = repo.getProvider('deepseek');
+    expect(p?.enabled).toBe(false);
+    expect(p?.credentialRef).toBe('provider:deepseek');
+  });
+});
+
+describe('健康失败原因传给路由', () => {
+  beforeEach(() => {
+    repo.upsertProvider(provider());
+    sync.sync('deepseek', [descriptor('a')]);
+  });
+
+  it('不健康时把 detail 带进运行时状态', () => {
+    repo.recordHealth('a', {
+      ok: false,
+      latencyMs: 0,
+      checkedAt: Date.now(),
+      detail: 'connect ECONNREFUSED 127.0.0.1:11434',
+    });
+
+    const state = buildRouterView({ repo, hasCredential: () => true }).runtime.get('a');
+    expect(state?.healthy).toBe(false);
+    // 「健康检查未通过」无法指导任何操作，连不上 11434 可以
+    expect(state?.healthDetail).toContain('ECONNREFUSED');
+  });
+
+  it('健康时不带 detail', () => {
+    repo.recordHealth('a', { ok: true, latencyMs: 200, checkedAt: Date.now(), detail: 'ok' });
+    const state = buildRouterView({ repo, hasCredential: () => true }).runtime.get('a');
+    expect(state?.healthDetail).toBeUndefined();
+  });
+
+  it('过期的失败结果连 detail 一起不采信', () => {
+    repo.recordHealth('a', {
+      ok: false,
+      latencyMs: 0,
+      checkedAt: Date.now() - HEALTH_TTL_MS - 1000,
+      detail: '早就过期了',
+    });
+
+    const state = buildRouterView({ repo, hasCredential: () => true }).runtime.get('a');
+    expect(state?.healthy).toBeUndefined();
+    expect(state?.healthDetail).toBeUndefined();
+  });
+});
+
+describe('本地模型不需要凭据', () => {
+  /*
+   * 这条曾经是个真 bug：本地供应商没有 credentialRef，hasCredential(null) 只能
+   * 为假，于是每个本地模型都被硬过滤判成「缺少凭据」。有云端模型可选时完全看不
+   * 出来——云端照样被选中，症状只是「本地模型一次都没用过」。
+   */
+  beforeEach(() => {
+    repo.upsertProvider(
+      provider({ id: 'ollama', name: 'Ollama', adapter: 'ollama', credentialRef: null }),
+    );
+  });
+
+  it('本地模型在没有任何凭据时仍视为可用', () => {
+    sync.sync('ollama', [{ ...descriptor('qwen3:4b'), local: true }]);
+    // hasCredential 恒假，模拟「一条凭据都没存」
+    const view = buildRouterView({ repo, hasCredential: () => false });
+    expect(view.runtime.get('qwen3:4b')?.hasCredential).toBe(true);
+  });
+
+  it('云端模型在没有凭据时仍判为缺凭据', () => {
+    sync.sync('ollama', [{ ...descriptor('cloud-model'), local: false }]);
+    const view = buildRouterView({ repo, hasCredential: () => false });
+    expect(view.runtime.get('cloud-model')?.hasCredential).toBe(false);
+  });
+
+  it('本地模型仍然受用户禁用与供应商禁用约束', () => {
+    // 「不需要凭据」不等于「不受控」：用户关掉它就该关掉
+    sync.sync('ollama', [{ ...descriptor('qwen3:4b'), local: true }]);
+    repo.setModelEnabled('qwen3:4b', false);
+    const view = buildRouterView({ repo, hasCredential: () => false });
+    expect(view.runtime.get('qwen3:4b')?.userDisabled).toBe(true);
+  });
+});

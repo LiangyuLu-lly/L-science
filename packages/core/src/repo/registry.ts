@@ -171,6 +171,23 @@ export class RegistryRepo {
   }
 
   /**
+   * 绑定或解绑凭据引用名。
+   *
+   * 单独一个方法而不是让调用方走 `getProvider` → 改字段 → `upsertProvider`：
+   * 那条路要把整条记录读出来再写回去，两个并发的设置操作（比如一边改凭据、
+   * 一边启用/禁用）会互相覆盖对方的改动，而这种丢失是静默的。
+   *
+   * 传 null 表示解绑。**存的始终是引用名，密钥永不进数据库。**
+   */
+  setProviderCredentialRef(id: string, credentialRef: string | null): boolean {
+    return (
+      this.#db
+        .prepare('UPDATE providers SET credential_ref = ? WHERE id = ?')
+        .run(credentialRef, id).changes > 0
+    );
+  }
+
+  /**
    * 删除供应商。
    *
    * 其模型由外键 ON DELETE CASCADE 一并删除。凭据**不删**——用户可能只是
@@ -349,13 +366,29 @@ export function buildRouterView(input: {
       // 供应商被禁用等价于其下所有模型被禁用。不这样处理的话，
       // 用户在设置里关掉一家供应商后它的模型仍会被选中
       userDisabled: !record.enabled || provider?.enabled === false,
-      hasCredential: hasCredential(provider?.credentialRef ?? null),
+      /*
+       * 本地模型无条件视为凭据就绪。
+       *
+       * 本机推理没有账号也没有 key，而 `hasCredential(null)` 只能是假——于是
+       * 每一个本地模型都会因「缺少凭据」被硬过滤掉，「本地优先」这个开关变成
+       * 装饰品。这个问题在有云端模型可选时完全看不出来：云端模型照样被选中，
+       * 结果就是「本地模型一次都没被用过」，而没人会把它归因到凭据检查。
+       *
+       * 已知边界：自建的远端推理服务（无鉴权的 vLLM）`local` 为假，仍会被判
+       * 缺凭据。那种情况下界面上会明确显示「缺少凭据」，用户可以存一条占位
+       * 凭据绑上去——是可见且可操作的，与本地模型的静默消失不同。
+       */
+      hasCredential: record.descriptor.local || hasCredential(provider?.credentialRef ?? null),
     };
 
     // 过期的健康结果不采信：五分钟前不健康不代表现在不健康，
     // 拿旧结果做硬过滤会让恢复了的供应商长期被排除
     if (record.health !== null && now - record.health.checkedAt <= HEALTH_TTL_MS) {
       state.healthy = record.health.ok;
+      // 失败原因带给路由，让「为什么排除了它」能说到具体成因而不止是「不健康」
+      if (!record.health.ok && record.health.detail !== undefined) {
+        state.healthDetail = record.health.detail;
+      }
     }
 
     runtime.set(record.descriptor.id, state);

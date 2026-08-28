@@ -13,6 +13,7 @@ export {
   errorCodeSchema,
   errorEnvelopeSchema,
   requestSchema,
+  routingOverrideSchema,
   requestFrameSchema,
   responseFrameSchema,
   eventFrameSchema,
@@ -33,6 +34,7 @@ export type {
   Request,
   RequestMethod,
   RequestOf,
+  RoutingOverride,
   RequestFrame,
   ResponseFrame,
   EventFrame,
@@ -144,6 +146,17 @@ export interface ExcludedCandidate {
     | 'policy-mismatch'
     | 'no-credential';
   detail?: string;
+  /**
+   * `reason` 的人类可读说明，由路由层填充。
+   *
+   * 随决策一起落库、一起推给 UI，而不是让渲染层各自维护一份原因码到文案的
+   * 映射表。两个理由：新增一种排除原因时不必同步改多处（漏改的表现是界面上
+   * 出现一个裸的英文原因码），以及历史决策记录能自我解释——事后回看半年前
+   * 为什么没选某个模型时，不依赖当时那版文案表还在。
+   *
+   * 可选是为了兼容此字段出现之前落库的决策记录。
+   */
+  reasonText?: string;
 }
 
 export interface RoutingDecision {

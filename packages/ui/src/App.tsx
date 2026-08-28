@@ -12,6 +12,8 @@ import { ApprovalCard } from './components/ApprovalCard.js';
 import { ArtifactsView } from './components/ArtifactsView.js';
 import { ChatView } from './components/ChatView.js';
 import { IsolationBadge } from './components/IsolationBadge.js';
+import { RoutingPanel } from './components/RoutingPanel.js';
+import { SettingsView } from './components/SettingsView.js';
 import { ToolsPanel } from './components/ToolsPanel.js';
 import { TurnUsageBar, UsagePanel } from './components/UsagePanel.js';
 import {
@@ -20,22 +22,26 @@ import {
   decideApproval,
   listConversations,
   listProjects,
+  TASK_LABEL,
   type Conversation,
   type GrantScope,
   type Project,
+  type RoutingOverride,
+  type TaskType,
 } from './lib/api.js';
 import { hasBackend } from './lib/backend.js';
 import { useBackend } from './lib/useBackend.js';
 import { useTurn } from './lib/useTurn.js';
 
-type ViewId = 'chat' | 'artifacts' | 'usage' | 'tools' | 'settings';
+type ViewId = 'chat' | 'artifacts' | 'routing' | 'usage' | 'tools' | 'settings';
 
 const VIEWS: ReadonlyArray<{ id: ViewId; label: string; ready: boolean }> = [
   { id: 'chat', label: '会话', ready: true },
   { id: 'artifacts', label: 'Artifacts', ready: true },
+  { id: 'routing', label: '模型路由', ready: true },
   { id: 'usage', label: '用量与成本', ready: true },
   { id: 'tools', label: '工具与环境', ready: true },
-  { id: 'settings', label: '设置', ready: false },
+  { id: 'settings', label: '设置', ready: true },
 ];
 
 const STATE_LABEL: Record<string, string> = {
@@ -196,6 +202,51 @@ function Composer({
   );
 }
 
+/**
+ * 生效中的路由覆盖提示条。
+ *
+ * 覆盖是在另一个视图里设的，切回会话后如果界面上毫无痕迹，用户就会以为路由
+ * 还是自动的，然后对「怎么选了这个模型」感到莫名——尤其是强制指定模型这种
+ * 会改变成本的设置。
+ */
+function OverrideBar({
+  override,
+  onClear,
+  onOpenSettings,
+}: {
+  override: RoutingOverride;
+  onClear: () => void;
+  onOpenSettings: () => void;
+}): React.JSX.Element | null {
+  const parts: string[] = [];
+  if (override.forcedModelId !== undefined) parts.push(`强制用 ${override.forcedModelId}`);
+  if (override.taskType !== undefined) {
+    parts.push(`任务按「${TASK_LABEL[override.taskType as TaskType] ?? override.taskType}」`);
+  }
+  if (override.weightOverrides !== undefined) parts.push('自定义权重');
+  if (override.preferLocal === true) parts.push('优先本机');
+  if (override.requireTrainingOptOut === true) parts.push('仅不做训练的模型');
+  if (override.costBudget !== undefined) parts.push(`成本上限 ${String(override.costBudget)}`);
+  if (override.latencyBudgetMs !== undefined) {
+    parts.push(`延迟上限 ${String(override.latencyBudgetMs)}ms`);
+  }
+
+  if (parts.length === 0) return null;
+
+  return (
+    <p className="obar" role="status">
+      <span className="obar__label">下一条消息的路由覆盖</span>
+      <span className="obar__items">{parts.join('　·　')}</span>
+      <button type="button" className="btn btn--small" onClick={onOpenSettings}>
+        调整
+      </button>
+      <button type="button" className="btn btn--small btn--deny" onClick={onClear}>
+        取消覆盖
+      </button>
+    </p>
+  );
+}
+
 function BackendPanel(): React.JSX.Element {
   const { state, status, error, attempts, retryNow } = useBackend();
 
@@ -248,6 +299,14 @@ export function App(): React.JSX.Element {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  /**
+   * 下一条消息的路由覆盖（需求 7.14）。
+   *
+   * 放在 App 而不是路由面板里：设置发生在路由面板，发送发生在会话视图，两处
+   * 必须看到同一份状态。发送后清空——按回合而不是按会话，否则用户改一次就得
+   * 记得改回来，忘了会在后续几十次廉价调用上一直付高价。
+   */
+  const [routingOverride, setRoutingOverride] = useState<RoutingOverride>({});
 
   const turn = useTurn(conversationId);
   // 连接状态放在头部而不是只在「工具与环境」页里。后端挂掉时对话会静默停止
@@ -437,19 +496,41 @@ export function App(): React.JSX.Element {
                 decisions={turn.decisions}
                 running={turn.running}
               />
+              {/*
+                有覆盖在生效时必须在输入区旁边说出来。藏在路由面板里的话，
+                用户设完切回会话，会以为路由还是自动的——然后对结果感到莫名
+              */}
+              <OverrideBar
+                override={routingOverride}
+                onClear={() => setRoutingOverride({})}
+                onOpenSettings={() => setView('routing')}
+              />
               {/* 本轮累计用量常驻在输入区上方（需求 18.4） */}
               <TurnUsageBar usage={turn.lastUsage} />
               <Composer
                 disabled={composerBlockedReason !== null}
                 disabledReason={composerBlockedReason}
                 running={turn.running}
-                onSend={(text) => void turn.send(text)}
+                onSend={(text) => {
+                  void turn.send(text, routingOverride);
+                  // 覆盖是一次性的，发出去就清掉
+                  if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
+                }}
                 onInterrupt={() => void turn.interrupt()}
               />
             </>
           )}
 
           {view === 'artifacts' && <ArtifactsView projectId={projectId} />}
+
+          {view === 'routing' && (
+            <RoutingPanel
+              projectId={projectId}
+              conversationId={conversationId}
+              override={routingOverride}
+              onOverrideChange={setRoutingOverride}
+            />
+          )}
 
           {view === 'usage' && <UsagePanel projectId={projectId} conversationId={conversationId} />}
 
@@ -459,6 +540,8 @@ export function App(): React.JSX.Element {
               <BackendPanel />
             </>
           )}
+
+          {view === 'settings' && <SettingsView />}
         </main>
       </div>
     </div>

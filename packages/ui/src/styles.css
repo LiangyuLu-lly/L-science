@@ -1730,3 +1730,751 @@ code {
 .isolation__proxy-note strong {
   color: #ffb4a2;
 }
+
+/* 设置：供应商、模型与凭据（任务 11.1b） ---------------------------- */
+
+.chip {
+  display: inline-block;
+  margin-inline-end: 6px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #1e2230;
+  color: var(--fg-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.panel__busy {
+  margin-inline-start: 10px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.pcard {
+  margin-block-start: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #14171e;
+}
+
+/* 被禁用的供应商仍然完整显示，只是压暗。隐藏它会让用户找不到自己关掉的那个 */
+.pcard--off {
+  opacity: 0.62;
+}
+
+.pcard__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.pcard__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.pcard__name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pcard__id code {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.pcard__warn {
+  padding: 1px 8px;
+  border: 1px solid #5f382f;
+  border-radius: 10px;
+  background: #241a18;
+  color: #ffb4a2;
+  font-size: 11px;
+}
+
+.pcard__meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 14px;
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+.pcard__meta dt {
+  color: var(--fg-dim);
+}
+
+.pcard__meta dd {
+  margin: 0;
+}
+
+.pcard__hint,
+.mrow__hint {
+  margin-inline-start: 8px;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.pcard__credential {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-block-start: 12px;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--border);
+}
+
+.pcard__cred-label {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.pcard__cred-state {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.pcard__cred-state--ok {
+  color: #7ee2a8;
+}
+
+/* 绑了一个不存在的引用名是个静默故障：界面看着配好了，模型全被排除 */
+.pcard__cred-state--bad {
+  color: #ffb4a2;
+}
+
+.pcard__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-block-start: 12px;
+}
+
+.pcard__busy {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.pcard__notice {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border: 1px solid #2f5f45;
+  border-radius: 6px;
+  background: #162019;
+  color: #7ee2a8;
+  font-size: 12px;
+}
+
+.pcard__error {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border: 1px solid #5f382f;
+  border-radius: 6px;
+  background: #201716;
+  color: #ffb4a2;
+  font-size: 12px;
+}
+
+.pcard__models {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mrow {
+  margin-block-start: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.mrow--off {
+  opacity: 0.58;
+}
+
+.mrow__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mrow__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.mrow__name code {
+  font-size: 13px;
+}
+
+.mrow__alias {
+  margin-inline-start: 8px;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.mrow__meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 14px;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.mrow__meta dt {
+  color: var(--fg-dim);
+}
+
+.mrow__meta dd {
+  margin: 0;
+}
+
+.mrow__none {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.mrow__error {
+  margin: 8px 0 0;
+  color: #ffb4a2;
+  font-size: 11px;
+  word-break: break-word;
+}
+
+.mrow__strengths {
+  margin-block-start: 8px;
+}
+
+.mrow__strengths summary {
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+/* 健康徽章。颜色之外必须有文字，不只靠颜色传达状态 */
+.hbadge {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.hbadge--unknown {
+  color: var(--fg-dim);
+}
+
+.hbadge--ok {
+  border-color: #2f5f45;
+  background: #162019;
+  color: #7ee2a8;
+}
+
+.hbadge--bad {
+  border-color: #5f382f;
+  background: #201716;
+  color: #ffb4a2;
+}
+
+.hbadge--stale {
+  opacity: 0.72;
+}
+
+.hbadge__stale {
+  margin-inline-start: 6px;
+  color: var(--fg-dim);
+}
+
+.strengths {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.strengths__row {
+  display: grid;
+  grid-template-columns: 84px 1fr 32px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.strengths__name {
+  color: var(--fg-dim);
+}
+
+.strengths__bar-wrap {
+  block-size: 6px;
+  border-radius: 3px;
+  background: #1e2230;
+}
+
+.strengths__bar {
+  display: block;
+  block-size: 6px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.strengths__value {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.creds {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.creds__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-block-end: 1px solid var(--border);
+}
+
+.creds__ref {
+  font-size: 12px;
+}
+
+.creds__fp {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.creds__used {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.cred-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+  margin-block-start: 14px;
+  padding-block-start: 12px;
+  border-block-start: 1px solid var(--border);
+}
+
+.cred-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-inline-size: 240px;
+}
+
+.cred-form__field label {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.cred-form__field input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.cred-form__hint {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+/* 路由决策面板（任务 11.11） ---------------------------------------- */
+
+.ddetail__reason {
+  margin: 0;
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.ddetail__estimate {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.ddetail__hint {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.matrix-wrap {
+  overflow-x: auto;
+  margin-block-start: 12px;
+}
+
+.matrix {
+  border-collapse: collapse;
+  inline-size: 100%;
+  font-size: 12px;
+}
+
+.matrix caption {
+  margin-block-end: 6px;
+  color: var(--fg-dim);
+  text-align: start;
+  font-size: 11px;
+}
+
+.matrix th,
+.matrix td {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.matrix thead th {
+  background: #1a1e27;
+  text-align: center;
+  font-weight: 500;
+}
+
+.matrix tbody th {
+  color: var(--fg-dim);
+  text-align: start;
+  font-weight: 400;
+}
+
+.matrix__winner {
+  border-color: #2f5f45;
+  background: #162019;
+}
+
+.matrix__meta,
+.matrix__chosen {
+  display: block;
+  color: var(--fg-dim);
+  font-size: 10px;
+}
+
+.matrix__chosen {
+  color: #7ee2a8;
+}
+
+.matrix__total td {
+  font-weight: 600;
+}
+
+/* 缺项与 0 分是两件事，压暗以示区别 */
+.matrix__absent {
+  color: #4a505e;
+}
+
+.matrix__info {
+  color: var(--fg-dim);
+}
+
+.matrix__info-tag {
+  margin-inline-start: 6px;
+  font-size: 10px;
+}
+
+.excluded {
+  margin-block-start: 14px;
+}
+
+.excluded__title {
+  margin: 0 0 6px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.excluded__groups,
+.excluded__models {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.excluded__group {
+  margin-block-start: 8px;
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid var(--border);
+}
+
+.excluded__reason {
+  margin: 0;
+  font-size: 12px;
+}
+
+.excluded__count {
+  margin-inline-start: 8px;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.excluded__models li {
+  margin-block-start: 2px;
+  font-size: 11px;
+}
+
+.excluded__detail {
+  margin-inline-start: 8px;
+  color: var(--fg-dim);
+  word-break: break-word;
+}
+
+.routing__empty {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid #5f5a2f;
+  border-radius: 6px;
+  background: #1c1a12;
+  color: #e2d27e;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.rtry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-block-start: 12px;
+}
+
+.rtry__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-inline-size: 250px;
+  max-inline-size: 330px;
+}
+
+.rtry__field label {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.rtry__field select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.rtry__hint {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.rtry__flags {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.rtry__flags legend {
+  padding-inline: 4px;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.rtry__flags label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.rtry__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-block-start: 14px;
+}
+
+.rtry__badge {
+  padding: 1px 8px;
+  border: 1px solid #5f5a2f;
+  border-radius: 10px;
+  background: #1c1a12;
+  color: #e2d27e;
+  font-size: 11px;
+}
+
+.weights__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.weights__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.weights__state {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.weights__list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.weights__row {
+  display: grid;
+  grid-template-columns: 96px 1fr 34px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+/* 归零的维度要看得出来：那是「这个任务完全不看它」的显式表达 */
+.weights__row--zero .weights__label {
+  color: #4a505e;
+  text-decoration: line-through;
+}
+
+.weights__label {
+  color: var(--fg-dim);
+}
+
+.weights__value {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.weights__hint {
+  margin: 10px 0 0;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.rhist {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rhist__item {
+  margin-block-start: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.rhist__toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  inline-size: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: start;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.rhist__toggle:hover {
+  background: #1a1e27;
+}
+
+.rhist__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.rhist__time {
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.rhist__task {
+  color: var(--fg-dim);
+}
+
+.rhist__model {
+  flex: 1;
+}
+
+.rhist__body {
+  padding: 0 12px 12px;
+}
+
+.rhist__feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-block-start: 12px;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--border);
+}
+
+.rhist__feedback-label {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.rhist__feedback-done {
+  color: #7ee2a8;
+  font-size: 11px;
+}
+
+/* 生效中的路由覆盖提示条 -------------------------------------------- */
+
+.obar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 6px 12px;
+  border: 1px solid #5f5a2f;
+  border-radius: 6px;
+  background: #1c1a12;
+  font-size: 12px;
+}
+
+.obar__label {
+  color: #e2d27e;
+  font-weight: 600;
+}
+
+.obar__items {
+  flex: 1;
+  color: var(--fg);
+}

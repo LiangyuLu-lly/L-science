@@ -8,7 +8,8 @@
 import { useEffect, useRef, useState } from 'react';
 
 import type { ChatItem, ToolCallView } from '../lib/useTurn.js';
-import type { RoutingDecision, Usage } from '../lib/api.js';
+import { TASK_LABEL, type RoutingDecision, type TaskType, type Usage } from '../lib/api.js';
+import { DecisionDetail } from './RoutingPanel.js';
 import { ToolCard } from './ToolCard.js';
 
 const ROLE_LABEL: Record<ChatItem['role'], string> = {
@@ -98,10 +99,15 @@ function MessageItem({ item }: { item: ChatItem }): React.JSX.Element {
   );
 }
 
-/** 路由决策的可解释展示（需求 7.6、任务 11.11 的最小版）。 */
+/**
+ * 路由决策卡片（需求 7.6）。
+ *
+ * 详情部分复用路由面板里的 `DecisionDetail`：同一次决策在会话流与决策面板里
+ * 显示不同的信息量，会让用户以为那是两件不同的事，也会让「为什么不是第二名」
+ * 这个问题在会话流里答不上来。
+ */
 function DecisionCard({ decision }: { decision: RoutingDecision }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
-  const winner = decision.scores[0];
 
   return (
     <div className="decision">
@@ -111,50 +117,16 @@ function DecisionCard({ decision }: { decision: RoutingDecision }): React.JSX.El
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
       >
-        <span className="decision__task">{decision.taskType}</span>
+        <span className="decision__task">
+          {TASK_LABEL[decision.taskType as TaskType] ?? decision.taskType}
+        </span>
         <span className="decision__model">{decision.chosenModelId ?? '无可用模型'}</span>
         <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
       </button>
 
       {expanded && (
         <div className="decision__detail">
-          <p className="decision__reason">{decision.reason}</p>
-
-          {winner !== undefined && (
-            <table className="decision__scores">
-              <caption>得分构成</caption>
-              <thead>
-                <tr>
-                  <th scope="col">项</th>
-                  <th scope="col">值</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(winner.breakdown).map(([key, value]) => (
-                  <tr key={key}>
-                    <th scope="row">{key}</th>
-                    <td>{value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {decision.excluded.length > 0 && (
-            <section className="decision__excluded">
-              <h4>被排除的模型</h4>
-              <ul>
-                {decision.excluded.map((e) => (
-                  <li key={e.modelId}>
-                    <code>{e.modelId}</code>：{e.reason}
-                    {e.detail !== undefined && (
-                      <span className="decision__excluded-detail">{e.detail}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
+          <DecisionDetail decision={decision} />
         </div>
       )}
     </div>

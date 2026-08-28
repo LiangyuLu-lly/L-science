@@ -26,7 +26,14 @@ import { schemaVersion, sqliteVersion } from './db.js';
 import { ConversationBusyError, Orchestrator } from './orchestrator/index.js';
 import { ApprovalRepo } from './repo/approvals.js';
 import { GrantRepo } from './repo/grants.js';
-import { RegistryRepo, buildRouterView } from './repo/registry.js';
+import {
+  RegistryRepo,
+  RegistrySync,
+  buildRouterView,
+  type ModelHealth,
+  type ProviderRecord,
+} from './repo/registry.js';
+import { buildTaskProfile, route } from './router/index.js';
 import { RoutingRepo } from './repo/routing.js';
 import { UsageRepo } from './repo/usage.js';
 import { isolationStrength } from './sandbox/backend.js';
@@ -190,12 +197,46 @@ function main(): void {
   const capabilities = detectCapabilities();
   const adapters = createDefaultRegistry();
 
+  /*
+   * 供应商与模型注册表在**应用库**里，与项目无关：一份凭据配置服务所有项目。
+   * 因此只需要一个实例，不像用量与路由记录那样按项目分。
+   */
+  const modelRegistry = new RegistryRepo(store.db);
+  const modelSync = new RegistrySync(store.db, modelRegistry);
+
+  /**
+   * 组装某个供应商的适配器上下文。
+   *
+   * 编排器（发起对话）与设置页（同步模型、健康检查）都需要它。写成一处共享而
+   * 不是各写一份：两份实现分歧的表现是「聊天能用但设置页里健康检查一直失败」，
+   * 而这种不一致会被当成供应商侧的问题去排查。
+   *
+   * 返回 null 表示这家供应商还不能用（未登记或没有基地址）。
+   */
+  const adapterContextFor = (providerId: string): { baseUrl: string; apiKey?: string } | null => {
+    const provider = modelRegistry.getProvider(providerId);
+    if (provider === null || provider.baseUrl === null) return null;
+    // 两个条件都要查：库文件不存在时没什么可读，DPAPI 不可用时读会抛错，
+    // 而这里抛出去会变成一句「internal」，掩盖掉「这台机器存不了凭据」这个事实
+    const apiKey =
+      provider.credentialRef === null || !vault.available || !vault.exists
+        ? undefined
+        : (vault.get(provider.credentialRef) ?? undefined);
+    return { baseUrl: provider.baseUrl, ...(apiKey === undefined ? {} : { apiKey }) };
+  };
+
+  /** 路由视图。设置页与试算都要用，凭据存在性的判定必须与编排器一致。 */
+  const routerViewNow = (): ReturnType<typeof buildRouterView> =>
+    buildRouterView({
+      repo: modelRegistry,
+      hasCredential: (ref) => ref !== null && vault.available && vault.exists && vault.has(ref),
+    });
+
   const orchestratorFor = (projectId: string): Orchestrator => {
     const existing = orchestrators.get(projectId);
     if (existing !== undefined) return existing;
 
     const project = openProject(store, projectId);
-    const registryRepo = new RegistryRepo(store.db);
     const artifactStore = new ArtifactStore(project.db, project.paths.blobs);
     // 用量与路由记录都在项目库里：成本要按项目汇总，而决策要与该项目的
     // 会话关联
@@ -240,20 +281,8 @@ function main(): void {
       // 每次路由都重新汇总反馈：缓存它会让刚刚产生的信号在下一次决策时
       // 不生效，而「用户重试后立刻换个模型」正是反馈闭环最该起作用的时刻
       experience: () => routingRepo.experience(),
-      routerView: () =>
-        buildRouterView({
-          repo: registryRepo,
-          hasCredential: (ref) => ref !== null && vault.exists && vault.has(ref),
-        }),
-      adapterContext: (providerId) => {
-        const provider = registryRepo.getProvider(providerId);
-        if (provider === null || provider.baseUrl === null) return null;
-        const apiKey =
-          provider.credentialRef === null || !vault.exists
-            ? undefined
-            : (vault.get(provider.credentialRef) ?? undefined);
-        return { baseUrl: provider.baseUrl, ...(apiKey === undefined ? {} : { apiKey }) };
-      },
+      routerView: routerViewNow,
+      adapterContext: adapterContextFor,
       workspaceDir: (conversationId) => {
         // 每个会话一个子目录，避免两个会话互相覆盖同名文件
         const dir = joinPath(project.paths.workspace, conversationId);
@@ -287,7 +316,7 @@ function main(): void {
 
     let events: AsyncIterable<TurnEvent>;
     try {
-      events = orchestrator.startTurn(req.conversationId, req.text);
+      events = orchestrator.startTurn(req.conversationId, req.text, req.routing ?? {});
     } catch (err) {
       if (err instanceof ConversationBusyError) {
         throw new DispatchError(
@@ -446,6 +475,288 @@ function main(): void {
   d.register('routing.feedback', async (req) => {
     routingFor(req.projectId).addSignal(req.routingDecisionId, req.signal, req.source);
     return { recorded: true };
+  });
+
+  /* --- 路由试算（任务 11.11，需求 7.6、7.14）--- */
+
+  d.register('routing.preview', async (req) => {
+    const view = routerViewNow();
+    const override = req.routing ?? {};
+
+    const profile = buildTaskProfile(override.taskType ?? req.taskType, {
+      estimatedInputTokens: req.estimatedInputTokens,
+      expectedOutputTokens: req.expectedOutputTokens,
+      needToolUse: req.needToolUse,
+      requiredModalities: req.requiredModalities,
+      ...(override.weightOverrides === undefined
+        ? {}
+        : { weightOverrides: override.weightOverrides }),
+      ...(override.preferLocal === undefined ? {} : { preferLocal: override.preferLocal }),
+      ...(override.requireTrainingOptOut === undefined
+        ? {}
+        : { requireTrainingOptOut: override.requireTrainingOptOut }),
+      ...(override.costBudget === undefined ? {} : { costBudget: override.costBudget }),
+      ...(override.latencyBudgetMs === undefined
+        ? {}
+        : { latencyBudgetMs: override.latencyBudgetMs }),
+    });
+
+    /*
+     * 试算把经验修正也算进去，否则它给出的排序会与真发出去时不一致——
+     * 而一个「预览与实际不符」的预览比没有预览更糟。
+     *
+     * 探索加成刻意排除（explorationRate 传 0）：它含随机性，会让同样的输入
+     * 每次预览给出不同结果，用户无法据此判断自己调的权重起了什么作用。
+     */
+    const experience =
+      req.projectId === undefined ? undefined : routingFor(req.projectId).experience();
+
+    const result = route({
+      models: view.models,
+      profile,
+      runtime: view.runtime,
+      explorationRate: 0,
+      ...(experience === undefined ? {} : { experience }),
+      ...(override.forcedModelId === undefined ? {} : { forcedModelId: override.forcedModelId }),
+    });
+
+    return {
+      decision: result.decision,
+      // 候选的显示信息一并返回：UI 要在得分表旁边显示模型名、是否本地、价格，
+      // 而 decision.scores 里只有 id
+      candidates: result.ranked.map((m) => ({
+        id: m.id,
+        providerId: m.providerId,
+        displayName: m.displayName,
+        local: m.local,
+        contextWindow: m.contextWindow,
+        maxOutputTokens: m.maxOutputTokens,
+        pricing: m.pricing,
+      })),
+      emptyReport: result.emptyReport,
+      // 把生效的权重回传，用户才能看清「我没覆盖的维度默认是多少」
+      weights: profile.weights,
+    };
+  });
+
+  /* --- 供应商与模型注册表（任务 11.1b，需求 8.5、8.6）--- */
+
+  const providerOr404 = (providerId: string): ProviderRecord => {
+    const provider = modelRegistry.getProvider(providerId);
+    if (provider === null) {
+      throw notFound(
+        `供应商未登记：${providerId}`,
+        '用 node scripts/provision.mjs 登记供应商，或检查 id 是否拼错。',
+      );
+    }
+    return provider;
+  };
+
+  d.register('provider.list', async () => {
+    const providers = modelRegistry.listProviders({ includeDisabled: true });
+    const refs = vault.available && vault.exists ? new Set(vault.list()) : new Set<string>();
+
+    return {
+      // 凭据库不可用（非 Windows 或 DPAPI 缺失）时明确说出来，否则界面上
+      // 「未绑定凭据」会被当成用户忘了配，而实际是这台机器存不了凭据
+      vaultAvailable: vault.available,
+      providers: providers.map((p) => {
+        const models = modelRegistry.listModels({
+          providerId: p.id,
+          includeDisabled: true,
+        });
+        return {
+          ...p,
+          adapterRegistered: adapters.has(p.adapter),
+          credentialPresent: p.credentialRef !== null && refs.has(p.credentialRef),
+          modelCount: models.length,
+          enabledModelCount: models.filter((m) => m.enabled).length,
+        };
+      }),
+    };
+  });
+
+  d.register('provider.setEnabled', async (req) => {
+    providerOr404(req.providerId);
+    modelRegistry.setProviderEnabled(req.providerId, req.enabled);
+    return { providerId: req.providerId, enabled: req.enabled };
+  });
+
+  d.register('provider.setCredentialRef', async (req) => {
+    providerOr404(req.providerId);
+
+    // 绑定一个不存在的引用名会让该供应商的模型全部因「缺少凭据」被排除，
+    // 而界面上看起来是已配置的。当场拒绝比事后困惑好
+    if (
+      req.credentialRef !== null &&
+      !(vault.available && vault.exists && vault.has(req.credentialRef))
+    ) {
+      throw new DispatchError(
+        makeError('bad_request', `凭据库里没有 ${req.credentialRef}`, {
+          remediation: '先用 credential.set 写入该引用名，再绑定到供应商。',
+        }),
+      );
+    }
+
+    modelRegistry.setProviderCredentialRef(req.providerId, req.credentialRef);
+    return { providerId: req.providerId, credentialRef: req.credentialRef };
+  });
+
+  d.register('provider.sync', async (req) => {
+    const provider = providerOr404(req.providerId);
+    const ctx = adapterContextFor(req.providerId);
+    if (ctx === null) {
+      throw new DispatchError(
+        makeError('bad_request', `供应商 ${req.providerId} 缺少基地址`, {
+          remediation: '在供应商记录里填写 baseUrl。',
+        }),
+      );
+    }
+
+    let discovered;
+    try {
+      discovered = await adapters.get(provider.adapter).listModels(ctx);
+    } catch (err) {
+      // 同步失败的原因几乎总是可执行的（密钥过期、服务没起、网络不通），
+      // 因此原文透出而不是包成一句「同步失败」
+      // provider_error 而不是 internal：这不是本平台的 bug，而且它可重试——
+      // UI 据此给出「重试」而不是「请报告问题」
+      throw new DispatchError(
+        makeError('provider_error', `向 ${provider.name} 查询模型失败`, {
+          detail: err instanceof Error ? err.message : String(err),
+          remediation:
+            provider.baseUrl?.includes('127.0.0.1') === true
+              ? '本地服务可能没启动。确认 Ollama 正在运行（ollama list）。'
+              : '检查凭据是否有效、基地址是否正确、网络是否可达。',
+        }),
+      );
+    }
+
+    const result = modelSync.sync(req.providerId, discovered);
+    return {
+      ...result,
+      // 同步后的完整列表一并返回，省掉界面再发一次 model.list
+      models: modelRegistry.listModels({ providerId: req.providerId, includeDisabled: true }),
+    };
+  });
+
+  d.register('provider.checkHealth', async (req) => {
+    const provider = providerOr404(req.providerId);
+    const ctx = adapterContextFor(req.providerId);
+    if (ctx === null) {
+      throw new DispatchError(makeError('bad_request', `供应商 ${req.providerId} 缺少基地址`));
+    }
+
+    let health: ModelHealth;
+    try {
+      const probed = await adapters.get(provider.adapter).health(ctx);
+      health = {
+        ok: probed.ok,
+        latencyMs: probed.latencyMs,
+        checkedAt: Date.now(),
+        ...(probed.detail === undefined ? {} : { detail: probed.detail }),
+      };
+    } catch (err) {
+      // 探测本身抛错也是一个健康结论（不健康），要落库——否则路由会继续
+      // 按「未检查过即视为健康」去选它，然后在真实调用上失败
+      health = {
+        ok: false,
+        latencyMs: 0,
+        checkedAt: Date.now(),
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+
+    /*
+     * 健康结果记在该供应商的**每个模型**上。
+     *
+     * 供应商级的探测无法区分「整站故障」与「某个型号下线」，但前者远更常见，
+     * 而把结果只记在一个代表模型上会让其余模型带着过期信息参与路由。宁可
+     * 一起标记，代价是某个型号单独出问题时会误伤同厂其他型号——那种情况会在
+     * 真实调用失败后由用量记录暴露出来。
+     */
+    const models = modelRegistry.listModels({
+      providerId: req.providerId,
+      includeDisabled: true,
+    });
+    for (const model of models) modelRegistry.recordHealth(model.id, health);
+
+    return { providerId: req.providerId, health, appliedTo: models.length };
+  });
+
+  d.register('model.list', async (req) => ({
+    models: modelRegistry.listModels({
+      ...(req.providerId === undefined ? {} : { providerId: req.providerId }),
+      includeDisabled: req.includeDisabled,
+    }),
+  }));
+
+  d.register('model.setEnabled', async (req) => {
+    if (modelRegistry.getModel(req.modelId) === null) {
+      throw notFound(`模型不在注册表中：${req.modelId}`, '先同步该供应商的模型列表。');
+    }
+    modelRegistry.setModelEnabled(req.modelId, req.enabled);
+    return { modelId: req.modelId, enabled: req.enabled };
+  });
+
+  /* --- 凭据（任务 11.1b，需求 8.5、8.6、18.5）--- */
+
+  /**
+   * 凭据库不可用时统一的报错。不可用不是 bug，是平台限制，要说清楚。
+   *
+   * 判据是 `available`（DPAPI 能不能用）而**不是** `exists`（库文件在不在）。
+   * 两者混用会让全新安装的机器无法录入第一条凭据——那时候库文件当然还不存在，
+   * 而这恰好是最需要能写入的时刻。
+   */
+  const requireVault = (): void => {
+    if (vault.available) return;
+    throw new DispatchError(
+      makeError('unavailable', '凭据库不可用', {
+        detail: '凭据加密依赖 Windows DPAPI。',
+        remediation: '在 Windows 上运行，或改用无需凭据的本地模型（Ollama）。',
+      }),
+    );
+  };
+
+  d.register('credential.list', async () => {
+    // available 表示「这台机器能不能存凭据」，exists 表示「已经存过没有」。
+    // 界面需要区分这两件事：前者不满足时该说平台限制，后者只是还没配
+    if (!vault.available) return { available: false, credentials: [] };
+    if (!vault.exists) return { available: true, credentials: [] };
+
+    return {
+      available: true,
+      // 只出键名与指纹。指纹是长度加末四位——足够用户确认存进去的是哪一个，
+      // 不足以重建它
+      credentials: vault.list().map((ref) => ({ ref, fingerprint: vault.fingerprint(ref) })),
+    };
+  });
+
+  d.register('credential.set', async (req) => {
+    requireVault();
+    vault.set(req.ref, req.secret);
+    // 回执里不带任何密钥内容，只带指纹
+    return { ref: req.ref, fingerprint: vault.fingerprint(req.ref) };
+  });
+
+  d.register('credential.delete', async (req) => {
+    requireVault();
+
+    // 仍被供应商引用的凭据不许直接删：删掉之后该供应商的模型会全部因
+    // 「缺少凭据」被排除，而界面上供应商看起来还是配好的
+    const users = modelRegistry
+      .listProviders({ includeDisabled: true })
+      .filter((p) => p.credentialRef === req.ref);
+    if (users.length > 0) {
+      throw new DispatchError(
+        makeError('conflict', `凭据 ${req.ref} 仍被 ${String(users.length)} 家供应商引用`, {
+          detail: users.map((p) => p.name).join('、'),
+          remediation: '先解除这些供应商的凭据绑定，再删除。',
+        }),
+      );
+    }
+
+    return { deleted: vault.delete(req.ref) };
   });
 
   d.register('conversation.interrupt', async (req) => {

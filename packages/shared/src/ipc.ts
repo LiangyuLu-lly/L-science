@@ -33,6 +33,14 @@ export const errorCodeSchema = z.enum([
   'provider_error',
   'timeout',
   'aborted',
+  /**
+   * 该能力在这台机器上不存在。
+   *
+   * 与 `internal` 的区别是它不是 bug，与 `bad_request` 的区别是请求本身没错——
+   * 凭据库依赖 Windows DPAPI，在别的平台上不管怎么调用都不会有。重试无意义，
+   * 用户需要的是知道「这台机器做不到这件事，替代方案是什么」。
+   */
+  'unavailable',
   'internal',
 ]);
 
@@ -46,6 +54,8 @@ const NON_RETRYABLE: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   'policy_denied',
   'content_filtered',
   'sandbox_denied',
+  // 平台缺失的能力不会因为重试而出现
+  'unavailable',
 ]);
 
 export const errorEnvelopeSchema = z.object({
@@ -84,6 +94,61 @@ export function makeError(
 
 const idSchema = z.string().min(1).max(128);
 
+/** 能力维度名。与 `ModelStrengths` 的键一致，权重覆盖按维度给值。 */
+const strengthKeySchema = z.enum([
+  'reasoning',
+  'coding',
+  'math',
+  'longContextRecall',
+  'writingZh',
+  'writingEn',
+  'toolUse',
+  'structuredOutput',
+  'citationFidelity',
+  'instructionFollowing',
+]);
+
+const taskTypeSchema = z.enum([
+  'route.classify',
+  'literature.screen',
+  'pdf.deepread',
+  'analysis.codegen',
+  'stats.reason',
+  'signal.pipeline',
+  'figure.compose',
+  'manuscript.draft',
+  'manuscript.polish',
+  'manuscript.translate',
+  'review.simulate',
+  'citation.verify',
+  'reviewer.audit',
+]);
+
+/**
+ * 用户对本次路由的干预（需求 7.14）。
+ *
+ * `weightOverrides` 给出的是**完整替换**用的权重表，不是增量合并——合并会让
+ * 「把某个维度调到 0」无法表达（0 与「没给」在合并语义下不可区分）。这个语义由
+ * `buildTaskProfile` 保证，这里只负责把它原样带过去。
+ */
+export const routingOverrideSchema = z.object({
+  forcedModelId: idSchema.optional(),
+  weightOverrides: z.partialRecord(strengthKeySchema, z.number().min(0).max(100)).optional(),
+  taskType: taskTypeSchema.optional(),
+  preferLocal: z.boolean().optional(),
+  requireTrainingOptOut: z.boolean().optional(),
+  costBudget: z.number().nonnegative().optional(),
+  latencyBudgetMs: z.number().int().positive().optional(),
+});
+
+/**
+ * 路由覆盖的 TS 类型。
+ *
+ * 从 schema 推导而不是手写一份 interface：手写的那份与校验规则会分头演进，
+ * 而分歧的表现是「类型上允许的字段被运行时拒收」。
+ */
+export type RoutingOverride = z.infer<typeof routingOverrideSchema>;
+
 /**
  * M1 阶段的方法面。
  *
@@ -119,6 +184,14 @@ export const requestSchema = z.discriminatedUnion('method', [
     method: z.literal('conversation.send'),
     conversationId: idSchema,
     text: z.string().min(1),
+    /**
+     * 本次回合的路由覆盖（需求 7.14）。
+     *
+     * 刻意是**按回合**而不是按会话的设置：用户想「这一次用更强的模型」是常见
+     * 需求，而把它做成会话级开关意味着他必须记得改回来，忘了就会在后续几十次
+     * 廉价调用上一直付高价。
+     */
+    routing: routingOverrideSchema.optional(),
   }),
   z.object({ method: z.literal('conversation.interrupt'), conversationId: idSchema }),
 
@@ -271,6 +344,94 @@ export const requestSchema = z.discriminatedUnion('method', [
     ]),
     source: z.enum(['user', 'reviewer', 'system']),
   }),
+
+  /**
+   * 试算一次路由，不发起任何模型调用（需求 7.6、7.14）。
+   *
+   * 存在的意义是让「覆盖权重」这件事可验证：用户调完权重需要先看到它会把选择
+   * 改成什么，再决定要不要这样发出去。`route()` 是纯函数、不碰网络，因此这个
+   * 试算的代价只有一次数据库读取。
+   */
+  z.object({
+    method: z.literal('routing.preview'),
+    taskType: taskTypeSchema,
+    /** 预计输入 token。UI 用当前输入框内容粗估，缺省给一个典型值。 */
+    estimatedInputTokens: z.number().int().nonnegative().default(4000),
+    expectedOutputTokens: z.number().int().nonnegative().default(2000),
+    needToolUse: z.boolean().default(true),
+    requiredModalities: z.array(z.enum(['text', 'image', 'pdf', 'audio'])).default(['text']),
+    /** 与 `conversation.send` 用同一份覆盖结构，两处行为因此不会分歧。 */
+    routing: routingOverrideSchema.optional(),
+    /** 带上项目 id 时会把该项目积累的经验修正计入试算。 */
+    projectId: idSchema.optional(),
+  }),
+
+  /* --- 供应商与模型注册表（任务 11.1b，需求 8.5、8.6）--- */
+
+  /** 列出全部供应商（含被禁用的）及其模型数与凭据绑定状态。 */
+  z.object({ method: z.literal('provider.list') }),
+
+  z.object({
+    method: z.literal('provider.setEnabled'),
+    providerId: idSchema,
+    enabled: z.boolean(),
+  }),
+
+  /**
+   * 绑定或解绑凭据引用名。传 null 解绑。
+   *
+   * 传的是**引用名**而不是密钥：密钥走 `credential.set`，两件事分开的理由是
+   * 一份凭据可以被多家供应商条目共用（同一个 key 配不同 baseUrl 的场景），
+   * 而且绑定关系的变更不应要求用户重新输入密钥。
+   */
+  z.object({
+    method: z.literal('provider.setCredentialRef'),
+    providerId: idSchema,
+    credentialRef: z.string().min(1).max(200).nullable(),
+  }),
+
+  /** 向供应商查询当前可用模型并同步进注册表。线上消失的模型会被禁用而非删除。 */
+  z.object({ method: z.literal('provider.sync'), providerId: idSchema }),
+
+  /** 轻量健康检查，结果写入模型行供路由硬过滤使用。 */
+  z.object({ method: z.literal('provider.checkHealth'), providerId: idSchema }),
+
+  z.object({
+    method: z.literal('model.list'),
+    providerId: idSchema.optional(),
+    includeDisabled: z.boolean().default(true),
+  }),
+
+  z.object({ method: z.literal('model.setEnabled'), modelId: idSchema, enabled: z.boolean() }),
+
+  /* --- 凭据（任务 11.1b，需求 8.5、8.6、18.5）--- */
+
+  /**
+   * 列出已存凭据的**键名与指纹**。
+   *
+   * 永不返回密钥本身。指纹只有长度与末四位，足够用户确认「我存进去的是哪一个」，
+   * 又不足以重建它。
+   */
+  z.object({ method: z.literal('credential.list') }),
+
+  /**
+   * 写入一条凭据。
+   *
+   * 密钥经这条通道（渲染进程 → 主进程 → 后端 stdin）传输，全程不落磁盘、
+   * 不进命令行参数、不进进程列表——命令行工具刻意只从环境变量读密钥，正是因为
+   * 参数会进进程列表与 shell 历史。
+   *
+   * **不变量：请求载荷不得进入任何日志。** 当前实现满足它（传输层与分派器都只
+   * 记录方法名与错误消息，不记录载荷；shell 只转发后端 stderr），有测试守住这条。
+   * 往这些路径上加「打印完整请求便于调试」的代码会直接泄漏密钥。
+   */
+  z.object({
+    method: z.literal('credential.set'),
+    ref: z.string().min(1).max(200),
+    secret: z.string().min(1).max(8192),
+  }),
+
+  z.object({ method: z.literal('credential.delete'), ref: z.string().min(1).max(200) }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;
