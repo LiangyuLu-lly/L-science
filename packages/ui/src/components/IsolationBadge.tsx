@@ -113,6 +113,20 @@ export function IsolationBadge(): React.JSX.Element {
             <dd>{PROCESS_LABEL[info.isolation.process] ?? info.isolation.process}</dd>
           </dl>
 
+          {/*
+            出口管控的性质必须显式说明（需求 5.8）。proxy 级管控与命名空间隔离
+            是两件事：前者靠环境变量引导，直接建 socket 的代码可以绕过。
+            把它说成「网络隔离」是不诚实的。
+          */}
+          {info.isolation.network === 'proxy' && (
+            <p className="isolation__proxy-note" role="note">
+              网络出口按域名白名单管控，但这是<strong>代理级</strong>管控：它靠向内核注入 HTTP_PROXY
+              环境变量生效。requests、urllib 这类会读取该变量的库受管控，而直接 建 socket
+              的代码可以绕过它。它防的是无意的数据外泄，不防有意的绕过。真正的 网络隔离需要 WSL2
+              后端的命名空间。
+            </p>
+          )}
+
           {caveatCount > 0 && (
             <section className="isolation__caveats">
               <h4>已知限制</h4>

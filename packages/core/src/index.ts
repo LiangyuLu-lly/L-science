@@ -71,6 +71,9 @@ export type { HostGrant, DomainGrant, GrantMode, GrantInvalidReason } from './re
 export { requestHostAccess, normalizeHostPath, assessHostPath } from './sandbox/host-access.js';
 export type { HostAccessDecision, RequestHostAccessInput } from './sandbox/host-access.js';
 
+export { EgressProxy, isLoopback, parseTarget } from './sandbox/egress-proxy.js';
+export type { EgressAttempt, EgressProxyOptions, EgressVerdict } from './sandbox/egress-proxy.js';
+
 export * from './tools/index.js';
 
 export * from './artifact/index.js';

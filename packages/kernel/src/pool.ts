@@ -36,6 +36,14 @@ export interface KernelPoolOptions {
    * 通过 FFI 提供 `InterruptEvent`，本包刻意不引入 FFI 依赖。
    */
   interrupterFactory?: () => KernelInterrupter | null;
+  /**
+   * 每次启动内核时注入的额外环境变量。
+   *
+   * 用函数而不是静态对象：出口代理的端口在每次启动时才确定，而代理可能在内核
+   * 之后才起来。取静态快照会让先启动的内核拿到一个空的代理地址，于是它的网络
+   * 请求完全绕过管控——而这件事不会有任何报错。
+   */
+  extraEnv?: () => Record<string, string>;
 }
 
 interface Entry {
@@ -145,8 +153,11 @@ export class KernelPool {
           `Python 内核环境不可用。需先创建托管环境：conda create -n lsci python=3.13 并安装 ipykernel`,
         );
       }
+      const spec = pythonLaunchSpec(a.python);
       return JupyterKernel.start({
-        spec: pythonLaunchSpec(a.python),
+        // 每次启动都重新取额外环境变量：出口代理的端口在启动时才确定，
+        // 取快照会让先起来的内核拿到一个空的代理地址而静默绕过管控
+        spec: { ...spec, env: { ...spec.env, ...(this.#opts.extraEnv?.() ?? {}) } },
         runtimeDir,
         cwd,
         onLog: this.#onLog,
@@ -164,8 +175,9 @@ export class KernelPool {
     mkdirSync(runtimeDir, { recursive: true });
     const launcher = writeIRkernelLauncher(runtimeDir);
 
+    const rSpec = rLaunchSpec(a.r, launcher);
     return JupyterKernel.start({
-      spec: rLaunchSpec(a.r, launcher),
+      spec: { ...rSpec, env: { ...rSpec.env, ...(this.#opts.extraEnv?.() ?? {}) } },
       runtimeDir,
       cwd,
       onLog: this.#onLog,

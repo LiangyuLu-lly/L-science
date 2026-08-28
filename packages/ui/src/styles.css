@@ -1713,3 +1713,20 @@ code {
   color: var(--fg-dim);
   text-align: right;
 }
+
+/* 出口管控的性质说明。它不是普通提示——把代理级管控误认为网络隔离
+   会让用户对数据边界做出错误判断，因此给它独立的视觉重量 */
+.isolation__proxy-note {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #5f5a2f;
+  border-radius: 6px;
+  background: #211f16;
+  color: #e2d27e;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.isolation__proxy-note strong {
+  color: #ffb4a2;
+}
