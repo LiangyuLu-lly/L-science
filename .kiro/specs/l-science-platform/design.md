@@ -27,7 +27,8 @@ Claude Science 只能调用 Anthropic 自家模型。L-science 把模型抽象�
 | Reviewer | 后台独立审查智能体，findings 分 WARN/FAIL，仅 FAIL 打断主 agent，`mark_addressed` 自报后由下一轮复核 | 同构，且 Reviewer 强制使用与主 agent **不同厂商**的模型以消除同源盲区 |
 | 编排 | 协调 agent → `generate_plan`（`phases[].delegations[]`）→ 子 agent 扇出 | 同构 |
 | 技能 | 60+ 按需加载技能（featured 含 literature review、indication dossier 与 AlphaFold2 / Boltz-2 / Chai-1 / ESMFold2 / OpenFold3 / ProteinMPNN(+LigandMPNN,SolubleMPNN) / DiffDock / ESM-2 / Evo 2 / Borzoi / scGPT / scvi-tools），`search_skills` 发现，BYOC provider 用 `provider.py` + `provider.json` | 同构技能协议 + **目录为超集**：对标的 14 项 featured 技能逐项实现（`scripts/verify-skills.mjs` 逐项核对），另加睡眠/生理信号/神经科学 + 论文写作 32 项。初版曾把目录「换成」睡眠方向，那与「功能只能多不能少」冲突，已改为超集 |
-| 安全边界 | host 路径授权（`request_host_access`，ro/rw）、域名白名单 + `egress_domains`、受保护路径黑名单、内容安全拒答视为安全边界 | 同构 |
+| 连接器 | 约 50 个 featured 公共库连接器（Genomes / Genes & Ontologies / Variants / Human Genetics / Clinical Genomics / Expression / Regulation / Protein Annotation / Structures / RNA / Omics Archives / Cancer Models / Chemistry / Drug Regulatory / Literature Graph / Research Resources），按组开关；MCP 调用只在控制面暴露 | 同构两级开关 + **目录为超集**：52 个连接器 / 17 组 / 106 个工具。实现方式刻意不同——用**一个声明式 REST→MCP 桥**而非每库一个服务端包（详见 AD-12）。每个端点都有真实 API 探针（`scripts/verify-connectors.mjs`，118 项） |
+| 安全边界 | host 路径授权（`request_host_access`，ro/rw）、域名白名单 + `egress_domains`、受保护路径黑名单、内容安全拒答视为安全边界 | 同构，并把**连接器开关与域名白名单联动**：关掉一组连接器时同步撤回它的域名，否则会出现「界面上关了但内核里的代码照样能连」的半开状态 |
 | 环境管理 | conda 托管环境 + 注册用户 venv（`--system-site-packages` 叠加 editable） | 同构，复用本机 `E:\anaconda` |
 
 ### 设计目标
@@ -200,6 +201,18 @@ Reviewer 使用的模型必须与被审查内容的生成模型来自不同 prov
 理由不是洁癖，是踩过的坑。实测中为拿到 `pyedflib` 的预编译版而用 conda 往 Python 环境装包，conda 顺带把 numpy 解到 2.5，而 numba（`yasa` 的传递依赖）要求 numpy ≤ 2.4，整个领域栈随即导入失败。R 的依赖体量比 `pyedflib` 大一个数量级，装进同一环境几乎必然重演。按语言分环境让这类冲突在结构上不可能发生。
 
 配套约束：**托管 Python 环境的包管理只走 uv/pip，conda 仅负责创建解释器**。`scripts/doctor.mjs` 专门校验 numba 与 numpy 的兼容性，因为这一对是混装时最先炸的。
+
+**AD-12：连接器用一个声明式 REST→MCP 桥，而不是每个库一个 MCP 服务端包**
+
+五十多个公共数据库都有现成的 REST / GraphQL 接口。要把它们变成 MCP 连接器有两条路：为每个库装一个 MCP 服务端进程（对标产品大概是这么做的），或者用一个进程 + 数据描述的端点声明。
+
+选后者。理由不是省事，是可安装性：五十个包里任何一个的依赖需要现场编译，就会让整个安装在没有 C 工具链的机器上失败，而本地优先的桌面应用不能假设用户有工具链。运行时也不该为查一次基因符号 spawn 五十个子进程。于是「加一个连接器」是加一段数据而不是写一个进程——这直接决定了五十个连接器这件事是否可维护。
+
+代价与应对：
+
+- **声明写错不会在编译期暴露。** 路径、`pick` 路径、参数名、上游改过的字段名，这四类错误在假 fetch 的单元测试下全部通得过，然后在用户第一次用到时失败。因此有 `scripts/verify-connectors.mjs`：**每个端点各打一次真实 API**，并断言返回结构（断言字段名而不是只看「是个数组」——`pick` 写错时会静默返回 null，上游改字段名时会静默少字段，两者都是「看起来成功」的失败）。首跑就抓出 14 项，端点级全覆盖后又抓出一批，全是真 bug。
+- **有些站点路由不存在时回 200 加一整页 HTML** 而不是 404。桥必须按端点声明的 `responseType` 判定：期望 JSON 却拿到网页时报错，否则模型会从导航栏里读科学数据。
+- 桥跑在后端进程里，**不经出口代理**。出口代理管执行平面（内核里的代码），桥这侧的控制点是连接器与组的两级开关。这个划分是刻意的：用户关掉一个连接器组，桥就不再暴露它的工具；但他在 `python` 内核里手写 `requests.get(...)` 走的是出口代理，由域名白名单管。两条路各有控制点，没有一条能绕过另一条。
 
 ### 环境实测结论
 
@@ -552,7 +565,13 @@ Claude Science 提供了通用科研骨架，但没有针对论文产出的专�
 
 ### 8. Connectors 与 Compute
 
-**Connectors**：MCP 客户端实现，所有 MCP 调用只在控制面 `repl` 内核的 `host.mcp` 表面暴露（与 Claude Science 一致——`python`/`r` 内核没有 MCP 通道），避免数据分析代码直接触达外部服务。连接器凭据存在 DPAPI 保护的 vault，配置支持 stdio 与 HTTP/SSE 两种传输。
+**Connectors**：MCP 客户端实现，所有 MCP 调用只在控制面 `repl` 内核的 `host.mcp` 表面暴露（与 Claude Science 一致——`python`/`r` 内核没有 MCP 通道），避免数据分析代码直接触达外部服务。连接器凭据存在 DPAPI 保护的 vault，配置支持 stdio 与 Streamable HTTP 两种传输。
+
+需求 14.2 那条约束靠**结构**成立，不靠条件判断：MCP 客户端只被 `hostapi` 的 `mcp` 表面引用，而那个表面只注册在控制面 RPC 服务上；控制面 token 只注入控制面内核池。更关键的一条是**不注册任何 `mcp_*` 工具进 `ToolRegistry`**——一旦注册，普通 `python` 内核所在的会话里模型就能直接调用它，那就等于给了普通内核 MCP 通道。这是最容易不小心违反的一条，因为加一个工具比走 host 表面方便得多，因此用测试断言守住（`tests/mcp.test.ts` 检查 core 的导出里没有任何 mcp 工具构造函数）。
+
+stdio 传输**不继承 `process.env`**，只按白名单放行 `PATH` / `SystemRoot` / `TEMP` 这类必需变量。继承后再删敏感项是不行的：后端进程里有 `L_SCIENCE_HOST_TOKEN` 与各家供应商的 key，漏一个就等于绕过全部管控。
+
+内置目录 52 个连接器 / 17 组 / 106 个工具，经声明式 REST→MCP 桥提供（见 AD-12）。授权门的顺序是刻意的：已有有效授权 → 服务端声明只读且非破坏性 → 有审批通道则发卡片阻塞等待 → 没有审批通道则**拒绝**。其中 `readOnlyHint` 只用来决定「默认要不要问用户」，不能用来跳过授权检查本身——那个提示由服务端自己填，没有任何强制机制。拒绝以返回值 `denied: true` 表达而不抛异常：需求 17.3 要求拒绝后不得重试同一请求，用异常表达会让调用方 catch 之后继续，那正是审批要防的事。
 
 **Compute**：`local`（本机，含 GPU）、`ssh`（HPC 集群，Slurm/PBS 作业提交，审批门控）、`byoc`（用户自带云算力，`provider.py` + `provider.json` 协议）。`compute_details` 的 per-provider 笔记按 Claude Science 的语义严格区分——只记录关于该算力环境本身的知识（分区、账户、文件系统布局、环境激活方式、调度器坑），不记录项目内容与分析结果。
 
@@ -562,11 +581,13 @@ Claude Science 提供了通用科研骨架，但没有针对论文产出的专�
 
 ## Data Models
 
-SQLite（`better-sqlite3`），WAL 模式，两级分库（见 AD-7）：`config/app.db` 存跨项目内容，`projects/<id>/project.db` 存单个项目内容。两套迁移各自独立编号，同为 v1 但结构不同。
+SQLite（`better-sqlite3`），WAL 模式，两级分库（见 AD-7）：`config/app.db` 存跨项目内容，`projects/<id>/project.db` 存单个项目内容。两套迁移各自独立编号（应用库当前 v3，项目库 v1）。
 
 权威定义在代码里：`packages/core/src/migrations/app.ts` 与 `packages/core/src/migrations/project.ts`。下面列出的是结构要点，字段细节以代码为准——本文档不再重复完整 DDL，避免两处漂移。
 
-**应用库**：`projects`（含 `archived_at`，支持可逆归档）、`providers`、`models`、`skills`、`connectors`、`compute_targets`、`environments`、`host_grants`、`domain_allowlist`、`memory_notes`（全局与算力作用域）。
+**应用库**：`projects`（含 `archived_at`，支持可逆归档）、`providers`、`models`、`skills`、`connector_groups`、`connectors`、`connector_domains`、`tool_grants`、`compute_targets`、`environments`、`host_grants`、`domain_allowlist`、`memory_notes`（全局与算力作用域）。
+
+连接器相关的四张表值得单独说明：`connector_groups` 提供组级开关（生效判定是「连接器启用 **且** 所属组启用」），`connector_domains` 是每个连接器声明要访问的域名——它与 `domain_allowlist` 联动，关掉一组时同步撤回，否则会出现「界面上关了但内核里的代码照样能连」的半开状态。`tool_grants` 是**工具级**授权，独立于 `domain_allowlist`：同一连接器上「查基因」与「提交作业」的风险完全不同，用一条连接器级或域名级授权覆盖两者等于没有管控。
 
 **项目库**：`project_meta`（单行自我标识）、`conversations`、`messages`（`UNIQUE (conversation_id, seq)`）、`tool_calls`、`blobs`、`artifacts`、`artifact_versions`、`artifact_lineage`、`plans`、`plan_steps`、`reviewer_runs`、`findings`、`routing_decisions`、`routing_feedback`、`egress_log`、`approvals`、`compute_jobs`、`refs`、`manuscripts`、`claims`、`claim_evidence`、`memory_notes`（项目作用域）。
 
