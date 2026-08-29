@@ -1170,6 +1170,37 @@ async function main(): Promise<void> {
           rEnv: capabilities.rEnv,
         }),
       /*
+       * 用户在输入框里用 `/` 显式插入的技能（任务 12.16，需求 9.5、9.8）。
+       *
+       * 找不到的 slug 要如实回报而不是过滤掉：用户点了一个技能，界面上它就在那儿，
+       * 如果后端静默忽略，他会以为方法已经生效并据此判断结果。
+       */
+      explicitSkills: ({ conversationId, slugs }) => {
+        const injections: Array<{ slug: string; name: string; content: string }> = [];
+        const missing: string[] = [];
+        for (const slug of slugs) {
+          const injection = skills.inject(slug);
+          if (injection === null) {
+            missing.push(slug);
+            continue;
+          }
+          injections.push({
+            slug: injection.slug,
+            name: injection.name,
+            content: injection.content,
+          });
+          // 留痕（需求 9.8）：半年后回看结论时「当时按的是哪套方法」必须答得出来
+          auditSkillLoad({
+            conversationId,
+            slug,
+            reason: 'explicit',
+            detail: '用户在输入框里显式插入',
+            injectedChars: injection.content.length,
+          });
+        }
+        return { injections, missing };
+      },
+      /*
        * 回合结束触发审查（需求 11.3）。
        *
        * 不 await：审查要跑一次模型调用，在这里等它等于让用户多等几十秒才看到
@@ -1229,7 +1260,7 @@ async function main(): Promise<void> {
 
     let events: AsyncIterable<TurnEvent>;
     try {
-      events = orchestrator.startTurn(req.conversationId, req.text, req.routing ?? {});
+      events = orchestrator.startTurn(req.conversationId, req.text, req.routing ?? {}, req.skills);
     } catch (err) {
       if (err instanceof ConversationBusyError) {
         throw new DispatchError(
@@ -2345,8 +2376,17 @@ async function main(): Promise<void> {
           toolCount: live?.toolCount ?? 0,
           serverInfo: live?.serverInfo ?? null,
           sources: Array.isArray(c.config.sources) ? (c.config.sources as string[]) : [],
+          description: typeof c.config.description === 'string' ? c.config.description : null,
         };
       }),
+      /*
+       * 当前因连接器而进入出口白名单的域名（任务 12.16）。
+       *
+       * 单独给出来，是为了让「关掉一组之后网络是不是真的断了」可以被看见。
+       * 界面上关了而内核里的代码照样能连，是这套两级开关最容易出现的半开状态，
+       * 而它在没有这份清单时完全不可观测。
+       */
+      effectiveDomains: connectorRepo.effectiveDomains(),
     };
   });
 

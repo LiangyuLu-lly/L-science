@@ -204,6 +204,14 @@ export const requestSchema = z.discriminatedUnion('method', [
      * 廉价调用上一直付高价。
      */
     routing: routingOverrideSchema.optional(),
+    /**
+     * 用户在输入框里用 `/` 显式插入的技能（任务 12.16，需求 9.5）。
+     *
+     * 后端会把这些技能的内容直接放进本回合的历史，而不是指望模型自己去
+     * `search_skills` 加载——「显式」意味着保证生效。上限 5 个：技能文档动辄
+     * 几千字符，一次塞十个会把上下文预算吃光，而那时症状是模型忽略后面的内容。
+     */
+    skills: z.array(idSchema).max(5).default([]),
   }),
   z.object({ method: z.literal('conversation.interrupt'), conversationId: idSchema }),
 

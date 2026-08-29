@@ -29,6 +29,7 @@ import {
   inferTaskType,
   toolOutputForModel,
   type Conversation,
+  type OrchestratorDeps,
   type ProjectStore,
   type ToolDefinition,
 } from '@l-science/core';
@@ -152,6 +153,7 @@ interface BuildOptions {
   models?: readonly ModelDescriptor[];
   maxTurns?: number;
   adapters?: ReadonlyArray<{ adapter: ProviderAdapter; providerId: string }>;
+  explicitSkills?: OrchestratorDeps['explicitSkills'];
 }
 
 function build(options: BuildOptions = {}): Orchestrator {
@@ -180,6 +182,7 @@ function build(options: BuildOptions = {}): Orchestrator {
     adapterContext: (providerId) => ({ baseUrl: `http://${providerId}`, apiKey: 'k' }),
     workspaceDir: () => root,
     ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
+    ...(options.explicitSkills === undefined ? {} : { explicitSkills: options.explicitSkills }),
   });
 }
 
@@ -672,6 +675,130 @@ describe('路由与降级', () => {
     await collect(orch.startTurn(conversation.id, 'x'));
     // 换模型也一样错，重试只是把一个错误放大成一串
     expect(backupCalled).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 显式技能注入（任务 12.16，需求 9.5）
+ *
+ * 这一组守的是「显式」这两个字。用户在输入框里点了一个技能，它就必须真的进上下文——
+ * 靠模型自己去 search_skills 加载是不保证的，而那种失败在界面上看不出来。
+ * ------------------------------------------------------------------ */
+
+describe('显式技能注入（任务 12.16）', () => {
+  interface SeenMessage {
+    role: string;
+    content: string;
+  }
+
+  /** 记录每次模型调用收到的历史，用于断言技能内容真的进去了。 */
+  function captureAdapter(): { adapter: ProviderAdapter; seen: SeenMessage[][] } {
+    const seen: SeenMessage[][] = [];
+    const base = fakeAdapter([[{ kind: 'text', text: '好' }, done('end_turn')]]);
+    return {
+      seen,
+      adapter: {
+        ...base,
+        chat: (ctx: unknown, req: { messages?: unknown; history?: unknown }) => {
+          // 适配器收到的请求里消息字段名以实际实现为准，两种都取一下
+          const list = (req.messages ?? req.history ?? []) as ReadonlyArray<{
+            role: string;
+            content: unknown;
+          }>;
+          seen.push(
+            list.map((m) => ({
+              role: m.role,
+              content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+            })),
+          );
+          return (base as unknown as { chat: (c: unknown, r: unknown) => unknown }).chat(ctx, req);
+        },
+      } as unknown as ProviderAdapter,
+    };
+  }
+
+  it('指定的技能内容进入本回合历史，且排在用户消息之前', async () => {
+    const { adapter, seen } = captureAdapter();
+    const orch = build({
+      adapters: [{ adapter, providerId: 'fake' }],
+      explicitSkills: ({ slugs }) => ({
+        injections: slugs.map((slug) => ({
+          slug,
+          name: `技能 ${slug}`,
+          content: `# 技能 ${slug}\n\n按这个方法做。`,
+        })),
+        missing: [],
+      }),
+    });
+
+    await collect(orch.startTurn(conversation.id, '帮我分期', {}, ['sleep-staging']));
+
+    const history = seen[0] ?? [];
+    const injected = history.findIndex((m) => m.content.includes('技能 sleep-staging'));
+    const user = history.findIndex((m) => m.content === '帮我分期');
+    expect(injected).toBeGreaterThanOrEqual(0);
+    // 先给方法再给任务：反过来模型已经开始规划，再读到一份可能冲突的方法学
+    expect(injected).toBeLessThan(user);
+  });
+
+  it('注入内容明说以技能为准，冲突时要讲出来', async () => {
+    const { adapter, seen } = captureAdapter();
+    const orch = build({
+      adapters: [{ adapter, providerId: 'fake' }],
+      explicitSkills: () => ({
+        injections: [{ slug: 's', name: 'S', content: '正文' }],
+        missing: [],
+      }),
+    });
+    await collect(orch.startTurn(conversation.id, 'x', {}, ['s']));
+
+    const injected = (seen[0] ?? []).find((m) => m.content.includes('正文'));
+    expect(injected?.role).toBe('system');
+    expect(injected?.content).toContain('以它为准');
+  });
+
+  it('找不到的技能如实告知模型，不静默忽略', async () => {
+    const { adapter, seen } = captureAdapter();
+    const orch = build({
+      adapters: [{ adapter, providerId: 'fake' }],
+      explicitSkills: ({ slugs }) => ({ injections: [], missing: [...slugs] }),
+    });
+
+    await collect(orch.startTurn(conversation.id, 'x', {}, ['no-such-skill']));
+
+    const notice = (seen[0] ?? []).find((m) => m.content.includes('no-such-skill'));
+    /*
+     * 静默过滤掉的后果：用户点了技能、界面上它就在那儿，而模型根本不知道，
+     * 于是他会以为方法已经生效并据此判断结果对不对。
+     */
+    expect(notice).toBeDefined();
+    expect(notice?.content).toContain('不要假装');
+  });
+
+  it('没传技能时不产生任何额外消息', async () => {
+    const { adapter, seen } = captureAdapter();
+    let called = false;
+    const orch = build({
+      adapters: [{ adapter, providerId: 'fake' }],
+      explicitSkills: () => {
+        called = true;
+        return { injections: [], missing: [] };
+      },
+    });
+
+    await collect(orch.startTurn(conversation.id, 'x'));
+
+    // 不该为了「什么都没选」而去查一遍技能库
+    expect(called).toBe(false);
+    expect((seen[0] ?? []).filter((m) => m.role === 'system')).toHaveLength(0);
+  });
+
+  it('没有提供 explicitSkills 时传了 slug 也不崩', async () => {
+    // 单元测试与旧调用方不一定接这个回调，缺它必须是安全降级
+    const orch = build();
+    await expect(
+      collect(orch.startTurn(conversation.id, 'x', {}, ['whatever'])),
+    ).resolves.toBeDefined();
   });
 });
 

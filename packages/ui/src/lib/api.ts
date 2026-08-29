@@ -103,7 +103,13 @@ export interface RoutingOverride {
   latencyBudgetMs?: number;
 }
 
-export const sendMessage = (conversationId: string, text: string, routing?: RoutingOverride) =>
+export const sendMessage = (
+  conversationId: string,
+  text: string,
+  routing?: RoutingOverride,
+  /** 用 `/` 显式插入的技能 slug。后端会直接把内容放进本回合历史。 */
+  skills?: readonly string[],
+) =>
   invoke<{ delivered: boolean; events: number }>({
     method: 'conversation.send',
     conversationId,
@@ -111,6 +117,7 @@ export const sendMessage = (conversationId: string, text: string, routing?: Rout
     // 空对象也不传：后端会把它当成「没有覆盖」，但传过去会让请求里多一个
     // 无意义的字段，日后排查时看着像是用户真的设置过什么
     ...(routing === undefined || Object.keys(routing).length === 0 ? {} : { routing }),
+    ...(skills === undefined || skills.length === 0 ? {} : { skills: [...skills] }),
   });
 
 export const interruptConversation = (conversationId: string) =>
@@ -124,7 +131,13 @@ export type GrantScope = 'once' | 'session' | 'project' | 'always';
 
 export interface ApprovalRequest {
   id: string;
-  kind: 'artifact-delete' | 'host-access' | 'ssh-command' | 'compute-provider' | 'domain-allowlist';
+  kind:
+    | 'artifact-delete'
+    | 'host-access'
+    | 'ssh-command'
+    | 'compute-provider'
+    | 'domain-allowlist'
+    | 'skill-write';
   title: string;
   detail: string;
   impact: string;
@@ -462,7 +475,8 @@ export type TaskType =
   | 'manuscript.translate'
   | 'review.simulate'
   | 'citation.verify'
-  | 'reviewer.audit';
+  | 'reviewer.audit'
+  | 'skill.distill';
 
 /** 能力维度的中文名。设置页与决策面板都要显示它们。 */
 export const STRENGTH_LABEL: Readonly<Record<StrengthKey, string>> = {
@@ -493,6 +507,7 @@ export const TASK_LABEL: Readonly<Record<TaskType, string>> = {
   'review.simulate': '模拟审稿',
   'citation.verify': '核对引文',
   'reviewer.audit': '独立审查',
+  'skill.distill': '蒸馏技能',
 };
 
 export interface ModelStrengths {
@@ -685,3 +700,370 @@ export const previewRouting = (input: {
       ? {}
       : { routing: input.routing }),
   });
+
+/* ------------------------------------------------------------------ *
+ * 技能（任务 12.16，需求 9.1、9.2、9.6、9.8）
+ * ------------------------------------------------------------------ */
+
+export type SkillScope = 'builtin' | 'user';
+
+export interface SkillRequires {
+  python?: string[];
+  r?: string[];
+  commands?: string[];
+  connectors?: string[];
+  capabilities?: string[];
+}
+
+export interface SkillListItem {
+  slug: string;
+  name: string;
+  version: string | null;
+  scope: SkillScope;
+  domain: string | null;
+  description: string;
+  triggers: string[];
+  tools: string[];
+  requires: SkillRequires;
+  enabled: boolean;
+  path: string;
+  /**
+   * 文件系统上是否还在。
+   *
+   * 同步只禁用不删行，所以库里有记录不等于文件还在。区分两者是必要的：
+   * 「我删了目录但列表里还有」与「它被禁用了」是完全不同的两件事。
+   */
+  present: boolean;
+  references: string[];
+  scripts: string[];
+  warnings: string[];
+  requirementsSatisfied: boolean | null;
+  missing: Array<{ kind: string; name: string; remediation: string }>;
+  probeFailures: Array<{ kind: string; reason: string }>;
+}
+
+export interface SkillCatalogView {
+  /** 词法检索永远可用；向量层可选。界面要能说出当前是哪种状态。 */
+  vectorsReady: boolean;
+  embedFailure: string | null;
+  builtinDir: string;
+  userDir: string;
+  skills: SkillListItem[];
+  /** 被用户技能遮蔽的内置技能。查不到它，「我的改动生效了吗」无从确认。 */
+  shadowed: Array<{ slug: string; name: string; version: string | null; path: string }>;
+  broken: Array<{ path: string; scope: SkillScope; dirName: string; reason: string }>;
+}
+
+export interface SkillSearchHitView {
+  slug: string;
+  name: string;
+  domain: string | null;
+  description: string;
+  scope: SkillScope;
+  score: number;
+  lexicalScore: number;
+  vectorScore: number | null;
+  matchedTerms: string[];
+  requirementsSatisfied: boolean;
+  missingSummary: string | null;
+  references: string[];
+}
+
+export type SkillOriginKind =
+  'authored' | 'model' | 'archive' | 'directory' | 'github' | 'distilled';
+
+export interface SkillOriginView {
+  kind: SkillOriginKind;
+  source: string | null;
+  detail: string | null;
+  createdAt: number;
+  contentSha256: string | null;
+}
+
+/** 来源的中文名。`kind` 分得细是有用的：github 能重拉，authored 不能。 */
+export const SKILL_ORIGIN_LABEL: Readonly<Record<SkillOriginKind, string>> = {
+  authored: '手工编写',
+  model: '对话中生成',
+  archive: '压缩包导入',
+  directory: '本机目录导入',
+  github: 'GitHub 导入',
+  distilled: '会话蒸馏',
+};
+
+export interface SkillSourceView {
+  slug: string;
+  scope: SkillScope;
+  path: string;
+  manifest: string;
+  skillMd: string;
+  references: string[];
+  scripts: string[];
+  provider: unknown;
+  hasProviderScript: boolean;
+  warnings: string[];
+  origin: SkillOriginView | null;
+  /** 内置技能不能原地改：改动会在下次启动被同步覆盖。 */
+  editable: boolean;
+}
+
+export interface SkillWriteResult {
+  ok: boolean;
+  slug: string | null;
+  path: string | null;
+  errors: string[];
+  warnings: string[];
+  replaced: boolean;
+  shadowsBuiltin: boolean;
+}
+
+export interface SkillValidateResult {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  slug: string | null;
+  conflictsWith: { slug: string; name: string; scope: SkillScope } | null;
+}
+
+export interface SkillImportOutcome {
+  ok: boolean;
+  errors: string[];
+  skipped: string[];
+  source: string | null;
+  skills: Array<SkillWriteResult & { location: string }>;
+}
+
+export interface SkillDistillResult {
+  ok: boolean;
+  reason?: string;
+  insufficient?: boolean;
+  modelId?: string;
+  context?: { included: number; truncated: boolean };
+  slug?: string;
+  manifest?: string;
+  instructions?: string;
+  contentWarnings?: string[];
+  manifestWarnings?: string[];
+  conflictsWith?: { slug: string; name: string; scope: SkillScope } | null;
+}
+
+export interface SkillAuditView {
+  events: Array<{
+    id: number;
+    conversationId: string;
+    slug: string;
+    reason: 'search' | 'explicit' | 'plan-step' | 'reference';
+    detail: string | null;
+    injectedChars: number;
+    at: number;
+  }>;
+  summary: Array<{ slug: string; loads: number; lastAt: number }>;
+}
+
+/** 加载原因的中文名。区分它们是审计的全部价值所在。 */
+export const SKILL_REASON_LABEL: Readonly<Record<string, string>> = {
+  search: '检索命中',
+  explicit: '点名加载',
+  'plan-step': '计划绑定',
+  reference: '参考材料',
+};
+
+export const listSkills = () => invoke<SkillCatalogView>({ method: 'skill.list' });
+
+export const reloadSkills = (rebuildVectors = false) =>
+  invoke<{
+    active: number;
+    shadowed: number;
+    broken: number;
+    vectors: { built: number; cached: number; failed: string | null };
+  }>({ method: 'skill.reload', rebuildVectors });
+
+export const setSkillEnabled = (slug: string, enabled: boolean) =>
+  invoke<{ slug: string; enabled: boolean }>({ method: 'skill.setEnabled', slug, enabled });
+
+export const searchSkills = (query: string, limit = 8) =>
+  invoke<{ vectorsReady: boolean; hits: SkillSearchHitView[] }>({
+    method: 'skill.search',
+    query,
+    limit,
+  });
+
+export const loadSkillAudit = (projectId: string, conversationId: string, limit = 200) =>
+  invoke<SkillAuditView>({ method: 'skill.audit', projectId, conversationId, limit });
+
+export const loadSkillSource = (slug: string) =>
+  invoke<SkillSourceView>({ method: 'skill.source', slug });
+
+export const loadSkillReferenceFile = (slug: string, name: string) =>
+  invoke<{ slug: string; name: string; content: string }>({
+    method: 'skill.reference',
+    slug,
+    name,
+  });
+
+export const validateSkill = (manifest: string, instructions: string) =>
+  invoke<SkillValidateResult>({ method: 'skill.validate', manifest, instructions });
+
+export const writeSkill = (input: {
+  manifest: string;
+  instructions: string;
+  references?: Record<string, string>;
+  providerJson?: string | null;
+  providerScript?: string | null;
+  overwrite?: boolean;
+}) =>
+  invoke<SkillWriteResult>({
+    method: 'skill.write',
+    manifest: input.manifest,
+    instructions: input.instructions,
+    references: input.references ?? {},
+    providerJson: input.providerJson ?? null,
+    providerScript: input.providerScript ?? null,
+    overwrite: input.overwrite ?? false,
+  });
+
+export const deleteSkill = (slug: string) =>
+  invoke<{ slug: string; deleted: boolean }>({ method: 'skill.delete', slug });
+
+export const importSkillArchive = (fileName: string, contentBase64: string, overwrite = false) =>
+  invoke<SkillImportOutcome>({
+    method: 'skill.importArchive',
+    fileName,
+    contentBase64,
+    overwrite,
+  });
+
+export const importSkillDirectory = (directory: string, overwrite = false) =>
+  invoke<SkillImportOutcome>({ method: 'skill.importDirectory', directory, overwrite });
+
+export const importSkillFromGithub = (
+  spec: string,
+  credentialRef: string | null = null,
+  overwrite = false,
+) =>
+  invoke<SkillImportOutcome>({
+    method: 'skill.importGithub',
+    spec,
+    credentialRef,
+    overwrite,
+  });
+
+export const distillSkillFromConversation = (input: {
+  projectId: string;
+  conversationId: string;
+  focus?: string | null;
+  modelId?: string | null;
+}) =>
+  invoke<SkillDistillResult>({
+    method: 'skill.distill',
+    projectId: input.projectId,
+    conversationId: input.conversationId,
+    focus: input.focus ?? null,
+    modelId: input.modelId ?? null,
+  });
+
+/* ------------------------------------------------------------------ *
+ * 连接器（任务 12.16，需求 14.1、17.1）
+ * ------------------------------------------------------------------ */
+
+export interface ConnectorGroupView {
+  id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+}
+
+export interface ConnectorView {
+  id: string;
+  name: string;
+  groupId: string | null;
+  kind: 'mcp-stdio' | 'mcp-http';
+  /**
+   * 两级开关的合成结果：自身启用**且**所属组启用。
+   *
+   * 与 `selfEnabled` / `groupEnabled` 分开是必要的：只给合成值会让
+   * 「我关了整组但这一项还显示开着」变成一个说不清的状态，而只给自身值会让
+   * 界面上的「已启用」与实际可用不一致。
+   */
+  enabled: boolean;
+  selfEnabled: boolean;
+  groupEnabled: boolean;
+  builtin: boolean;
+  connected: boolean;
+  toolCount: number;
+  serverInfo: { name: string; version: string } | null;
+  credentialRef: string | null;
+  health: { ok: boolean; checkedAt: number; detail?: string } | null;
+  lastError: string | null;
+  description: string | null;
+  domains: string[];
+  sources: string[];
+}
+
+export interface ConnectorCatalogView {
+  groups: ConnectorGroupView[];
+  connectors: ConnectorView[];
+  /**
+   * 因连接器而进入出口白名单的域名。
+   *
+   * 单独给出来是为了让「关掉一组之后网络是不是真的断了」可以被看见——
+   * 界面上关了而内核里的代码照样能连，是最容易出现的半开状态。
+   */
+  effectiveDomains: string[];
+}
+
+export interface ConnectorToolView {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  /** 只读工具不需要每次审批。这个标记由服务端自己填，界面要如实显示。 */
+  readOnly: boolean;
+  destructive: boolean;
+}
+
+export interface ToolGrantView {
+  id: string;
+  connectorId: string;
+  toolName: string;
+  scope: GrantScope;
+  scopeId: string | null;
+  grantedAt: number;
+  revokedAt: number | null;
+}
+
+export const listConnectors = (projectId?: string) =>
+  invoke<ConnectorCatalogView>({
+    method: 'connector.list',
+    ...(projectId === undefined ? {} : { projectId }),
+  });
+
+export const setConnectorEnabled = (
+  target: { connectorId: string } | { groupId: string },
+  enabled: boolean,
+) =>
+  invoke<{ groups: ConnectorGroupView[]; effective: number }>({
+    method: 'connector.setEnabled',
+    ...('connectorId' in target
+      ? { connectorId: target.connectorId }
+      : { groupId: target.groupId }),
+    enabled,
+  });
+
+export const checkConnector = (projectId: string, connectorId: string) =>
+  invoke<{ ok: boolean; detail: string; toolCount: number }>({
+    method: 'connector.check',
+    projectId,
+    connectorId,
+  });
+
+export const listConnectorTools = (projectId: string, connectorId: string) =>
+  invoke<{ tools: ConnectorToolView[]; resources: number; prompts: number }>({
+    method: 'connector.tools',
+    projectId,
+    connectorId,
+  });
+
+export const listToolGrants = (includeRevoked = false) =>
+  invoke<{ grants: ToolGrantView[] }>({ method: 'connector.grants', includeRevoked });
+
+export const revokeToolGrant = (grantId: string) =>
+  invoke<{ revoked: boolean }>({ method: 'connector.revokeGrant', grantId });

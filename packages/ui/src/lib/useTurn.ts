@@ -105,7 +105,8 @@ function fromStored(message: StoredMessage): ChatItem | null {
 }
 
 export interface UseTurn extends TurnState {
-  send: (text: string, routing?: RoutingOverride) => Promise<void>;
+  /** `skills` 是用户在输入框里用 `/` 显式插入的技能 slug。 */
+  send: (text: string, routing?: RoutingOverride, skills?: readonly string[]) => Promise<void>;
   interrupt: () => Promise<void>;
   /** 从事件列表里移除已处理的审批/提问。决议本身由调用方发起。 */
   dismissApproval: (approvalId: string) => void;
@@ -327,7 +328,7 @@ export function useTurn(conversationId: string | null): UseTurn {
   }, [conversationId, reload, apply, clearScheduled]);
 
   const send = useCallback(
-    async (text: string, routing?: RoutingOverride) => {
+    async (text: string, routing?: RoutingOverride, skills?: readonly string[]) => {
       if (conversationId === null || text.trim() === '') return;
 
       // 用户消息立即出现在界面上，不等后端确认。它已经在后端同步落库了
@@ -347,7 +348,7 @@ export function useTurn(conversationId: string | null): UseTurn {
       schedule();
 
       try {
-        await sendMessage(conversationId, text, routing);
+        await sendMessage(conversationId, text, routing, skills);
       } catch (err) {
         pending.current.running = false;
         pending.current.error = err instanceof Error ? err.message : String(err);

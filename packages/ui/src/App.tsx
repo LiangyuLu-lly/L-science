@@ -6,14 +6,17 @@
  * 这是需求 20.5.2 的硬要求，不是可以留到以后的润色。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApprovalCard } from './components/ApprovalCard.js';
 import { ArtifactsView } from './components/ArtifactsView.js';
 import { ChatView } from './components/ChatView.js';
+import { ConnectorsView } from './components/ConnectorsView.js';
 import { IsolationBadge } from './components/IsolationBadge.js';
 import { RoutingPanel } from './components/RoutingPanel.js';
 import { SettingsView } from './components/SettingsView.js';
+import { SelectedSkills, SkillPicker } from './components/SkillPicker.js';
+import { SkillsView } from './components/SkillsView.js';
 import { ToolsPanel } from './components/ToolsPanel.js';
 import { TurnUsageBar, UsagePanel } from './components/UsagePanel.js';
 import {
@@ -33,7 +36,8 @@ import { hasBackend } from './lib/backend.js';
 import { useBackend } from './lib/useBackend.js';
 import { useTurn } from './lib/useTurn.js';
 
-type ViewId = 'chat' | 'artifacts' | 'routing' | 'usage' | 'tools' | 'settings';
+type ViewId =
+  'chat' | 'artifacts' | 'routing' | 'usage' | 'tools' | 'skills' | 'connectors' | 'settings';
 
 const VIEWS: ReadonlyArray<{ id: ViewId; label: string; ready: boolean }> = [
   { id: 'chat', label: '会话', ready: true },
@@ -41,6 +45,8 @@ const VIEWS: ReadonlyArray<{ id: ViewId; label: string; ready: boolean }> = [
   { id: 'routing', label: '模型路由', ready: true },
   { id: 'usage', label: '用量与成本', ready: true },
   { id: 'tools', label: '工具与环境', ready: true },
+  { id: 'skills', label: '技能', ready: true },
+  { id: 'connectors', label: '连接器', ready: true },
   { id: 'settings', label: '设置', ready: true },
 ];
 
@@ -129,6 +135,29 @@ function QuestionCard({
   );
 }
 
+/**
+ * 从输入内容与光标位置判断当前是否在打 `/` 命令。
+ *
+ * 返回 `/` 之后到光标之间的文本，不在命令里时返回 null。
+ *
+ * `/` 只在**行首或空白之后**触发。句子中间的斜杠是路径（`D:/data`）、日期
+ * （`2026/07/31`）与单位（`mg/kg`），把它们都当命令会让输入框在正常打字时
+ * 不停弹窗，而那是这类功能最常见的失败方式。
+ */
+function detectSlashQuery(text: string, caret: number): string | null {
+  const before = text.slice(0, caret);
+  const slash = before.lastIndexOf('/');
+  if (slash === -1) return null;
+
+  const prev = slash === 0 ? '' : before[slash - 1];
+  if (prev !== '' && prev !== undefined && !/\s/.test(prev)) return null;
+
+  const query = before.slice(slash + 1);
+  // 命令词里不允许空白与换行：打完技能名继续写句子时选择器应当自动关闭
+  if (/[\s\n]/.test(query)) return null;
+  return query;
+}
+
 /** 输入区。Enter 发送，Shift+Enter 换行——写代码片段时需要多行。 */
 function Composer({
   disabled,
@@ -146,15 +175,48 @@ function Composer({
    */
   disabledReason: string | null;
   running: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, skills: readonly string[]) => void;
   onInterrupt: () => void;
 }): React.JSX.Element {
   const [text, setText] = useState('');
+  const [caret, setCaret] = useState(0);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [skills, setSkills] = useState<string[]>([]);
+  const [skillNames, setSkillNames] = useState<Map<string, string>>(new Map());
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const slashQuery = pickerOpen ? detectSlashQuery(text, caret) : null;
 
   const submit = (): void => {
     if (text.trim() === '') return;
-    onSend(text);
+    onSend(text, skills);
     setText('');
+    setCaret(0);
+    // 技能选择是一次性的，与路由覆盖同一个取舍：留着会让下一条消息意外带上它们
+    setSkills([]);
+    setPickerOpen(false);
+  };
+
+  /** 选中一个技能：记进标签条，并把输入里的 `/xxx` 片段删掉。 */
+  const pickSkill = (hit: { slug: string; name: string }): void => {
+    setSkills((prev) => (prev.includes(hit.slug) || prev.length >= 5 ? prev : [...prev, hit.slug]));
+    setSkillNames((prev) => new Map(prev).set(hit.slug, hit.name));
+
+    const before = text.slice(0, caret);
+    const slash = before.lastIndexOf('/');
+    if (slash !== -1) {
+      const next = before.slice(0, slash) + text.slice(caret);
+      setText(next);
+      setCaret(slash);
+      // 焦点必须还回输入框：不还的话用户插入技能之后要用鼠标再点一次才能继续打字
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (el === null) return;
+        el.focus();
+        el.setSelectionRange(slash, slash);
+      });
+    }
+    setPickerOpen(false);
   };
 
   return (
@@ -168,25 +230,63 @@ function Composer({
       <label className="composer__label" htmlFor="composer-input">
         发送给助手
       </label>
-      <textarea
-        id="composer-input"
-        className="composer__input"
-        value={text}
-        rows={3}
-        placeholder={
-          disabled
-            ? (disabledReason ?? '当前不可输入')
-            : '说说要做什么。Enter 发送，Shift+Enter 换行。'
-        }
-        disabled={disabled}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            submit();
-          }
-        }}
+
+      <SelectedSkills
+        slugs={skills}
+        names={skillNames}
+        onRemove={(slug) => setSkills((prev) => prev.filter((s) => s !== slug))}
       />
+
+      <div className="composer__field">
+        {slashQuery !== null && (
+          <SkillPicker
+            query={slashQuery}
+            selected={skills}
+            onPick={pickSkill}
+            onClose={() => {
+              setPickerOpen(false);
+              inputRef.current?.focus();
+            }}
+          />
+        )}
+        <textarea
+          id="composer-input"
+          ref={inputRef}
+          className="composer__input"
+          value={text}
+          rows={3}
+          placeholder={
+            disabled
+              ? (disabledReason ?? '当前不可输入')
+              : '说说要做什么。Enter 发送，Shift+Enter 换行，/ 插入技能。'
+          }
+          disabled={disabled}
+          onChange={(e) => {
+            setText(e.target.value);
+            setCaret(e.target.selectionStart);
+            // 只有刚打出 `/` 才开选择器；已经开着时由 detectSlashQuery 决定是否继续
+            const q = detectSlashQuery(e.target.value, e.target.selectionStart);
+            if (q !== null && (pickerOpen || q === '')) setPickerOpen(true);
+            else if (q === null) setPickerOpen(false);
+          }}
+          onKeyUp={(e) => setCaret(e.currentTarget.selectionStart)}
+          onClick={(e) => setCaret(e.currentTarget.selectionStart)}
+          onKeyDown={(e) => {
+            // 选择器开着时把 Enter 与方向键让给它（它在 window 的 capture 阶段处理）
+            if (
+              slashQuery !== null &&
+              ['Enter', 'ArrowUp', 'ArrowDown', 'Escape'].includes(e.key)
+            ) {
+              return;
+            }
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+        />
+      </div>
+
       <div className="composer__actions">
         {running ? (
           <button type="button" className="btn btn--deny" onClick={onInterrupt}>
@@ -511,8 +611,8 @@ export function App(): React.JSX.Element {
                 disabled={composerBlockedReason !== null}
                 disabledReason={composerBlockedReason}
                 running={turn.running}
-                onSend={(text) => {
-                  void turn.send(text, routingOverride);
+                onSend={(text, skills) => {
+                  void turn.send(text, routingOverride, skills);
                   // 覆盖是一次性的，发出去就清掉
                   if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
                 }}
@@ -522,6 +622,12 @@ export function App(): React.JSX.Element {
           )}
 
           {view === 'artifacts' && <ArtifactsView projectId={projectId} />}
+
+          {view === 'skills' && (
+            <SkillsView projectId={projectId} conversationId={conversationId} />
+          )}
+
+          {view === 'connectors' && <ConnectorsView projectId={projectId} />}
 
           {view === 'routing' && (
             <RoutingPanel

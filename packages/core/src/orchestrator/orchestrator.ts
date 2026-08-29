@@ -71,6 +71,19 @@ export interface OrchestratorDeps {
   workspaceDir: (conversationId: string) => string;
   /** 系统提示词。 */
   systemPrompt?: (conversationId: string) => string;
+  /**
+   * 用户在输入框里显式指定的技能，取其注入内容（任务 12.16，需求 9.5、9.8）。
+   *
+   * 存在的理由是「显式」这两个字：让模型自己去 `search_skills` 加载是**不保证**的，
+   * 它可能判断用不上，于是用户点了技能却什么也没发生，而界面上看不出区别。
+   * 这里在回合开始时直接把内容放进历史。
+   *
+   * 返回值里的 `missing` 是那些点了但找不到的 slug——静默忽略会让用户以为已经生效。
+   */
+  explicitSkills?: (input: { conversationId: string; slugs: readonly string[] }) => {
+    injections: ReadonlyArray<{ slug: string; name: string; content: string }>;
+    missing: readonly string[];
+  };
   maxTurns?: number;
   /**
    * 项目 id，透传进 ToolContext。
@@ -144,6 +157,7 @@ export class Orchestrator {
     conversationId: string,
     userText: string,
     routing: RoutingOverride = {},
+    explicitSkillSlugs: readonly string[] = [],
   ): AsyncIterable<TurnEvent> {
     const conversation = this.#deps.conversations.get(conversationId);
     if (conversation === null) throw new Error(`会话不存在：${conversationId}`);
@@ -175,7 +189,14 @@ export class Orchestrator {
       content: { kind: 'text', text: userText },
     });
 
-    return this.#runTurn(conversationId, userText, controller, userMessage.id, routing);
+    return this.#runTurn(
+      conversationId,
+      userText,
+      controller,
+      userMessage.id,
+      routing,
+      explicitSkillSlugs,
+    );
   }
 
   /**
@@ -245,6 +266,7 @@ export class Orchestrator {
     controller: AbortController,
     userMessageId: string,
     routing: RoutingOverride,
+    explicitSkillSlugs: readonly string[] = [],
   ): AsyncGenerator<TurnEvent> {
     const summary: TurnSummary = {
       stopReason: 'end-turn',
@@ -257,11 +279,40 @@ export class Orchestrator {
       detail: null,
     };
 
+    /*
+     * 用户显式指定的技能（需求 9.5）。
+     *
+     * 放在 user 消息**之前**：技能是做这件事的方法，先给方法再给任务，与
+     * 「先检索技能再动手」的次序一致。放在之后会让模型先看到任务、已经开始规划，
+     * 再读到一份可能与它的规划冲突的方法学。
+     */
+    const explicit =
+      explicitSkillSlugs.length === 0 || this.#deps.explicitSkills === undefined
+        ? { injections: [], missing: [] as readonly string[] }
+        : this.#deps.explicitSkills({ conversationId, slugs: explicitSkillSlugs });
+
     // 对话历史。工具结果以 role='tool' 回灌，模型据此继续
     const history: ChatMessage[] = [
       ...(this.#deps.systemPrompt === undefined
         ? []
         : [{ role: 'system' as const, content: this.#deps.systemPrompt(conversationId) }]),
+      ...explicit.injections.map((injection) => ({
+        role: 'system' as const,
+        content:
+          `用户在这条消息里显式指定了下面这个技能，**按它的方法做**。` +
+          `如果它与你原本的打算冲突，以它为准，或者明确说出冲突在哪再问用户。\n\n${injection.content}`,
+      })),
+      ...(explicit.missing.length === 0
+        ? []
+        : [
+            {
+              role: 'system' as const,
+              // 静默忽略会让用户以为技能已经生效
+              content:
+                `用户指定的这些技能没找到或已被禁用：${explicit.missing.join('、')}。` +
+                '在回答里说明这一点，不要假装用了它们。',
+            },
+          ]),
       { role: 'user' as const, content: userText },
     ];
 
