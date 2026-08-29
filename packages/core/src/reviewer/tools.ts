@@ -33,6 +33,7 @@ const CATEGORY_LABEL = {
   reproducibility: '可复现性',
   consistency: '一致性',
   integrity: '学术诚信',
+  claim: '断言依据',
 } as const;
 
 function renderFindings(findings: readonly ReturnType<FindingsRepo['list']>[number][]): string {

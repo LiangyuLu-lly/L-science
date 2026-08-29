@@ -432,14 +432,30 @@ describe('parseReviewOutput', () => {
     expect(parsed.findings[0]?.evidence[0]?.kind).toBe('artifact-version');
   });
 
-  it('claim 类证据明确拒绝并说明原因', () => {
+  /*
+   * claim 类证据在 M3 里是被明确拒绝的（当时没有 Claim Ledger）。任务 13.4 落地之后
+   * 它被放开，但仍然只接受**在本次审查范围内**的断言 id——这里的 options 没有给
+   * allowedClaimIds，因此拒绝依旧，只是原因换成了「该项目还没登记断言」。
+   */
+  it('没有断言清单时 claim 类证据被拒，原因指向未登记而不是不支持', () => {
     const parsed = parseReviewOutput(
-      '{"findings":[{"severity":"warn","category":"evidence","title":"x",' +
+      '{"findings":[{"severity":"warn","category":"claim","title":"x",' +
         '"evidence":[{"kind":"claim","id":"cl_1"}]}]}',
       options,
     );
     expect(parsed.findings).toHaveLength(0);
-    expect(parsed.rejected.join()).toContain('M4');
+    expect(parsed.rejected.join()).toContain('还没登记断言');
+  });
+
+  it('claim id 在范围内时被接受', () => {
+    const parsed = parseReviewOutput(
+      '{"findings":[{"severity":"fail","category":"claim","title":"数字与表格不一致",' +
+        '"evidence":[{"kind":"claim","id":"cl_1"}]}]}',
+      { ...options, allowedClaimIds: new Set(['cl_1']) },
+    );
+    expect(parsed.findings).toHaveLength(1);
+    expect(parsed.findings[0]?.category).toBe('claim');
+    expect(parsed.findings[0]?.evidence[0]?.kind).toBe('claim');
   });
 
   it('没有证据的发现被丢弃', () => {

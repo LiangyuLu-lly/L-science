@@ -436,6 +436,48 @@ CREATE TABLE ref_assets (
 CREATE INDEX idx_ref_assets_ref ON ref_assets (ref_id, kind);
 `;
 
+/**
+ * Claim Ledger 的补齐（任务 13.4，需求 13.1-13.4）。
+ *
+ * `claims` 与 `claim_evidence` 在 M001 里就建了，但只有最小字段。这里补上让它
+ * 真正能用的部分：
+ *
+ * - **`conversation_id`**：Reviewer 是按会话跑的，findings 必须挂在一个会话上
+ *   （`findings.conversation_id` 是 NOT NULL）。没有这一列的话，「这条无证据断言
+ *   属于哪次对话」无从判断，于是每个会话的审查都会把全项目的断言重报一遍。
+ *
+ * - **`origin`**：区分自动抽取、模型登记与用户手写。自动抽取的断言未经人确认，
+ *   把它和用户明确写下的断言同等对待会让 FAIL 级发现里塞满误抽的句子——而一旦
+ *   开始忽略 FAIL，整个 Claim Ledger 就失效了。
+ *
+ * - **`kinds_json` 与 `numbers_json`**：一句话可以同时是数值结论与因果陈述
+ *   （「治疗组的死亡率降低了 30%，说明该药有效」），`kind` 只能存一个主类型。
+ *   抽出的数字单独存下来，核验时要把它们明确摆给模型看——问「这句话对不对」
+ *   与问「0.03 这个数字在证据里能找到吗」是两个难度完全不同的任务。
+ *
+ * - `claim_evidence` 的 `locator` 与 `quote`：证据指到「哪一份制品」是不够的，
+ *   要指到「第几页第几行」或「哪一行原文」。缺了这一步，核验结论无法被复核。
+ */
+const M007 = `
+ALTER TABLE claims ADD COLUMN conversation_id TEXT REFERENCES conversations (id) ON DELETE SET NULL;
+ALTER TABLE claims ADD COLUMN origin TEXT NOT NULL DEFAULT 'model';
+ALTER TABLE claims ADD COLUMN kinds_json TEXT;
+ALTER TABLE claims ADD COLUMN numbers_json TEXT;
+ALTER TABLE claims ADD COLUMN section TEXT;
+ALTER TABLE claims ADD COLUMN note TEXT;
+ALTER TABLE claims ADD COLUMN updated_at INTEGER;
+
+CREATE INDEX idx_claims_conversation ON claims (conversation_id, status)
+  WHERE conversation_id IS NOT NULL;
+CREATE INDEX idx_claims_status ON claims (status);
+
+ALTER TABLE claim_evidence ADD COLUMN locator TEXT;
+ALTER TABLE claim_evidence ADD COLUMN quote TEXT;
+ALTER TABLE claim_evidence ADD COLUMN created_at INTEGER;
+
+CREATE INDEX idx_claim_evidence_ref ON claim_evidence (evidence_kind, evidence_ref);
+`;
+
 export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'project-initial', sql: M001 },
   { version: 2, name: 'blob-eviction', sql: M002 },
@@ -443,4 +485,5 @@ export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 4, name: 'subagent-conversations', sql: M004 },
   { version: 5, name: 'reference-library', sql: M005 },
   { version: 6, name: 'reference-fulltext', sql: M006 },
+  { version: 7, name: 'claim-ledger', sql: M007 },
 ];

@@ -34,6 +34,24 @@ export interface ReviewContextInput {
   pendingRecheck: readonly Finding[];
   /** 已有的未关闭发现，避免重复提出同一件事。 */
   openFindings: readonly Finding[];
+  /**
+   * 未关闭的断言（任务 13.4）。
+   *
+   * 摆给审查者看的用处不只是「哪些没证据」——那条确定性检查已经覆盖了。真正需要
+   * 模型的是另一件事：**已绑定的证据到底支不支持这条断言**。确定性层能判断
+   * 「有没有绑定」，判断不了「绑的东西对不对」。
+   */
+  claims?: readonly ReviewClaim[];
+}
+
+/** 摆给审查者的断言。刻意只带这几个字段，正文与证据摘要够它判断了。 */
+export interface ReviewClaim {
+  id: string;
+  text: string;
+  locator: string | null;
+  status: string;
+  numbers: readonly string[];
+  evidence: readonly { kind: string; ref: string; verdict: string | null; quote: string | null }[];
 }
 
 export interface ReviewContext {
@@ -43,6 +61,7 @@ export interface ReviewContext {
   allowedEvidence: {
     messages: ReadonlySet<string>;
     versions: ReadonlySet<string>;
+    claims: ReadonlySet<string>;
   };
 }
 
@@ -163,6 +182,52 @@ export function buildReviewContext(input: ReviewContextInput): ReviewContext {
     );
   }
 
+  /*
+   * Claim Ledger（任务 13.4，需求 13.3）。
+   *
+   * 只列**已经有证据**的断言。无证据的那些由确定性层处理，摆给模型看只会让它
+   * 重复提出同一件事——而重复的发现会被「不要重复提出」那条规则挡掉之后
+   * 白花一次调用。模型真正能做的是判断已绑定的证据对不对。
+   */
+  const claimIds = new Set<string>();
+  const withEvidence = (input.claims ?? []).filter((c) => c.evidence.length > 0);
+  for (const claim of input.claims ?? []) claimIds.add(claim.id);
+
+  if (withEvidence.length > 0) {
+    const blocks = withEvidence.slice(0, 25).map((claim) => {
+      const lines = [
+        `### ${claim.id}　${claim.locator ?? '（无定位）'}　状态 ${claim.status}`,
+        clip(claim.text, 600),
+      ];
+      if (claim.numbers.length > 0) lines.push(`声称的数值：${claim.numbers.join('、')}`);
+      for (const evidence of claim.evidence) {
+        lines.push(
+          `- 证据 ${evidence.kind} ${evidence.ref}` +
+            `　核验结论 ${evidence.verdict ?? '未核验'}` +
+            (evidence.quote === null ? '' : `\n  原文：${clip(evidence.quote, 400)}`),
+        );
+      }
+      return lines.join('\n');
+    });
+
+    sections.push(
+      [
+        '## Claim Ledger：已绑定证据的断言',
+        '',
+        '判断每条已绑定的证据**是否真的支持该断言**。确定性检查只能看出「有没有绑证据」，',
+        '看不出「绑的东西对不对」——这是只有读了内容才能做的判断，也是这一段的唯一目的。',
+        '',
+        '要特别看：断言里的数字与证据里的数字是否一致；比较陈述的方向是否与数据一致；',
+        '因果陈述是否被研究设计支持（横断面数据不能支持因果）；引文支撑陈述里被引文献',
+        '是否真的说了那句话。',
+        '',
+        '发现问题时开一条 category 为 `claim` 的发现，evidence 引用该断言的 id。',
+        '',
+        blocks.join('\n\n'),
+      ].join('\n'),
+    );
+  }
+
   sections.push(
     [
       '## 可引用的证据 id',
@@ -171,12 +236,13 @@ export function buildReviewContext(input: ReviewContextInput): ReviewContext {
       '',
       `message：${messageIds.size === 0 ? '（无）' : [...messageIds].join('、')}`,
       `artifact-version：${versionIds.size === 0 ? '（无）' : [...versionIds].join('、')}`,
+      `claim：${claimIds.size === 0 ? '（无）' : [...claimIds].join('、')}`,
     ].join('\n'),
   );
 
   return {
     text: sections.join('\n\n'),
-    allowedEvidence: { messages: messageIds, versions: versionIds },
+    allowedEvidence: { messages: messageIds, versions: versionIds, claims: claimIds },
   };
 }
 

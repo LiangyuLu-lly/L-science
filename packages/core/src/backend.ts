@@ -52,6 +52,8 @@ import {
   renderExportWarnings,
 } from './refs/index.js';
 import { RefsRepo } from './repo/refs.js';
+import { ClaimLedger, createManageClaimsTool } from './manuscript/index.js';
+import { ClaimsRepo, type ClaimRecord } from './repo/claims.js';
 import {
   createGeneratePlanTool,
   createPlanStatusTool,
@@ -315,6 +317,7 @@ async function main(): Promise<void> {
   const mcpManagers = new Map<string, McpManager>();
   const subAgentRunners = new Map<string, SubAgentRunner>();
   const refLibraries = new Map<string, RefLibrary>();
+  const claimLedgers = new Map<string, ClaimLedger>();
 
   /**
    * 每个项目的执行平面资源，退出时要逐个关掉。
@@ -1015,6 +1018,31 @@ async function main(): Promise<void> {
     tools.register(createControlReplTool(replToolOptions));
     tools.register(createControlReplAdminTool(replToolOptions));
 
+    /* --- Claim Ledger（任务 13.4，需求 13.1-13.4）-------------------- */
+
+    /*
+     * 建在 Reviewer 之前：Reviewer 要用它取未关闭断言的快照（需求 13.3）。
+     *
+     * `refExists` 用惰性查表而不是直接持有 refLibrary——文献库在下面才建，而这个
+     * 回调只在模型绑定证据时被调用，那时它一定已经存在。反过来（把文献库挪到这里
+     * 建）要连带挪动它依赖的几段接线，改动面大得多。
+     */
+    const claimLedger = new ClaimLedger({
+      repo: new ClaimsRepo(project.db),
+      artifactExists: (versionId) => artifactStore.getVersion(versionId) !== null,
+      refExists: (refId) => (refLibraries.get(projectId)?.repo.get(refId) ?? null) !== null,
+      refIdByDoi: (doi) => refLibraries.get(projectId)?.repo.getByDoi(doi)?.id ?? null,
+      // 计算单元用工具调用 id 或带代码的制品版本，两种都要认
+      computeExists: (id) =>
+        artifactStore.getVersion(id) !== null ||
+        (project.db.prepare('SELECT 1 FROM tool_calls WHERE id = ?').get(id) as unknown) !==
+          undefined,
+      onLog: (line) => {
+        log(`[claims ${projectId}] ${line}`);
+      },
+    });
+    claimLedgers.set(projectId, claimLedger);
+
     /* --- Reviewer Service（任务 12.8，需求 11.1-11.8）--------------- */
 
     const reviewer = new ReviewerService({
@@ -1026,6 +1054,29 @@ async function main(): Promise<void> {
       routerView: routerViewNow,
       experience: () => routingRepo.experience(),
       usage: usageRepo,
+      /*
+       * 未关闭断言的快照（需求 13.3）。
+       *
+       * 按会话筛：findings 必须挂在一个会话上，而把全项目的断言都报进每个会话的
+       * 审查会让同一条无证据断言在五个会话里各出现一次。
+       */
+      claims: (conversationId) =>
+        claimLedger.repo
+          .list({ conversationId, status: 'unresolved', limit: 200 })
+          .map((claim) => ({
+            id: claim.id,
+            text: claim.text,
+            locator: claim.locator,
+            status: claim.status,
+            origin: claim.origin,
+            numbers: claim.numbers,
+            evidence: claim.evidence.map((e) => ({
+              kind: e.kind,
+              ref: e.ref,
+              verdict: e.verdict,
+              quote: e.quote,
+            })),
+          })),
       onFinding: (finding) => {
         d.broadcast({ kind: 'finding.raised', projectId, finding });
       },
@@ -1251,6 +1302,45 @@ async function main(): Promise<void> {
             action: info.action,
             refIds: info.refIds,
           });
+        },
+      }),
+    );
+
+    /* --- Claim Ledger 工具（任务 13.4，需求 13.1-13.4）---------------- */
+
+    tools.register(
+      createManageClaimsTool({
+        ledger: () => claimLedger,
+        // 让 extract 能直接吃手稿制品，而不是要求模型把整篇正文贴进参数里
+        readVersion: (versionId) => {
+          const bytes = artifactStore.readVersion(versionId);
+          return bytes === null ? null : bytes.toString('utf8');
+        },
+        onChanged: (info) => {
+          d.broadcast({
+            kind: 'claims.changed',
+            projectId,
+            action: info.action,
+            claimIds: info.claimIds,
+            conversationId: info.conversationId,
+          });
+
+          /*
+           * 确认与核验是审查触发点（需求 11.3 的同类）。
+           *
+           * 确认一条断言之后立刻审查，才能在模型还在这个话题上时就把「这条没有证据」
+           * 提出来；等到下一轮 turn 结束再报，模型已经转到别的事情上了。
+           *
+           * `extract` 与 `register` 刻意不触发：一次抽取会登记几十条，紧接着跑审查
+           * 只会产出一条「这批需要分类」的 WARN，而那条信息抽取工具自己的输出里
+           * 已经说了。
+           */
+          if (info.action === 'confirm' || info.action === 'verify') {
+            void reviewer.schedule({
+              conversationId: info.conversationId,
+              trigger: 'artifact-saved',
+            });
+          }
         },
       }),
     );
@@ -2892,6 +2982,260 @@ async function main(): Promise<void> {
       refIds: [req.refId],
     });
     return { artifactId: result.artifactId, versionId: result.versionId };
+  });
+
+  /* --- Claim Ledger（任务 13.4，需求 13.1-13.4）--- */
+
+  const claimsFor = async (projectId: string): Promise<ClaimLedger> => {
+    await orchestratorFor(projectId);
+    const ledger = claimLedgers.get(projectId);
+    if (ledger === undefined) throw notFound(`项目不可用：${projectId}`);
+    return ledger;
+  };
+
+  /** 断言的 IPC 视图。把 extra 里的东西提到平面上，UI 不该去猜结构。 */
+  const claimView = (claim: ClaimRecord): Record<string, unknown> => ({
+    ...claim,
+    unsupported: claim.evidence.length === 0,
+    verifiedCount: claim.evidence.filter((e) => e.verdict !== null).length,
+  });
+
+  d.register('claim.list', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const claims = ledger.repo.list({
+      ...(req.conversationId === undefined ? {} : { conversationId: req.conversationId }),
+      ...(req.manuscriptId === undefined ? {} : { manuscriptId: req.manuscriptId }),
+      status: req.status,
+      ...(req.kind === undefined ? {} : { kind: req.kind }),
+      unsupportedOnly: req.unsupportedOnly,
+      limit: req.limit,
+    });
+
+    const scope = {
+      ...(req.conversationId === undefined ? {} : { conversationId: req.conversationId }),
+      ...(req.manuscriptId === undefined ? {} : { manuscriptId: req.manuscriptId }),
+    };
+
+    return {
+      claims: claims.map(claimView),
+      summary: ledger.summary(scope),
+      gate: ledger.gateSummary(scope),
+    };
+  });
+
+  d.register('claim.get', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const claim = ledger.repo.get(req.claimId);
+    if (claim === null) throw notFound(`断言不存在：${req.claimId}`);
+    return { claim: claimView(claim) };
+  });
+
+  d.register('claim.extract', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+
+    let markdown = req.markdown;
+    if (markdown === undefined && req.artifactVersionId !== undefined) {
+      const artifacts = artifactStoreFor(req.projectId);
+      const bytes = artifacts.readVersion(req.artifactVersionId);
+      if (bytes === null) throw notFound(`制品版本不存在：${req.artifactVersionId}`);
+      markdown = bytes.toString('utf8');
+    }
+    if (markdown === undefined) {
+      throw new DispatchError(
+        makeError('bad_request', '需要 markdown 或 artifactVersionId', {
+          remediation: '把手稿正文放在 markdown 里，或给出一个手稿制品的版本 id。',
+        }),
+      );
+    }
+
+    const result = ledger.extractAndRegister({
+      markdown,
+      ...(req.conversationId === undefined ? {} : { conversationId: req.conversationId }),
+      ...(req.manuscriptId === undefined ? {} : { manuscriptId: req.manuscriptId }),
+      options: { limit: req.limit },
+    });
+
+    if (result.created.length > 0) {
+      d.broadcast({
+        kind: 'claims.changed',
+        projectId: req.projectId,
+        action: 'extract',
+        claimIds: result.created.map((c) => c.id),
+        conversationId: req.conversationId ?? null,
+      });
+    }
+
+    return {
+      summary: result.summary,
+      created: result.created.map(claimView),
+      skippedExisting: result.skippedExisting,
+      sentencesScanned: result.extraction.sentencesScanned,
+      truncated: result.extraction.truncated,
+      // 被规则排除的句子一并给出：「为什么这句没抽到」只能靠它回答
+      skipped: result.extraction.skipped,
+    };
+  });
+
+  d.register('claim.register', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const result = ledger.register({
+      text: req.text,
+      // 界面登记的断言一开始就是确认状态：用户是主动写下它的
+      origin: 'user',
+      ...(req.conversationId === undefined ? {} : { conversationId: req.conversationId }),
+      ...(req.manuscriptId === undefined ? {} : { manuscriptId: req.manuscriptId }),
+      ...(req.locator === undefined ? {} : { locator: req.locator }),
+      ...(req.note === undefined ? {} : { note: req.note }),
+    });
+
+    if (!result.ok || result.claim === null) {
+      throw new DispatchError(makeError('bad_request', result.reason ?? '登记失败'));
+    }
+    d.broadcast({
+      kind: 'claims.changed',
+      projectId: req.projectId,
+      action: 'register',
+      claimIds: [result.claim.id],
+      conversationId: req.conversationId ?? null,
+    });
+    return { claim: claimView(result.claim), existing: result.existing, reason: result.reason };
+  });
+
+  d.register('claim.bind', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const result = ledger.bind({
+      claimId: req.claimId,
+      kind: req.evidenceKind,
+      ref: req.evidenceRef,
+      ...(req.locator === undefined ? {} : { locator: req.locator }),
+      ...(req.quote === undefined ? {} : { quote: req.quote }),
+      ...(req.note === undefined ? {} : { note: req.note }),
+    });
+
+    if (!result.ok) {
+      throw new DispatchError(
+        makeError('bad_request', result.reason ?? '绑定失败', {
+          remediation: '确认引用的 id 真实存在。制品版本用 av_ 开头，文献条目用 rf_ 开头。',
+        }),
+      );
+    }
+    d.broadcast({
+      kind: 'claims.changed',
+      projectId: req.projectId,
+      action: 'bind',
+      claimIds: [req.claimId],
+      conversationId: result.claim?.conversationId ?? null,
+    });
+    return { claim: result.claim === null ? null : claimView(result.claim), advice: result.advice };
+  });
+
+  d.register('claim.unbind', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const result = ledger.unbind(req.claimId, req.evidenceKind, req.evidenceRef);
+    if (!result.ok) throw notFound(result.reason ?? '这条证据不存在');
+    d.broadcast({
+      kind: 'claims.changed',
+      projectId: req.projectId,
+      action: 'unbind',
+      claimIds: [req.claimId],
+      conversationId: null,
+    });
+    return { claim: claimView(ledger.repo.get(req.claimId) as ClaimRecord) };
+  });
+
+  d.register('claim.verify', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    /*
+     * 界面发起的核验一律记成 `user:manual`。
+     *
+     * 不让前端传模型标识：那等于让它冒充任何模型，而这一列的用途正是判断结论的
+     * 可信度（需求 13.4）。留空更糟——留空与「一个未知的模型说的」在库里长得一样。
+     */
+    const result = ledger.verify({
+      claimId: req.claimId,
+      kind: req.evidenceKind,
+      ref: req.evidenceRef,
+      verdict: req.verdict,
+      modelId: 'user:manual',
+      ...(req.note === undefined ? {} : { note: req.note }),
+    });
+
+    if (!result.ok || result.claim === null) {
+      throw new DispatchError(makeError('bad_request', result.reason ?? '核验失败'));
+    }
+    d.broadcast({
+      kind: 'claims.changed',
+      projectId: req.projectId,
+      action: 'verify',
+      claimIds: [req.claimId],
+      conversationId: result.claim.conversationId,
+    });
+    return { claim: claimView(result.claim) };
+  });
+
+  d.register('claim.confirm', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const result = ledger.confirm(req.claimId, req.note);
+    if (!result.ok || result.claim === null) {
+      throw notFound(result.reason ?? `断言不存在：${req.claimId}`);
+    }
+    d.broadcast({
+      kind: 'claims.changed',
+      projectId: req.projectId,
+      action: 'confirm',
+      claimIds: [req.claimId],
+      conversationId: result.claim.conversationId,
+    });
+    return { claim: claimView(result.claim), reason: result.reason };
+  });
+
+  d.register('claim.close', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const result = ledger.close(req.claimId, req.status, req.note);
+    if (!result.ok || result.claim === null) {
+      throw new DispatchError(makeError('bad_request', result.reason ?? '关闭失败'));
+    }
+    d.broadcast({
+      kind: 'claims.changed',
+      projectId: req.projectId,
+      action: 'close',
+      claimIds: [req.claimId],
+      conversationId: result.claim.conversationId,
+    });
+    return { claim: claimView(result.claim) };
+  });
+
+  d.register('claim.reopen', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const result = ledger.reopen(req.claimId, req.note ?? '');
+    if (!result.ok || result.claim === null) {
+      throw notFound(result.reason ?? `断言不存在：${req.claimId}`);
+    }
+    d.broadcast({
+      kind: 'claims.changed',
+      projectId: req.projectId,
+      action: 'reopen',
+      claimIds: [req.claimId],
+      conversationId: result.claim.conversationId,
+    });
+    return { claim: claimView(result.claim) };
+  });
+
+  d.register('claim.delete', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const claim = ledger.repo.get(req.claimId);
+    if (claim === null) throw notFound(`断言不存在：${req.claimId}`);
+    const deleted = ledger.repo.delete(req.claimId);
+    if (deleted) {
+      d.broadcast({
+        kind: 'claims.changed',
+        projectId: req.projectId,
+        action: 'delete',
+        claimIds: [req.claimId],
+        conversationId: claim.conversationId,
+      });
+    }
+    return { deleted };
   });
 
   /* --- 引用导出（任务 13.3，需求 12.5）--- */

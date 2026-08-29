@@ -32,7 +32,7 @@ import { classifyFailure, type UsageRepo } from '../repo/usage.js';
 import { buildTaskProfile, pickCrossVendor, route } from '../router/index.js';
 import type { ExperienceAdjustment, ModelRuntimeState } from '../router/index.js';
 import { streamModel } from '../orchestrator/agent-runtime.js';
-import { runDeterministicChecks, type DraftFinding } from './checks.js';
+import { runDeterministicChecks, type ClaimSnapshot, type DraftFinding } from './checks.js';
 import { parseReviewOutput } from './parse.js';
 import { buildReviewContext, reviewerSystemPrompt, reviewerUserPrompt } from './prompt.js';
 
@@ -48,6 +48,14 @@ export interface ReviewerServiceDeps {
   };
   experience?: () => ReadonlyMap<string, ExperienceAdjustment>;
   usage?: UsageRepo;
+  /**
+   * 未关闭断言的快照（任务 13.4，需求 13.3）。
+   *
+   * 用回调注入而不是直接吃 `ClaimsRepo`：审查服务在 M3 就定型了，让它依赖 M4 的
+   * 仓储会把「审查」与「手稿」两个模块绑在一起，而只有前者是每个部署都需要的。
+   * 不提供时跳过断言类检查。
+   */
+  claims?: (conversationId: string) => readonly ClaimSnapshot[];
   /**
    * 有 FAIL 级发现时调用（需求 11.5）。
    *
@@ -249,10 +257,19 @@ export class ReviewerService {
 
     /* ---------------- 确定性层 ---------------- */
 
+    /*
+     * 断言快照取一次，确定性层与模型层共用。
+     *
+     * 取两次的风险是两层看到的断言集合不同：确定性层报了一条无证据断言，而模型层
+     * 那份快照里它已经绑上证据了——于是同一次审查里出现自相矛盾的两条结论。
+     */
+    const claimSnapshots = this.#deps.claims?.(conversationId);
+
     const deterministic = runDeterministicChecks({
       artifacts: this.#deps.artifacts,
       messages,
       ...(queued.versionIds.size > 0 ? { versionIds: [...queued.versionIds] } : {}),
+      ...(claimSnapshots === undefined ? {} : { claims: claimSnapshots }),
     });
 
     /*
@@ -335,6 +352,18 @@ export class ReviewerService {
       versionIds: [...queued.versionIds],
       pendingRecheck,
       openFindings: this.#deps.findings.list({ conversationId, status: 'open', limit: 100 }),
+      ...(claimSnapshots === undefined
+        ? {}
+        : {
+            claims: claimSnapshots.map((c) => ({
+              id: c.id,
+              text: c.text,
+              locator: c.locator,
+              status: c.status,
+              numbers: c.numbers,
+              evidence: c.evidence,
+            })),
+          }),
     });
 
     const history: readonly ChatMessage[] = [
@@ -448,6 +477,7 @@ export class ReviewerService {
     const parseOptions = {
       allowedMessageIds: context.allowedEvidence.messages,
       allowedVersionIds: context.allowedEvidence.versions,
+      allowedClaimIds: context.allowedEvidence.claims,
       recheckableIds: new Set(pendingRecheck.map((f) => f.id)),
     };
 

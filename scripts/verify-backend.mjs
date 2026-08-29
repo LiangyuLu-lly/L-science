@@ -911,7 +911,132 @@ try {
     String(byId('rf11').error?.code ?? '?'),
   );
 
-  // --- 14. stdin 关闭后自行退出 ---
+  // --- 14. Claim Ledger（任务 13.4）---
+  //
+  // 这一段完全不需要网络，因此覆盖得比文献库那段深：抽取、确认、绑定校验、
+  // 核验结论与状态推导都走一遍真实进程。
+
+  send(
+    req('cm1', {
+      method: 'claim.extract',
+      projectId: createdProject.id,
+      conversationId: conversation.id,
+      markdown:
+        '## Results\n\n' +
+        'Spindle density was higher in patients than controls (p = 0.003).\n' +
+        'Sampling was performed at 250 Hz throughout.\n',
+    }),
+  );
+  await waitFor(() => byId('cm1') !== undefined, 20000, 'claim.extract');
+  const extracted = byId('cm1').result?.created ?? [];
+  check(
+    byId('cm1').ok === true && extracted.length >= 2,
+    'claim.extract 抽出断言 ',
+    `${String(extracted.length)} 条`,
+  );
+  check(
+    extracted.every((c) => c.origin === 'extracted'),
+    '抽取的来源标成 extracted',
+    extracted.map((c) => c.origin).join(','),
+  );
+
+  const claimId = extracted[0]?.id ?? 'cl_missing';
+
+  // 绑定一个编出来的制品版本 id 必须被拒 —— 这是整套机制里最重要的一道检查
+  send(
+    req('cm2', {
+      method: 'claim.bind',
+      projectId: createdProject.id,
+      claimId,
+      evidenceKind: 'artifact-version',
+      evidenceRef: 'av_00000000-0000-0000-0000-000000000000',
+    }),
+  );
+  await waitFor(() => byId('cm2') !== undefined, 8000, 'claim.bind 编造 id');
+  check(
+    byId('cm2').ok === false && String(byId('cm2').error?.message ?? '').includes('不存在'),
+    '编造的证据 id 被拒   ',
+    String(byId('cm2').error?.message ?? '').slice(0, 40),
+  );
+
+  // 确认之后来源变成 user，于是无证据会升级成 FAIL
+  send(req('cm3', { method: 'claim.confirm', projectId: createdProject.id, claimId }));
+  await waitFor(() => byId('cm3') !== undefined, 8000, 'claim.confirm');
+  check(
+    byId('cm3').ok === true && byId('cm3').result?.claim?.origin === 'user',
+    'confirm 提升为 user  ',
+    String(byId('cm3').result?.claim?.origin ?? '?'),
+  );
+
+  send(
+    req('cm4', {
+      method: 'claim.list',
+      projectId: createdProject.id,
+      conversationId: conversation.id,
+      unsupportedOnly: true,
+    }),
+  );
+  await waitFor(() => byId('cm4') !== undefined, 8000, 'claim.list');
+  check(
+    byId('cm4').ok === true &&
+      byId('cm4').result?.summary?.blocking >= 1 &&
+      String(byId('cm4').result?.gate ?? '').includes('不应宣称手稿完成'),
+    '无证据断言算阻断项  ',
+    String(byId('cm4').result?.gate ?? '').slice(0, 50),
+  );
+
+  // 关闭必须给理由：没有理由的关闭在事后与「漏掉了」区分不开
+  send(
+    req('cm5', {
+      method: 'claim.close',
+      projectId: createdProject.id,
+      claimId,
+      status: 'dismissed',
+      note: '',
+    }),
+  );
+  await waitFor(() => byId('cm5') !== undefined, 8000, 'claim.close 空理由');
+  check(
+    byId('cm5').ok === false && byId('cm5').error?.code === 'bad_request',
+    '关闭必须给理由      ',
+    String(byId('cm5').error?.code ?? '?'),
+  );
+
+  send(
+    req('cm6', {
+      method: 'claim.close',
+      projectId: createdProject.id,
+      claimId,
+      status: 'dismissed',
+      note: '这是方法学参数，不是本文结论',
+    }),
+  );
+  await waitFor(() => byId('cm6') !== undefined, 8000, 'claim.close');
+  check(
+    byId('cm6').ok === true && byId('cm6').result?.claim?.status === 'dismissed',
+    'claim.close 生效     ',
+    String(byId('cm6').result?.claim?.status ?? '?'),
+  );
+
+  send(req('cm7', { method: 'claim.get', projectId: createdProject.id, claimId: 'cl_missing' }));
+  await waitFor(() => byId('cm7') !== undefined, 8000, 'claim.get 不存在');
+  check(
+    byId('cm7').ok === false && byId('cm7').error?.code === 'not_found',
+    'claim.get not_found  ',
+    String(byId('cm7').error?.code ?? '?'),
+  );
+
+  // manage_claims 必须在工具清单里
+  send(req('cm8', { method: 'tool.list', projectId: createdProject.id }));
+  await waitFor(() => byId('cm8') !== undefined, 30000, 'tool.list 断言工具');
+  check(
+    (byId('cm8').result?.available ?? []).some((t) => t.name === 'manage_claims') &&
+      (byId('cm8').result?.available ?? []).some((t) => t.name === 'manage_references'),
+    'M4 工具已注册        ',
+    'manage_claims / manage_references',
+  );
+
+  // --- 15. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

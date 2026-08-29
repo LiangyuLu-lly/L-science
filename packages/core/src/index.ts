@@ -75,6 +75,25 @@ export * from './mcp/index.js';
 
 export * from './refs/index.js';
 
+export * from './manuscript/index.js';
+
+export { ClaimsRepo } from './repo/claims.js';
+export type {
+  ClaimEvidence,
+  ClaimEvidenceKind,
+  ClaimOrigin,
+  ClaimRecord,
+  ClaimStatus,
+  ClaimVerdict,
+} from './repo/claims.js';
+export {
+  CLAIM_ORIGIN_LABEL,
+  CLAIM_STATUS_LABEL,
+  EVIDENCE_KIND_LABEL,
+  OPEN_CLAIM_STATUSES,
+  VERDICT_LABEL,
+} from './repo/claims.js';
+
 export { FULL_SCAN_LIMIT, RefsRepo, mergeSourceLabel } from './repo/refs.js';
 export type {
   FetchOutcome,

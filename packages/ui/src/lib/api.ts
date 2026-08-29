@@ -1265,7 +1265,7 @@ export const replacePlan = (projectId: string, planId: string, spec: unknown) =>
 
 export type FindingSeverity = 'warn' | 'fail';
 export type FindingCategory =
-  'evidence' | 'statistics' | 'reproducibility' | 'consistency' | 'integrity';
+  'evidence' | 'statistics' | 'reproducibility' | 'consistency' | 'integrity' | 'claim';
 export type FindingStatus = 'open' | 'claimed-fixed' | 'resolved' | 'dismissed';
 
 export const FINDING_CATEGORY_LABEL: Readonly<Record<FindingCategory, string>> = {
@@ -1274,6 +1274,7 @@ export const FINDING_CATEGORY_LABEL: Readonly<Record<FindingCategory, string>> =
   reproducibility: '可复现',
   consistency: '一致性',
   integrity: '完整性',
+  claim: '断言依据',
 };
 
 export const FINDING_STATUS_LABEL: Readonly<Record<FindingStatus, string>> = {

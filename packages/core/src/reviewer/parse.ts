@@ -33,6 +33,14 @@ export interface ParsedReview {
 export interface ParseOptions {
   allowedMessageIds: ReadonlySet<string>;
   allowedVersionIds: ReadonlySet<string>;
+  /**
+   * 允许作为证据的断言 id（任务 13.4）。
+   *
+   * 省略表示这个部署没有接 Claim Ledger。与传空集合的区别在错误文案上：
+   * 前者说「该项目还没登记断言」，后者说「这条断言不在本次审查范围内」——
+   * 两句话指向的下一步动作不同。
+   */
+  allowedClaimIds?: ReadonlySet<string>;
   /** 允许被复核的 finding id。不在其中的判定被丢弃。 */
   recheckableIds: ReadonlySet<string>;
 }
@@ -44,6 +52,7 @@ const CATEGORIES: readonly FindingCategory[] = [
   'reproducibility',
   'consistency',
   'integrity',
+  'claim',
 ];
 
 /**
@@ -95,8 +104,9 @@ function asString(value: unknown, max = 4_000): string | null {
 /**
  * 校验一条证据。
  *
- * `claim` 类要到 M4 才有对应的表，此刻明确拒绝而不是放行：放行会让一条指向
- * 不存在记录的证据进库，之后 UI 点开是空的。
+ * 全部三类（制品版本、消息、断言）都按 id 是否在允许清单里判定，而不是相信模型写的
+ * `kind`。放行一条指向不存在记录的证据会让 UI 点开是空的，而用户在那之前已经
+ * 相信了这条发现。
  */
 function checkEvidence(
   raw: unknown,
@@ -116,6 +126,7 @@ function checkEvidence(
   // kind 写错但 id 认得出来时按 id 判断：模型常把 artifact-version 写成 artifact
   const looksVersion = options.allowedVersionIds.has(id);
   const looksMessage = options.allowedMessageIds.has(id);
+  const looksClaim = options.allowedClaimIds?.has(id) === true;
 
   if (looksVersion) {
     return {
@@ -126,11 +137,24 @@ function checkEvidence(
   if (looksMessage) {
     return { ok: true, evidence: { kind: 'message', id, ...(note === null ? {} : { note }) } };
   }
+  if (looksClaim) {
+    return { ok: true, evidence: { kind: 'claim', id, ...(note === null ? {} : { note }) } };
+  }
 
+  /*
+   * claim 类且不在清单里时单独给一句更具体的原因。
+   *
+   * 通用的「不在允许清单里」在这里会误导：模型可能给了一个真实存在但不属于本次
+   * 审查范围的 claim id（另一个会话的断言）。告诉它「这条断言不在本次审查范围内」
+   * 才能让它改用范围内的证据，而不是重试同一个 id。
+   */
   if (kind === 'claim') {
     return {
       ok: false,
-      reason: `证据 ${id} 是 claim 类，Claim Ledger 属 M4，暂时无法核对`,
+      reason:
+        options.allowedClaimIds === undefined
+          ? `证据 ${id} 是 claim 类，但本次审查没有可用的断言清单（该项目还没登记断言）`
+          : `断言 ${id} 不在本次审查范围内。只能引用本次审查上下文里列出的断言。`,
     };
   }
   return { ok: false, reason: `证据 id 不在允许清单里：${id}` };

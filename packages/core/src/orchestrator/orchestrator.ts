@@ -397,6 +397,9 @@ export class Orchestrator {
             messageId: userMessageId,
             call,
             signal: controller.signal,
+            // 哪个模型发起的这次调用。需要记录「是谁做的判断」的工具靠它
+            // （需求 13.4）。不能让工具从入参里接受，那等于让模型自报身份
+            modelId: step.modelId,
           });
 
           yield { kind: 'tool.output', callId: call.id, output: outcome.output };
@@ -480,6 +483,16 @@ export class Orchestrator {
         events: readonly TurnEvent[];
         usage: Usage;
         decisionEvent: TurnEvent | null;
+        /**
+         * 实际执行本步的模型。
+         *
+         * 透传进 `ToolContext.modelId`，供需要记录「是谁做的判断」的工具使用
+         * （需求 13.4 要求 Claim Ledger 的核验结论带模型标识）。不能让工具从
+         * 入参里接受这个值——那等于让模型自报身份，而这一列的用途正是事后
+         * 判断结论的可信度。降级链走到第二个模型时这里是第二个模型的 id，
+         * 因为它才是真正干活的那个。
+         */
+        modelId: string | null;
       }
   > {
     const emptyUsage: Usage = { tokensIn: 0, tokensOut: 0, cost: 0, currency: 'USD' };
@@ -547,6 +560,7 @@ export class Orchestrator {
     for (const model of chain) {
       if (input.signal.aborted) {
         return {
+          modelId: model.id,
           kind: 'error',
           detail: '已中断',
           text: '',
@@ -612,6 +626,7 @@ export class Orchestrator {
 
         if (collected.stopReason === 'content_filter') {
           return {
+            modelId: model.id,
             kind: 'content-filter',
             detail:
               '供应商以内容安全为由拒绝了这次请求。这是安全边界而不是故障，' +
@@ -625,6 +640,7 @@ export class Orchestrator {
         }
 
         return {
+          modelId: model.id,
           kind: 'ok',
           detail: '',
           text: collected.text,
@@ -674,6 +690,7 @@ export class Orchestrator {
         // 内容安全拒答绝不换模型绕过（需求 7.8）
         if (providerError.isContentFilter === true) {
           return {
+            modelId: model.id,
             kind: 'content-filter',
             detail: `供应商以内容安全为由拒绝：${lastError}。不会更换模型重试。`,
             text: '',
@@ -687,6 +704,7 @@ export class Orchestrator {
         // 不可重试的失败换模型也一样错
         if (providerError.retryable === false) {
           return {
+            modelId: model.id,
             kind: 'error',
             detail: lastError,
             text: '',
@@ -701,6 +719,7 @@ export class Orchestrator {
     }
 
     return {
+      modelId: null,
       kind: 'error',
       detail: `全部 ${String(chain.length)} 个候选模型都失败了。最后一个错误：${lastError}`,
       text: '',
@@ -738,6 +757,7 @@ export class Orchestrator {
     messageId: string;
     call: { id: string; name: string; argumentsJson: string };
     signal: AbortSignal;
+    modelId?: string | null;
   }): Promise<{ output: ToolOutput; forModel: string }> {
     // 实现在 agent-runtime.ts，与子 agent 共用
     return executeToolCall({
@@ -750,6 +770,9 @@ export class Orchestrator {
         conversationId: input.conversationId,
         workspaceDir: this.#deps.workspaceDir(input.conversationId),
         signal: input.signal,
+        ...(input.modelId === undefined || input.modelId === null
+          ? {}
+          : { modelId: input.modelId }),
       },
     });
   }

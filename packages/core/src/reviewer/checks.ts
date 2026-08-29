@@ -261,6 +261,156 @@ export function extractText(content: unknown): string {
 }
 
 /* ------------------------------------------------------------------ *
+ * Claim Ledger
+ * ------------------------------------------------------------------ */
+
+/**
+ * 无证据与证据矛盾的断言（任务 13.4，需求 13.3）。
+ *
+ * 需求要求「断言处于未关闭状态且无任何证据绑定时提出 FAIL 级发现」。这里比需求
+ * 多做两件事，两件都是为了让 FAIL 保持可信：
+ *
+ * 1. **自动抽取的断言只报 WARN。** 规则抽取必然误抽（方法学里的「采样率 250 Hz」
+ *    会被认成数值结论）。如果它们也开 FAIL，一次抽取就能产生几十条 FAIL，
+ *    而 FAIL 的作用是打断主 agent——那时用户会做的事是关掉审查。确认过
+ *    （`origin` 不是 `extracted`）的断言才进 FAIL。
+ * 2. **证据矛盾单独报，且严重度高于无证据。** 无证据是「还没做完」，矛盾是
+ *    「手稿里有一句已知错误的陈述」。合成一类之后用户分不出哪个更急。
+ *
+ * 每条发现都指向具体的 claim id（`FindingEvidence.kind === 'claim'`），因此
+ * 用户点开能看到原句、定位与已有证据。
+ */
+export function checkClaimSupport(input: {
+  /** 未关闭的断言。调用方按会话或手稿筛好。 */
+  claims: readonly ClaimSnapshot[];
+}): readonly DraftFinding[] {
+  const findings: DraftFinding[] = [];
+
+  const refuted = input.claims.filter((c) => c.status === 'refuted');
+  const unsupportedConfirmed = input.claims.filter(
+    (c) => c.evidence.length === 0 && c.origin !== 'extracted',
+  );
+  const unsupportedExtracted = input.claims.filter(
+    (c) => c.evidence.length === 0 && c.origin === 'extracted',
+  );
+  const insufficient = input.claims.filter(
+    (c) => c.status === 'insufficient' && c.evidence.length > 0,
+  );
+
+  /*
+   * 矛盾的断言逐条报。
+   *
+   * 不合并成一条：每一条都要单独修改手稿的某一句话，合并之后用户要在一条发现的
+   * detail 里数出五个位置，而 `mark_addressed` 只能整条标记——于是修了一句就把
+   * 五条都标成已处理了。
+   */
+  for (const claim of refuted) {
+    findings.push({
+      severity: 'fail',
+      category: 'claim',
+      title: `断言与证据矛盾：${claim.locator ?? claim.id}`,
+      detail:
+        `「${claim.text.slice(0, 300)}」\n\n` +
+        '已绑定的证据里有一条被判定为与这条断言矛盾。一条矛盾压倒任意多条支持——' +
+        '要么某处算错了，要么这句话的表述过强。\n' +
+        '这必须改手稿，不能靠再补一条支持性证据盖过去。' +
+        `用 manage_claims 的 get 看是哪条证据矛盾（claimId=${claim.id}）。`,
+      evidence: [{ kind: 'claim', id: claim.id, note: claim.text.slice(0, 400) }],
+    });
+  }
+
+  for (const claim of unsupportedConfirmed) {
+    findings.push({
+      severity: 'fail',
+      category: 'claim',
+      title: `断言没有任何证据：${claim.locator ?? claim.id}`,
+      detail:
+        `「${claim.text.slice(0, 300)}」\n\n` +
+        '这是一条已确认需要核验的断言，但 Claim Ledger 里没有任何证据绑定到它。\n' +
+        (claim.numbers.length > 0
+          ? `它声称的数值：${claim.numbers.join('、')}。这些数字必须能指到产生它们的分析输出。\n`
+          : '') +
+        `用 manage_claims 的 bind 绑定证据（claimId=${claim.id}）：` +
+        '制品版本（分析输出）、文献条目、或可复现的计算单元。\n' +
+        '如果这句话其实不需要核验（例如它是背景陈述而非本文结论），用 close 关掉并说明理由。',
+      evidence: [{ kind: 'claim', id: claim.id, note: claim.text.slice(0, 400) }],
+    });
+  }
+
+  for (const claim of insufficient) {
+    findings.push({
+      severity: 'warn',
+      category: 'claim',
+      title: `断言的证据不足：${claim.locator ?? claim.id}`,
+      detail:
+        `「${claim.text.slice(0, 300)}」\n\n` +
+        '已绑定的证据被判定为相关但不足以支持这条断言。补更直接的证据，' +
+        '或者把断言改弱到证据能支持的程度。',
+      evidence: [{ kind: 'claim', id: claim.id, note: claim.text.slice(0, 400) }],
+    });
+  }
+
+  /*
+   * 自动抽取的无证据断言合并成一条 WARN。
+   *
+   * 与上面「矛盾要逐条报」相反：这些是候选而不是已确认的问题，用户要做的是
+   * 「逐条过一遍分类」这个单一动作，而不是逐条修手稿。合并成一条让它在 findings
+   * 列表里只占一行，不至于把真正的问题挤出视野。
+   */
+  if (unsupportedExtracted.length > 0) {
+    const sample = unsupportedExtracted.slice(0, 5);
+    findings.push({
+      severity: 'warn',
+      category: 'claim',
+      title: `${String(unsupportedExtracted.length)} 条自动抽取的断言还没有证据`,
+      detail:
+        '这些是规则从手稿里抽出的候选断言，未经确认。规则必然会误抽——' +
+        '方法学里的「采样率 250 Hz」会被认成数值结论。\n\n' +
+        sample.map((c) => `· ${c.locator ?? c.id}：${c.text.slice(0, 120)}`).join('\n') +
+        (unsupportedExtracted.length > sample.length
+          ? `\n… 还有 ${String(unsupportedExtracted.length - sample.length)} 条`
+          : '') +
+        '\n\n逐条看过之后：真正需要证据的用 manage_claims 的 confirm 确认' +
+        '（确认后无证据会升级成 FAIL），不需要核验的用 close 关掉。',
+      // 证据指向第一条：finding 必须有具体指向（需求 11.8），而这条发现
+      // 说的是「这一批需要分类」，取样本里的第一条作为入口
+      evidence: sample.map((c) => ({
+        kind: 'claim' as const,
+        id: c.id,
+        note: c.text.slice(0, 200),
+      })),
+    });
+  }
+
+  return findings;
+}
+
+/**
+ * 断言快照。
+ *
+ * 用一个中性的结构而不是直接吃 `ClaimRecord`：审查模块在 M3 就定型了，让它 import
+ * M4 的仓储类型会把「审查」与「手稿」两个模块绑在一起，而只有前者是每个部署都需要的。
+ *
+ * 证据带完整明细而不只是计数：确定性层只用得到计数，但模型层要看「绑的是什么、
+ * 核验结论是什么、引的原文是什么」。两层用同一份快照，否则会出现确定性层报了
+ * 一条无证据断言、而模型层那份快照里它已经绑上证据的自相矛盾。
+ */
+export interface ClaimSnapshot {
+  id: string;
+  text: string;
+  locator: string | null;
+  status: string;
+  origin: string;
+  numbers: readonly string[];
+  evidence: readonly {
+    kind: string;
+    ref: string;
+    verdict: string | null;
+    quote: string | null;
+  }[];
+}
+
+/* ------------------------------------------------------------------ *
  * 汇总入口
  * ------------------------------------------------------------------ */
 
@@ -269,6 +419,13 @@ export interface DeterministicInput {
   messages: readonly Message[];
   /** 只检查本次审查范围内新增的版本。省略表示检查全部血缘不完整的版本。 */
   versionIds?: readonly string[];
+  /**
+   * 未关闭的断言（需求 13.3）。
+   *
+   * 省略表示这个部署没有接 Claim Ledger，跳过该组检查。传空数组表示「接了但一条
+   * 断言都没有」——两者的区别在于后者说明手稿还没被登记过断言，那本身是个信息。
+   */
+  claims?: readonly ClaimSnapshot[];
 }
 
 /**
@@ -299,5 +456,6 @@ export function runDeterministicChecks(input: DeterministicInput): readonly Draf
       messages: input.messages,
       exists: (versionId) => input.artifacts.getVersion(versionId) !== null,
     }),
+    ...(input.claims === undefined ? [] : checkClaimSupport({ claims: input.claims })),
   ];
 }

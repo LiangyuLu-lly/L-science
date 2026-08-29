@@ -7,17 +7,18 @@
 
 export {
   checkArtifactLineage,
+  checkClaimSupport,
   checkDanglingArtifactRefs,
   extractText,
   runDeterministicChecks,
 } from './checks.js';
-export type { DeterministicInput, DraftFinding } from './checks.js';
+export type { ClaimSnapshot, DeterministicInput, DraftFinding } from './checks.js';
 
 export { extractJsonObject, parseReviewOutput } from './parse.js';
 export type { ParseOptions, ParsedRecheck, ParsedReview, RecheckVerdict } from './parse.js';
 
 export { buildReviewContext, reviewerSystemPrompt, reviewerUserPrompt } from './prompt.js';
-export type { ReviewContext, ReviewContextInput } from './prompt.js';
+export type { ReviewClaim, ReviewContext, ReviewContextInput } from './prompt.js';
 
 export { ReviewerService } from './service.js';
 export type { ReviewOutcome, ReviewerServiceDeps } from './service.js';

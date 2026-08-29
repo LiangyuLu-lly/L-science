@@ -207,8 +207,16 @@ export type ToolOutput =
  */
 export type FindingSeverity = 'warn' | 'fail';
 
+/**
+ * 发现的类别。
+ *
+ * `claim` 是 M4 加的（任务 13.4，需求 13.3）：无证据断言与证据矛盾的断言不属于
+ * 已有的任何一类。`evidence` 说的是「这条发现指向什么」，而 `claim` 说的是
+ * 「手稿里有一句话没有依据」——后者是论文层面的问题，前者是审查记录的形式要求。
+ * 混在一起之后，用户无法在 findings 列表里筛出「手稿还有哪些话没有依据」。
+ */
 export type FindingCategory =
-  'evidence' | 'statistics' | 'reproducibility' | 'consistency' | 'integrity';
+  'evidence' | 'statistics' | 'reproducibility' | 'consistency' | 'integrity' | 'claim';
 
 /**
  * 发现的状态（需求 11.7）。

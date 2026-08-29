@@ -864,6 +864,120 @@ export const requestSchema = z.discriminatedUnion('method', [
     includeAbstract: z.boolean().default(false),
     sort: z.enum(['key', 'author-year', 'year-desc', 'added']).default('key'),
   }),
+
+  /* --- Claim Ledger（任务 13.4，需求 13.1-13.4）--- */
+
+  /** 断言列表与整体状态。 */
+  z.object({
+    method: z.literal('claim.list'),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+    manuscriptId: idSchema.optional(),
+    status: z
+      .enum([
+        'open',
+        'supported',
+        'insufficient',
+        'refuted',
+        'retracted',
+        'dismissed',
+        'unresolved',
+        'all',
+      ])
+      .default('unresolved'),
+    kind: z.enum(['numeric', 'comparison', 'causal', 'citation', 'other']).optional(),
+    unsupportedOnly: z.boolean().default(false),
+    limit: z.number().int().min(1).max(500).default(100),
+  }),
+
+  z.object({ method: z.literal('claim.get'), projectId: idSchema, claimId: idSchema }),
+
+  /**
+   * 从手稿抽取断言。
+   *
+   * `markdown` 与 `artifactVersionId` 二选一。后者让界面能直接对一个手稿制品跑抽取，
+   * 不必把几万字正文经 IPC 传一遍。
+   */
+  z.object({
+    method: z.literal('claim.extract'),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+    manuscriptId: idSchema.optional(),
+    markdown: z.string().max(600_000).optional(),
+    artifactVersionId: idSchema.optional(),
+    limit: z.number().int().min(1).max(2000).default(300),
+  }),
+
+  /** 用户手写一条断言。origin 固定为 user——它一开始就是确认状态。 */
+  z.object({
+    method: z.literal('claim.register'),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+    manuscriptId: idSchema.optional(),
+    text: z.string().min(1).max(4000),
+    locator: z.string().max(500).optional(),
+    note: z.string().max(2000).optional(),
+  }),
+
+  z.object({
+    method: z.literal('claim.bind'),
+    projectId: idSchema,
+    claimId: idSchema,
+    evidenceKind: z.enum(['artifact-version', 'ref', 'doi', 'compute', 'quote', 'message']),
+    evidenceRef: z.string().min(1).max(500),
+    locator: z.string().max(500).optional(),
+    quote: z.string().max(4000).optional(),
+    note: z.string().max(2000).optional(),
+  }),
+
+  z.object({
+    method: z.literal('claim.unbind'),
+    projectId: idSchema,
+    claimId: idSchema,
+    evidenceKind: z.enum(['artifact-version', 'ref', 'doi', 'compute', 'quote', 'message']),
+    evidenceRef: z.string().min(1).max(500),
+  }),
+
+  /**
+   * 用户手工记录核验结论。
+   *
+   * `modelId` 不在参数里：界面发起的核验一律记成 `user:manual`。让前端传模型标识
+   * 等于让它可以冒充任何模型，而这一列的用途正是判断结论的可信度（需求 13.4）。
+   */
+  z.object({
+    method: z.literal('claim.verify'),
+    projectId: idSchema,
+    claimId: idSchema,
+    evidenceKind: z.enum(['artifact-version', 'ref', 'doi', 'compute', 'quote', 'message']),
+    evidenceRef: z.string().min(1).max(500),
+    verdict: z.enum(['supports', 'contradicts', 'insufficient', 'unrelated']),
+    note: z.string().max(2000).optional(),
+  }),
+
+  /** 确认一条自动抽取的断言。确认后它无证据时会开 FAIL 级发现。 */
+  z.object({
+    method: z.literal('claim.confirm'),
+    projectId: idSchema,
+    claimId: idSchema,
+    note: z.string().max(2000).optional(),
+  }),
+
+  z.object({
+    method: z.literal('claim.close'),
+    projectId: idSchema,
+    claimId: idSchema,
+    status: z.enum(['retracted', 'dismissed']),
+    note: z.string().min(1).max(2000),
+  }),
+
+  z.object({
+    method: z.literal('claim.reopen'),
+    projectId: idSchema,
+    claimId: idSchema,
+    note: z.string().max(2000).optional(),
+  }),
+
+  z.object({ method: z.literal('claim.delete'), projectId: idSchema, claimId: idSchema }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;
