@@ -999,6 +999,30 @@ async function main(): Promise<void> {
       // 需求 14.2：MCP 只从控制面暴露。这里是它唯一的注册点，
       // ToolRegistry 里刻意没有任何 mcp_* 工具
       mcp: mcpManager,
+      /*
+       * M4 三层（任务 13.1-13.6）用惰性取。
+       *
+       * 控制面必须在这里就注册好——内核池、shim 与 RPC 都依赖它的表面清单，而那三层
+       * 要接审批服务、域名授权与制品库，只能在下面才建得起来。这些回调只在模型真的
+       * 调用对应方法时执行，那时它们一定已经就绪；就绪之前调用会拿到一句明确的
+       * 「尚未就绪」而不是一个空壳。
+       */
+      refs: () => {
+        const library = refLibraries.get(projectId);
+        if (library === undefined) throw new Error(`项目 ${projectId} 的文献库尚未就绪`);
+        return library;
+      },
+      claims: () => {
+        const ledger = claimLedgers.get(projectId);
+        if (ledger === undefined) throw new Error(`项目 ${projectId} 的断言台账尚未就绪`);
+        return ledger;
+      },
+      citations: () => citationVerifierFor(),
+      manuscripts: () => {
+        const compiler = manuscriptCompilers.get(projectId);
+        if (compiler === undefined) throw new Error(`项目 ${projectId} 的手稿编译器尚未就绪`);
+        return compiler;
+      },
     });
 
     /*

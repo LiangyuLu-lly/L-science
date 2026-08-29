@@ -120,6 +120,13 @@ export class ControlRepl {
     code: string;
     /** 本次执行归属的会话。host 调用按它归属子 agent、findings、计划。 */
     conversationId: string;
+    /**
+     * 驱动本次执行的模型。
+     *
+     * 与会话 id 同样由平台注入而不是让控制面代码自报：核验类方法要记执行者，
+     * 而自报的执行者标识不能支撑任何可信度判断。
+     */
+    modelId?: string | null;
     mode?: 'auto' | ReplMode;
     timeoutMs?: number;
   }): Promise<ReplRunResult> {
@@ -168,10 +175,24 @@ export class ControlRepl {
    * 也不放在启动环境变量里：单例内核跨会话复用，启动那一刻的会话 id 到下一个
    * 会话就是错的。
    */
-  async #setContext(kernel: JupyterKernel, conversationId: string): Promise<void> {
+  async #setContext(
+    kernel: JupyterKernel,
+    conversationId: string,
+    modelId: string | null,
+  ): Promise<void> {
     const code = [
       'import os as _lsci_os',
       `_lsci_os.environ["L_SCIENCE_HOST_CONVERSATION"] = ${JSON.stringify(conversationId)}`,
+      /*
+       * 模型标识没有时要**删掉**而不是留着上一次的值。
+       *
+       * 单例内核跨回合复用，上一回合的模型 id 留在环境里就会被下一回合的核验记录
+       * 认领——那条记录会说「这是 X 判的」，而 X 那时根本没参与。留一个过期的
+       * 执行者标识比没有更糟：没有会被拒绝，过期的会被接受。
+       */
+      modelId === null || modelId === ''
+        ? '_lsci_os.environ.pop("L_SCIENCE_HOST_MODEL", None)'
+        : `_lsci_os.environ["L_SCIENCE_HOST_MODEL"] = ${JSON.stringify(modelId)}`,
       'del _lsci_os',
     ].join('\n');
     await collectExecution(
@@ -182,12 +203,13 @@ export class ControlRepl {
   async #runSingleton(input: {
     code: string;
     conversationId: string;
+    modelId?: string | null;
     timeoutMs?: number;
   }): Promise<ReplRunResult> {
     this.#busy = true;
     try {
       const kernel = await this.#opts.pool.acquire(this.#singletonKey, 'python');
-      await this.#setContext(kernel, input.conversationId);
+      await this.#setContext(kernel, input.conversationId, input.modelId ?? null);
       const outputs = kernel.execute(
         input.code,
         input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs },
@@ -207,7 +229,7 @@ export class ControlRepl {
    * 第二控制面，而单例约束的意义就在于「控制面状态只有一份」。
    */
   async #runBypass(
-    input: { code: string; conversationId: string; timeoutMs?: number },
+    input: { code: string; conversationId: string; modelId?: string | null; timeoutMs?: number },
     reason: string,
   ): Promise<ReplRunResult> {
     this.#bypassCounter += 1;
@@ -215,7 +237,7 @@ export class ControlRepl {
 
     try {
       const kernel = await this.#opts.pool.acquire(key, 'python');
-      await this.#setContext(kernel, input.conversationId);
+      await this.#setContext(kernel, input.conversationId, input.modelId ?? null);
       const outputs = kernel.execute(
         input.code,
         input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs },

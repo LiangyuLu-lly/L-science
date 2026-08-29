@@ -557,11 +557,11 @@ interface Finding {
 
 Claude Science 提供了通用科研骨架，但没有针对论文产出的专用结构。L-science 增加三层：
 
-**Reference Library**：DOI 解析走 Crossref / OpenAlex / Semantic Scholar / PubMed，去重按 DOI + 标题模糊匹配，全文抓取按开放获取优先级链，抓到的全文落为 artifact 并建立与引用记录的绑定。导出支持 BibTeX 与 CSL-JSON。
+**Reference Library**（`packages/core/src/refs/`，项目库迁移 v5-v6）：元数据解析**六家上游并行**（Crossref / OpenAlex / Semantic Scholar / PubMed / Europe PMC / arXiv）后按字段完备度合并，而不是依次尝试取第一个成功——串行最坏是六个超时叠加，取第一个会让记录质量取决于谁先响应。去重分 same / likely / distinct 三档，DOI 精确匹配 + 标题（编辑距离与词包含率双指标）模糊匹配，**两个不同 DOI 永不自动合并**（preprint 与正式版是两个真实注册对象）。全文抓取按开放获取优先链，PMC OA 包排第一（唯一能一次拿到结构化正文 + 全部插图 + 补充材料的来源），抓到的正文与随文图像落为 artifact 并绑定引用记录，失败记入 `ref_fetch_attempts`（来源、原因、时间）。按文件魔数判类型，**HTML 一律判失败**——出版商 PDF 链接常重定向到登录页并返回 200。导出 BibTeX / CSL-JSON / RIS 三格式，**共用同一套引用键**（否则手稿在 pandoc 与 LaTeX 之间切换时全部引用失效）。两道域名门分开：元数据走静态表 `REF_SOURCE_HOSTS`，全文走运行时主机授权（全文 URL 是从上游返回值里现取的，不可能预先列全）。JATS/XML 解析器从零写，DOCTYPE 整段跳过。
 
-**Claim Ledger**：手稿解析出可核查断言（数值结论、比较陈述、因果陈述、引文支撑陈述），每条断言登记后必须绑定至少一条证据。证据类型包括 artifact 版本（分析输出）、DOI（文献）、代码单元（可复现计算）。Reviewer 对 `status = open` 且无证据的断言直接开 FAIL。
+**Claim Ledger**（`packages/core/src/manuscript/{extract,ledger}.ts` + `repo/claims.ts`，迁移 v7-v8）：断言识别用**确定性规则**而非让模型读一遍（模型会漏，漏掉的可能正是编造的数字；抽取要可复现）。识别数值结论、比较陈述、因果陈述、引文支撑陈述四类。每条断言登记后必须绑定至少一条证据，证据类型 artifact 版本 / ref / DOI / compute / quote / message，**绑定时校验被指向的对象真的存在**。断言状态由证据的核验结论推导，不由调用方写入——一条 `contradicts` 压倒任意多条 `supports`。执行模型标识从 `ToolContext.modelId` 取而不让模型自报。Reviewer 对 `origin='asserted'` 且无证据的断言开 FAIL，`origin='extracted'` 只开 WARN（收紧规则会漏掉真正编造的数字，而 FAIL 里塞满误抽会让用户关掉审查）。引文核实（`manuscript/{citations,verify}.ts`）**由后端做检索，模型拿不到写结论的权限**：工具签名里没有 verdict 参数、ledger 拒绝无检索记录的 supports、审查层兜底扫编造嫌疑——提示词写「不要凭记忆」只会让它在幻觉之外多加一句「我已核实」。纯引用标记（`[12]`）拒绝检索而不是当标题去查。期刊名比对用 ISO 4 前缀 + 子序列而非字符串相似度。`not-found` 与 `unverifiable` 分开记（混成一档会把网络故障说成学术不端）。
 
-**Manuscript Compiler**：从结构化手稿（Markdown + front matter）编译为目标期刊格式，处理引用样式、字数限制、图表编号与格式规范。**双盲送审版**按结构化字段处理（移除 front matter 里的作者、机构、致谢、基金号），并检测自引造成的身份泄露（正文出现「我们此前的工作 [12]」且 [12] 的作者与本文作者有交集）。注意：这是基于结构化元数据的规则处理，不依赖已取消的检测器栈，因此对正文里的隐式身份线索无保证。
+**Manuscript Compiler**（`packages/core/src/manuscript/{frontmatter,document,journals,compile}.ts` + `repo/manuscripts.ts`，迁移 v9）：从结构化手稿（Markdown + front matter）编译为目标期刊格式，处理引用样式、字数限制、图表编号与格式规范。**只检查不自动改**，唯一例外是引用重编号（自动删字毁论证，自动重排打乱交叉引用）。front matter 另写嵌套解析器而不复用平铺版也不引 YAML 库：平铺表达不了「作者带机构」，而 YAML 的隐式转换在此是纯陷阱——`no` 不变 false，`1.10` 不变 1.1，重复键报错而不是覆盖。元数据按 `identifying` / `statements` 两组分，让「哪些算身份信息」出现在类型上。**双盲送审版**只删结构化字段、**正文一个字不改**（正文正则替换会命中同名的被引作者、会破坏「Smith-Waterman」，且改动无法审阅），移除项逐条列出。自引身份泄露要求两个条件同时成立（正文自我指代措辞 + 该引用作者与本文作者有交集），上下文按段落取而非按行。期刊档案是数据且每条带 note 说明数值来源。编译报告与输出文件**同时**载明：这是基于结构化元数据的规则处理，对正文里的隐式身份线索无保证。`compile_runs` 单独一张表，因为「上次报告是什么」与「问题数在收敛还是发散」是两个问题。
 
 ### 8. Connectors 与 Compute
 

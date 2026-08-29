@@ -35,6 +35,15 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
  */
 export interface HostCallContext {
   conversationId: string | null;
+  /**
+   * 驱动本次控制面执行的模型（任务 13.4-13.6）。
+   *
+   * 与会话 id 走同一条路径（平台注入 → 每次调用现读），因此它**不是模型自报的**。
+   * 这一点是必要的：核验结论要记下执行者才有可信度可谈，而一个自报的模型标识在
+   * 「这个结论有多可信」上没有任何价值——真正编造结论的那次调用会把自己报成
+   * 任何名字。控制面之外的调用者拿不到它，于是那些要求执行者身份的方法会拒绝。
+   */
+  modelId: string | null;
 }
 
 export type HostRpcHandler = (
@@ -221,9 +230,11 @@ export class HostRpcServer {
         ? (parsed.context as Record<string, unknown>)
         : {};
     const conversationId = rawContext['conversationId'];
+    const modelId = rawContext['modelId'];
     const context: HostCallContext = {
       conversationId:
         typeof conversationId === 'string' && conversationId !== '' ? conversationId : null,
+      modelId: typeof modelId === 'string' && modelId !== '' ? modelId : null,
     };
 
     try {

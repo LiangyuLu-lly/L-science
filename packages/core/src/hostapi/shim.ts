@@ -98,10 +98,17 @@ def _call(method, params):
             "普通 python cell 无法调用平台管理能力。"
         )
 
-    # 会话 id 每次调用现读一次，不在导入时缓存：控制面单例内核跨会话复用，
+    # 会话 id 与模型 id 每次调用现读一次，不在导入时缓存：控制面单例内核跨会话复用，
     # 缓存下来的那个 id 到下一个会话就是错的，而错误的后果（子 agent 挂到别的
-    # 会话下、findings 记到别的会话里）不会有任何报错
-    context = {"conversationId": os.environ.get("L_SCIENCE_HOST_CONVERSATION")}
+    # 会话下、findings 记到别的会话里）不会有任何报错。
+    #
+    # 模型 id 由平台在每次执行前写进环境，控制面代码改不掉它对本次调用的影响
+    # ——真要改就得改自己进程的环境变量，而那时改的是「谁在执行」这个事实本身，
+    # 已经不是「自报一个好看的名字」了
+    context = {
+        "conversationId": os.environ.get("L_SCIENCE_HOST_CONVERSATION"),
+        "modelId": os.environ.get("L_SCIENCE_HOST_MODEL"),
+    }
     body = json.dumps(
         {"method": method, "params": params or {}, "context": context}
     ).encode("utf-8")

@@ -24,15 +24,29 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   AppStore,
+  ArtifactStore,
+  ClaimLedger,
+  ClaimsRepo,
   ControlRepl,
   FindingsRepo,
   HostRpcServer,
+  ManuscriptCompiler,
+  ManuscriptRepo,
+  PlanRepo,
+  RefLibrary,
+  RefsRepo,
+  RegistryRepo,
+  SkillAuditRepo,
+  UsageRepo,
   assertReadOnlySql,
   buildHostShim,
   createControlReplAdminTool,
   createControlReplTool,
   hostInitCode,
+  registerHostMethods,
+  type HostMethodDeps,
   type ProjectStore,
+  type RegisteredHost,
   type ShimPending,
   type ShimSurface,
 } from '@l-science/core';
@@ -213,13 +227,23 @@ describe('HostRpcServer', () => {
   it('会话上下文按调用传入，不是启动时固化的', async () => {
     const first = await call(server, 'ctx', {}, { conversationId: 'conv-a' });
     const second = await call(server, 'ctx', {}, { conversationId: 'conv-b' });
-    expect(first.body.result).toEqual({ conversationId: 'conv-a' });
-    expect(second.body.result).toEqual({ conversationId: 'conv-b' });
+    expect(first.body.result).toEqual({ conversationId: 'conv-a', modelId: null });
+    expect(second.body.result).toEqual({ conversationId: 'conv-b', modelId: null });
   });
 
   it('没带上下文时 conversationId 为 null 而不是空串', async () => {
     const reply = await call(server, 'ctx');
-    expect(reply.body.result).toEqual({ conversationId: null });
+    expect(reply.body.result).toEqual({ conversationId: null, modelId: null });
+  });
+
+  it('执行者身份与会话走同一条路径，也是每次调用带上来的', async () => {
+    // 核验结论要记执行者（需求 13.3）。它必须由平台注入而不是让控制面代码自报——
+    // 自报的标识在「这个结论有多可信」上没有任何价值
+    const reply = await call(server, 'ctx', {}, { conversationId: 'c1', modelId: 'deepseek-chat' });
+    expect(reply.body.result).toEqual({ conversationId: 'c1', modelId: 'deepseek-chat' });
+
+    const empty = await call(server, 'ctx', {}, { conversationId: 'c1', modelId: '' });
+    expect((empty.body.result as { modelId: unknown }).modelId).toBeNull();
   });
 
   it('未启动时 env() 为空，不给出一个连不上的地址', async () => {
@@ -488,6 +512,24 @@ describe('ControlRepl', () => {
     expect(kernel?.executed[0]).toContain('L_SCIENCE_HOST_CONVERSATION');
     expect(kernel?.executed[0]).toContain('conv-xyz');
     expect(kernel?.executed[1]).toBe('print(1)');
+  });
+
+  it('执行者身份也进内核环境，没有时把上一次的删掉', async () => {
+    await repl.run({ code: 'a()', conversationId: 'c1', modelId: 'qwen3:4b' });
+    const kernel = pool.kernels.get('control-plane');
+    expect(kernel?.executed[0]).toContain('L_SCIENCE_HOST_MODEL');
+    expect(kernel?.executed[0]).toContain('qwen3:4b');
+
+    /*
+     * 关键：不带 modelId 的下一次执行必须**删掉**环境里的旧值。
+     *
+     * 单例内核跨回合复用，留着上一回合的模型 id 会让这一回合的核验记录认领它——
+     * 那条记录会说「这是 qwen3 判的」，而 qwen3 那时根本没参与。留一个过期的执行者
+     * 标识比没有更糟：没有会被拒绝，过期的会被接受。
+     */
+    await repl.run({ code: 'b()', conversationId: 'c1' });
+    expect(kernel?.executed[2]).toContain('environ.pop("L_SCIENCE_HOST_MODEL", None)');
+    expect(kernel?.executed[2]).not.toContain('qwen3');
   });
 
   it('mode=singleton 在忙时快速失败而不是排队', async () => {
@@ -903,5 +945,249 @@ describe('FindingsRepo', () => {
     project.db.prepare('DELETE FROM reviewer_runs WHERE id = ?').run(run.id);
     // ON DELETE SET NULL：发现本身仍然要在，它描述的问题并没有因此消失
     expect(findings.get(finding.id)?.reviewerRunId).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * M4 三层的控制面表面（任务 13.1-13.6）
+ * ------------------------------------------------------------------ */
+
+/*
+ * 这一组验的是**接线**而不是这三层自己的行为（那些在 refs / claims / manuscript
+ * 各自的测试里）。接线上有两件事只有在这里才成立：
+ *
+ * 1. 缺席与未实现是两回事。`compute` 是「还没做」，M4 三层缺席是「这次运行没接上」。
+ *    用同一句话说会让用户去等一个已经做完的东西。
+ * 2. `claims.verify` 的执行者身份必须来自调用上下文，不是参数。这是需求 13.3 在
+ *    接口形状上的落点——只要它能当参数传，自报就成立了，而自报的执行者标识在
+ *    「这个结论有多可信」上没有任何价值。
+ */
+
+describe('host 的 M4 表面', () => {
+  let root: string;
+  let store: AppStore;
+  let project: ProjectStore;
+  let server: HostRpcServer;
+  let conversationId: string;
+  let claimId: string;
+  let registered: RegisteredHost;
+
+  const minimalDeps = (over: Partial<HostMethodDeps> = {}): HostMethodDeps => ({
+    projectId: 'p1',
+    db: project.db,
+    artifacts: new ArtifactStore(project.db, project.paths.blobs),
+    plans: new PlanRepo(project.db),
+    findings: new FindingsRepo(project.db),
+    skills: {
+      records: () => [],
+      search: async () => [],
+      inject: () => null,
+      readReference: () => ({ ok: false, reason: '未加载技能' }),
+      requirementsOf: () => null,
+    } as never,
+    skillAudit: new SkillAuditRepo(project.db),
+    usage: new UsageRepo(project.db),
+    registry: new RegistryRepo(store.db),
+    subAgents: { spawn: () => undefined, list: () => [], get: () => null } as never,
+    ...over,
+  });
+
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), 'lsci-host-m4-'));
+    store = AppStore.open(root);
+    const created = store.createProject({ name: 'M4 表面' });
+    project = store.openProject(created.id);
+    conversationId = project.conversations.create({ title: '会话' }).id;
+
+    const artifacts = new ArtifactStore(project.db, project.paths.blobs);
+    const refLibrary = new RefLibrary({
+      repo: new RefsRepo(project.db),
+      artifacts,
+      // 不出网：库内操作照样要能用
+      authorizeHosts: async () => [],
+      authorizeFulltextHost: async () => false,
+    });
+    const ledger = new ClaimLedger({
+      repo: new ClaimsRepo(project.db),
+      artifactExists: (versionId) => artifacts.getVersion(versionId) !== null,
+      refExists: (refId) => refLibrary.repo.get(refId) !== null,
+      refIdByDoi: (doi) => refLibrary.repo.getByDoi(doi)?.id ?? null,
+      computeExists: () => false,
+    });
+    const compiler = new ManuscriptCompiler({
+      repo: new ManuscriptRepo(project.db),
+      artifacts,
+      refs: () => refLibrary.repo.list({ limit: 100 }),
+    });
+
+    claimId =
+      ledger.register({ text: '干预组比对照组快 42 ms（p = 0.003）。', conversationId }).claim
+        ?.id ?? '';
+
+    server = new HostRpcServer();
+    registered = registerHostMethods(
+      server,
+      minimalDeps({
+        refs: () => refLibrary,
+        claims: () => ledger,
+        manuscripts: () => compiler,
+      }),
+    );
+    await server.start();
+  });
+
+  afterEach(async () => {
+    await server.stop();
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('三层接上后进 surfaces，pending 里只剩没做的', () => {
+    const names = registered.surfaces.map((s) => s.name);
+    expect(names).toContain('refs');
+    expect(names).toContain('claims');
+    expect(names).toContain('manuscripts');
+
+    const pendingNames = registered.pending.map((p) => p.name);
+    expect(pendingNames).toContain('compute');
+    expect(pendingNames).not.toContain('refs');
+  });
+
+  it('三层缺席时给的是「没接上」而不是「尚未落地」', () => {
+    const bare = new HostRpcServer();
+    const result = registerHostMethods(bare, minimalDeps());
+
+    const refs = result.pending.find((p) => p.name === 'refs');
+    // 说成「尚未落地」会让用户去等一个已经做完的东西
+    expect(refs?.reason).toContain('没有可用的文献库');
+    expect(refs?.reason).not.toContain('尚未落地');
+    expect(result.pending.find((p) => p.name === 'compute')?.reason).toContain('尚未落地');
+  });
+
+  it('refs.list 在空库上返回空表，不因为不能出网就报错', async () => {
+    const reply = await call(server, 'refs.list', {}, { conversationId });
+    expect(reply.body.ok).toBe(true);
+    expect(reply.body.result).toEqual([]);
+  });
+
+  it('refs 表面不给 delete：删掉被引文献会让断言指向不存在的 id', async () => {
+    const surface = registered.surfaces.find((s) => s.name === 'refs');
+    expect(Object.keys(surface?.methods ?? {})).not.toContain('delete');
+    // 查重之后的合并是主要维护动作，而 merge 自己会拒绝两个不同 DOI 的合并
+    expect(Object.keys(surface?.methods ?? {})).toContain('merge');
+  });
+
+  it('claims.verify 没有执行者身份就拒绝', async () => {
+    const reply = await call(
+      server,
+      'claims.verify',
+      { claimId, kind: 'quote', ref: 'q1', verdict: 'supports' },
+      { conversationId },
+    );
+    expect(reply.body.ok).toBe(false);
+    expect(reply.body.error?.message).toContain('执行者身份');
+  });
+
+  it('claims.verify 不接受自报的 modelId 参数', async () => {
+    // 传进来也不算：执行者只从上下文取
+    const reply = await call(
+      server,
+      'claims.verify',
+      { claimId, kind: 'quote', ref: 'q1', verdict: 'supports', modelId: '一个很可靠的模型' },
+      { conversationId },
+    );
+    expect(reply.body.ok).toBe(false);
+    expect(reply.body.error?.message).toContain('执行者身份');
+  });
+
+  it('带上执行者身份时核验记得下来，状态由结论推导', async () => {
+    const versionId = new ArtifactStore(project.db, project.paths.blobs).save({
+      filename: 'rt.csv',
+      content: Buffer.from('group,rt\nintervention,412\ncontrol,454\n'),
+      code: 'print(1)',
+    }).version.id;
+
+    const bound = await call(
+      server,
+      'claims.bind',
+      { claimId, kind: 'artifact-version', ref: versionId, quote: '均值差 42 ms' },
+      { conversationId },
+    );
+    expect(bound.body.ok).toBe(true);
+
+    const verified = await call(
+      server,
+      'claims.verify',
+      { claimId, kind: 'artifact-version', ref: versionId, verdict: 'supports' },
+      { conversationId, modelId: 'deepseek-chat' },
+    );
+    expect(verified.body.ok).toBe(true);
+    const claim = verified.body.result as {
+      status: string;
+      evidence: { verifiedByModelId: string }[];
+    };
+    expect(claim.status).toBe('supported');
+    expect(claim.evidence[0]?.verifiedByModelId).toBe('deepseek-chat');
+  });
+
+  it('绑定指向不存在的对象时拒绝，并给出怎么办', async () => {
+    const reply = await call(
+      server,
+      'claims.bind',
+      { claimId, kind: 'ref', ref: 'rf_不存在' },
+      { conversationId },
+    );
+    // 放行的话断言在计数上「有证据」、检查放过它、用户点开是空的
+    expect(reply.body.ok).toBe(false);
+    expect(reply.body.error?.message).toContain('rf_不存在');
+  });
+
+  it('claims.parseCitations 把纯引用标记标成不可检索', async () => {
+    const reply = await call(server, 'claims.parseCitations', { citations: ['[12]'] });
+    expect(reply.body.ok).toBe(true);
+    const parsed = reply.body.result as { shape: string; searchable: boolean }[];
+    // 拿 [12] 当标题去查会返回一堆无关文献，最相似的被判成命中
+    expect(parsed[0]?.shape).toBe('marker-only');
+    expect(parsed[0]?.searchable).toBe(false);
+  });
+
+  it('manuscripts.profiles 的数值带来源说明', async () => {
+    const reply = await call(server, 'manuscripts.profiles');
+    const body = reply.body.result as { profiles: unknown[]; disclaimer: string };
+    expect(body.profiles.length).toBeGreaterThan(5);
+    // 显示「摘要上限 150 词」而不说来源，用户会照它删稿
+    expect(body.disclaimer).toContain('近似值');
+  });
+
+  it('manuscripts.compile 的双盲版带需求 13.8 的局限说明', async () => {
+    const markdown = [
+      '---',
+      'title: 睡眠分期的一种改进方法',
+      'authors:',
+      '  - name: 张三',
+      '    affiliation: 某大学',
+      'funding: 基金号 12345',
+      '---',
+      '',
+      '## 引言',
+      '',
+      '这里是引言。'.repeat(20),
+    ].join('\n');
+
+    const reply = await call(
+      server,
+      'manuscripts.compile',
+      { markdown, blinded: true },
+      { conversationId, modelId: 'deepseek-chat' },
+    );
+    expect(reply.body.ok).toBe(true);
+    const body = reply.body.result as {
+      outputs: { blinded: boolean; removedFields: string[]; disclaimer: string | null }[];
+    };
+    const output = body.outputs[0];
+    expect(output?.blinded).toBe(true);
+    // 移除项逐条列出：「已移除作者信息」核对不了任何东西
+    expect(output?.removedFields.join('|')).toContain('张三');
+    expect(output?.disclaimer).toContain('隐式');
   });
 });

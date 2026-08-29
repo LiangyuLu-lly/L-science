@@ -20,11 +20,17 @@ import { KernelPool, detectKernels } from '../packages/kernel/dist/index.js';
 import {
   AppStore,
   ArtifactStore,
+  ClaimLedger,
+  ClaimsRepo,
   ControlRepl,
   FindingsRepo,
   HostRpcServer,
   InterruptEvent,
+  ManuscriptCompiler,
+  ManuscriptRepo,
   PlanRepo,
+  RefLibrary,
+  RefsRepo,
   RegistryRepo,
   SkillAuditRepo,
   UsageRepo,
@@ -64,6 +70,30 @@ try {
 
   const artifacts = new ArtifactStore(project.db, project.paths.blobs);
 
+  /* --- M4 三层：文献库、断言台账、手稿编译器（任务 13.1-13.6）--- */
+
+  const refLibrary = new RefLibrary({
+    repo: new RefsRepo(project.db),
+    artifacts,
+    // 一律不批：本脚本不出网。库内操作不受影响
+    authorizeHosts: async () => [],
+    authorizeFulltextHost: async () => false,
+  });
+
+  const claimLedger = new ClaimLedger({
+    repo: new ClaimsRepo(project.db),
+    artifactExists: (versionId) => artifacts.getVersion(versionId) !== null,
+    refExists: (refId) => refLibrary.repo.get(refId) !== null,
+    refIdByDoi: (doi) => refLibrary.repo.getByDoi(doi)?.id ?? null,
+    computeExists: () => false,
+  });
+
+  const manuscriptCompiler = new ManuscriptCompiler({
+    repo: new ManuscriptRepo(project.db),
+    artifacts,
+    refs: () => refLibrary.repo.list({ limit: 1000 }),
+  });
+
   /* ---------------- 1. RPC 服务与方法注册 ---------------- */
 
   process.stdout.write('\n--- 1. 控制面 RPC ---\n');
@@ -97,10 +127,24 @@ try {
       list: () => [],
       get: () => null,
     },
+    /*
+     * M4 三层接上（任务 13.1-13.6）。
+     *
+     * 域名门在这里一律拒批：本脚本不出网，而拒批之后 `list` / `stats` / `export`
+     * 这些不需要上游的方法照样可用——这正是要验的，「接上了」不该等于「必须联网」。
+     */
+    refs: () => refLibrary,
+    claims: () => claimLedger,
+    manuscripts: () => manuscriptCompiler,
   });
 
-  check(host.surfaces.length >= 7, '已注册表面', host.surfaces.map((s) => s.name).join('、'));
+  check(host.surfaces.length >= 10, '已注册表面', host.surfaces.map((s) => s.name).join('、'));
   check(host.pending.length > 0, '未实现的表面已列出', host.pending.map((p) => p.name).join('、'));
+  check(
+    host.pending.every((p) => p.name !== 'refs' && p.name !== 'claims'),
+    'M4 三层不再在 pending 里',
+    host.pending.map((p) => p.name).join('、'),
+  );
   check(
     server.methods().includes('artifacts.list') && server.methods().includes('query.sql'),
     '方法名与 shim 一致',
@@ -220,7 +264,7 @@ try {
   const pendingAttempt = await repl.run({
     code: [
       'try:',
-      '    host.refs.list()',
+      '    host.compute.list()',
       '    print("NOT-BLOCKED")',
       'except AttributeError as exc:',
       '    print("PENDING", str(exc)[:60])',
@@ -232,6 +276,79 @@ try {
     textOf(pendingAttempt).includes('PENDING'),
     '未实现的表面抛错而不是返回空',
     textOf(pendingAttempt).trim(),
+  );
+
+  /* ---------------- 3b. M4 三层在控制面里可用 ---------------- */
+
+  process.stdout.write('\n--- 3b. 文献库 / 断言台账 / 手稿编译 ---\n');
+
+  const refsProbe = await repl.run({
+    code: 'import json\nprint(json.dumps({"n": len(host.refs.list()), "stats": host.refs.stats()["total"]}))',
+    conversationId: conversation.id,
+    timeoutMs: 60_000,
+  });
+  check(
+    refsProbe.ok && textOf(refsProbe).includes('"n": 0'),
+    'host.refs 可用（空库返回空表而非报错）',
+    textOf(refsProbe).trim().slice(0, 60),
+  );
+
+  const claimProbe = await repl.run({
+    code: [
+      'c = host.claims.register(',
+      '    text="干预组的反应时比对照组快 42 ms（p = 0.003）。",',
+      '    conversationId=' + JSON.stringify(conversation.id),
+      ')',
+      'print("KIND", c["claim"]["kinds"])',
+      'print("UNSUPPORTED", len(host.claims.unsupported()["confirmed"]))',
+    ].join('\n'),
+    conversationId: conversation.id,
+    timeoutMs: 60_000,
+  });
+  check(
+    claimProbe.ok && textOf(claimProbe).includes('numeric'),
+    'host.claims 登记并按规则分类',
+    textOf(claimProbe).trim().slice(0, 80),
+  );
+
+  /*
+   * 关键的一条：**没有执行者身份时核验被拒**。
+   *
+   * 需求 13.3 要求每条核验都记下是谁判的。这里直接调 RPC（不经控制面内核），
+   * 于是上下文里没有模型 id——必须被拒绝而不是记一条「不知道谁判的」结论。
+   */
+  const verifyWithoutModel = await fetch(server.env().L_SCIENCE_HOST_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-lsci-host-token': server.token,
+    },
+    body: JSON.stringify({
+      method: 'claims.verify',
+      params: { claimId: 'cl_whatever', kind: 'ref', ref: 'rf_x', verdict: 'supports' },
+      context: { conversationId: conversation.id },
+    }),
+  });
+  const verifyBody = await verifyWithoutModel.json();
+  check(
+    verifyBody.ok === false && String(verifyBody.error?.message).includes('执行者身份'),
+    '无执行者身份时拒绝记核验结论',
+    String(verifyBody.error?.message ?? '').split('\n')[0],
+  );
+
+  const profilesProbe = await repl.run({
+    code: [
+      'p = host.manuscripts.profiles()',
+      'print("PROFILES", len(p["profiles"]))',
+      'print("DISCLAIMER", "近似值" in p["disclaimer"])',
+    ].join('\n'),
+    conversationId: conversation.id,
+    timeoutMs: 60_000,
+  });
+  check(
+    profilesProbe.ok && textOf(profilesProbe).includes('DISCLAIMER True'),
+    'host.manuscripts 档案带数值来源说明',
+    textOf(profilesProbe).trim().slice(0, 60),
   );
 
   /* ---------------- 4. 状态保留与旁路 ---------------- */

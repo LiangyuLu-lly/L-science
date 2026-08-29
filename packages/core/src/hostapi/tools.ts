@@ -106,6 +106,8 @@ export function createControlReplTool(
           // host 调用要按**发起这次执行的会话**归属，而不是内核启动时的那个会话：
           // 控制面单例内核跨会话复用
           conversationId: ctx.conversationId,
+          // 执行者身份由这里注入，控制面代码不自报（`host.claims.verify` 要用它）
+          ...(ctx.modelId === undefined ? {} : { modelId: ctx.modelId }),
           ...(input.mode === undefined ? {} : { mode: input.mode }),
           ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         });

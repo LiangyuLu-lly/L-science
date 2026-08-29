@@ -521,23 +521,57 @@
 
 ## M4 论文流水线
 
-- [ ] 13.1 文献元数据解析与去重
-  - Crossref / OpenAlex / Semantic Scholar / PubMed；DOI 精确 + 标题模糊去重
+- [x] 13.1 文献元数据解析与去重
+  - Crossref / OpenAlex / Semantic Scholar / PubMed / Europe PMC / arXiv **六家并行**后按完备度合并，而不是依次尝试取第一个成功：串行最坏是六个 20s 超时叠成两分钟；取第一个会让记录质量取决于谁先响应（随机），同一个 DOI 两次入库可能一次有摘要一次没有
+  - 去重分**三档**（same / likely / distinct），两个不同 DOI **永不自动合并**：preprint 与正式版是两个真实注册对象，合并掉一个之后「当初引的是 preprint」这件事无法恢复。likely 只提示不动手
+  - 标题相似度同时用**编辑距离与词包含率**两个指标：副标题缺失时编辑距离只有 0.6 会漏掉真重复；包含率单独用则任何短标题都「包含」在长标题里，故要求作者姓与年份同时成立才升档
+  - 按标题**不能直接入库**（只能进候选列表）：模型「记得」的标题若能直接建记录，就会以真实文献身份进参考文献列表
+  - 域名门是**静态表 `REF_SOURCE_HOSTS`** 走一次授权，不是每次请求现问
+  - 新增 `refs/{csl,http,sources,dedupe,resolver,library,bibtex,tools,index}.ts` + `repo/refs.ts`；项目库迁移 **v5**（refs 加 title_norm/source/year/container/first_author/pmid/pmcid/arxiv_id + `ref_aliases`）
   - _需求：12.1、12.2_
-- [ ] 13.2 全文抓取
-  - 开放获取优先链；落为 artifact 并绑定；PMC 随文图像；失败记录已尝试来源
+- [x] 13.2 全文抓取
+  - 优先链把 **PMC OA 包排第一**而不是按命中率排：它是唯一能一次拿到「结构化正文 + 全部插图 + 补充材料」的来源，也是需求 12.4 随文图像的唯一可靠途径。其后是 Unpaywall / OpenAlex best_oa_location / arXiv / 出版商直链
+  - 抓到 HTML **一律判失败**，且按**文件魔数**判类型而不是 Content-Type：出版商 PDF 链接常重定向到登录页并返回 200 + `application/pdf`；把它存下来是最坏的失败模式——制品存在、记录成功、内容是登录页
+  - `ARCHIVE_LIMITS` 做成**可覆盖**而非自动放宽：PMC OA 包常 30-80MB、单张 TIFF 超 8MB，用默认上限插图会被逐个跳过；自动放宽等于没有上限
+  - XML 解析器**从零写**，DOCTYPE 整段跳过：十亿笑 / XXE / 深递归的防护取决于第三方库当年的实现，从不展开自定义实体就没有可放大的东西。未知实体**原样保留**（替换成空会让「α 波」变成「 波」）
+  - 全文用**运行时主机授权** `authorizeFulltextHost(host, why)`，与元数据的静态表分开：全文来源是从上游返回的 URL 里现取的，不可能预先列全
+  - 失败记入 `ref_fetch_attempts`（哪个来源、什么原因、什么时候），下次不重试刚失败过的
+  - 新增 `refs/{xml,jats,fulltext}.ts`；项目库迁移 **v6**（`ref_fetch_attempts` + `ref_assets`）
   - _需求：12.3、12.4、12.6_
-- [ ] 13.3 引用导出
-  - BibTeX 与 CSL-JSON
+- [x] 13.3 引用导出
+  - BibTeX / CSL-JSON / RIS 三格式**共用同一套引用键**：各自生成的话，手稿在 pandoc 与 LaTeX 之间切换时全部引用失效，而 LaTeX 报错不说原因
+  - 导出时**报告缺陷但不阻止导出**：导出是最后一次能看见「这条没有年份」的机会；但用户可能正需要一份不完整清单去核对，拒绝导出就把工具变成了障碍
+  - CSL-JSON 的非标准字段进 `custom` 命名空间而不是平铺进顶层：严格 CSL 处理器遇到未知顶层键会整条跳过，「参考文献少了一条」很难发现。撤稿标记**同时**写进 `note`（custom 是给程序读的，note 是给人读的）
+  - 导出为纯函数（不落盘不碰仓储），13.6 手稿编译直接复用
+  - 新增 `refs/export.ts`；`bibtexKeyFor` 移进 `bibtex.ts` 解开 library ↔ export 的循环依赖
   - _需求：12.5_
-- [ ] 13.4 Claim Ledger
-  - 断言识别、证据绑定、核验结论与执行模型记录；无证据断言由 Reviewer 开 FAIL
+- [x] 13.4 Claim Ledger
+  - 断言识别用**确定性规则**而非让模型读一遍：模型会漏，而漏掉的可能正是编造的那个数字；抽取要可复现（同一份稿子两次跑结果相同）；规则便宜到每次保存都能跑
+  - 接受误抽，用 `origin='extracted'` 只报 WARN，`origin='asserted'` 才报 FAIL：收紧规则会漏掉真正编造的数字，而那是这套机制存在的唯一理由；FAIL 里塞满误抽会让用户直接关掉审查
+  - 绑定证据时**校验被指向的东西真的存在**（artifact / ref / compute 逐类查）：否则断言在计数上「有证据」、FAIL 检查放过、用户点开是空的
+  - 断言状态由证据的**核验结论推导**，不由调用方写：让模型自己说「已支持」等于取消核验。一条 `contradicts` **压倒任意多条** `supports`（取多数会把反证信号抹掉）
+  - 执行模型标识从 `ToolContext.modelId` 取，不让模型自报：自报的值在「判断这个结论有多可信」上没有任何价值
+  - 放开 `reviewer/parse.ts` 里那个「claim 类证据属 M4」的拒绝分支，改用 `allowedClaimIds` 白名单
+  - 新增 `manuscript/{extract,ledger,tools,index}.ts` + `repo/claims.ts`；项目库迁移 **v7**；`FindingCategory` 新增 `'claim'`（同步四处：shared、reviewer/tools.ts、reviewer/parse.ts 的 CATEGORIES、ui/api.ts）
   - _需求：13.1、13.2、13.3、13.4_
-- [ ] 13.5 引文核实
-  - 强制走检索工具取证，禁止凭记忆作答
+- [x] 13.5 引文核实
+  - **检索由后端做，模型拿不到写结论的权限**，而不是在提示词里写「不要凭记忆」：提示词只会让它在幻觉之外多加一句「我已核实」。三道封堵——工具签名里没有 verdict 参数、ledger 拒绝没有检索记录的 supports、审查层兜底扫 `fabricationSuspects`
+  - 纯引用标记（`[12]`、`(见上)`）**必须拒绝检索**而不是当标题去查：当标题查会返回一堆无关文献，其中最相似的被判成命中，于是编造的引文「核实通过」——这是最坏的失败方向
+  - 期刊名比对用 **ISO 4 前缀 + 子序列**，不用字符串相似度：`J Sleep Res` 对 `Journal of Sleep Research` 相似度只有 0.44，任何门槛要么让这一档失效要么把 Nature 和 Neuron 判成相同。`Natl`→`National` 是缩合不是前缀，故需子序列；加首字母约束防单字母缩写乱匹配
+  - `not-found` 与 `unverifiable` **必须分开**：混成一档会把网络故障说成学术不端
+  - 新增 `manuscript/{citations,verify,verify-tools}.ts`；项目库迁移 **v8**（`citation_checks`）
   - _需求：13.9_
-- [ ] 13.6 Manuscript Compiler
-  - 期刊格式编译；双盲送审版按结构化元数据处理；自引身份泄露检测；明示对隐式线索无保证
+- [x] 13.6 Manuscript Compiler
+  - 编译**只检查不自动改**，唯一例外是引用重编号：自动删字毁论证，自动重排打乱交叉引用
+  - 双盲**正文一个字不改**，只删结构化字段：正文正则替换会命中同名的被引作者、会破坏「Smith-Waterman」这类术语，而且改动无法审阅
+  - 移除清单**逐项列出**（删了哪个作者、哪条致谢、哪个基金号），不是「已移除作者信息」：后者核对不了任何东西
+  - front matter **另写嵌套解析器**，不复用 skills 的平铺版也不引 YAML 库：平铺表达不了「作者带机构」，约定写错时无人报错 → 双盲静默漏人。YAML 的锚点与隐式转换在这里全无用处而每个都是陷阱——**不做隐式类型转换**，`no` 不变 false（姓 No 的作者变布尔是数据损坏），`1.10` 不变 1.1；重复键报错而不是覆盖（静默数据丢失）
+  - 元数据按 `identifying` / `statements` **两组分**而不是一张移除清单：让「哪些算身份信息」出现在类型上，散在顶层时新加一个 `submittedBy` 会静默泄露
+  - 自引泄露要求**两个条件同时成立**（正文自我指代措辞 + 该引用作者与本文作者有交集）：只看措辞会误报（「我们此前」引的可能是合作者的独立发表）；只看作者交集会大量误报（引自己完全正常）。上下文按**段落**取而非按行——软换行会让措辞与引用标记分在两行，漏掉所有跨行句子
+  - 需求 13.8 的局限说明**同时**进输出文件与编译报告：只放文件里界面上看不到，只放报告里发给合作者就丢了
+  - 期刊档案是**数据**且每条带 note 说明数值来源：硬编码到第三个期刊就会崩；一个记错的字数上限会让作者白删两千字
+  - `compile_runs` 单独一张表而不是往 manuscripts 加列：「上次报告是什么」与「问题数在收敛还是发散」是两个问题——12 个问题可能是从 40 降下来的，也可能是从 3 涨上去的
+  - 新增 `manuscript/{frontmatter,document,journals,compile,compile-service,compile-tools}.ts` + `repo/manuscripts.ts`；项目库迁移 **v9**（manuscripts 加 11 列 + `compile_runs`）
   - _需求：13.5、13.6、13.7、13.8_
 
 ---

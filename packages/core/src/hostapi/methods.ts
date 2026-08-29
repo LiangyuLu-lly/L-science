@@ -1,9 +1,9 @@
 /**
  * 控制面方法实现（任务 12.7，需求 10.8）。
  *
- * 只暴露**有真实后端**的表面。M4/M5 才落地的（`refs`、`claims`、`compute`、`mcp`）
- * 列进 pending，访问它们会抛出带说明的错误而不是返回空——空壳会让模型以为
- * 「查了但没有」，然后基于一个不存在的事实继续推理。
+ * 只暴露**有真实后端**的表面。还没落地的（M5 的 `compute`）列进 pending，访问它们
+ * 会抛出带说明的错误而不是返回空——空壳会让模型以为「查了但没有」，然后基于一个
+ * 不存在的事实继续推理。
  *
  * 所有返回值都是普通 JSON 结构，Python 侧拿到就是 dict/list，可以直接进 pandas。
  */
@@ -18,6 +18,16 @@ import type { SkillAuditRepo } from '../repo/skills.js';
 import type { UsageRepo } from '../repo/usage.js';
 import type { SkillManager } from '../skills/manager.js';
 import type { McpManager } from '../mcp/manager.js';
+import type { RefLibrary } from '../refs/library.js';
+import type { ClaimEvidenceKind, ClaimVerdict } from '../repo/claims.js';
+import type { ClaimLedger } from '../manuscript/ledger.js';
+import type { CitationVerifier } from '../manuscript/verify.js';
+import type { ManuscriptCompiler } from '../manuscript/compile-service.js';
+import { citeLine } from '../refs/csl.js';
+import { describeCitation, parseCitation, parseReferenceList } from '../manuscript/citations.js';
+import { renderVerifyResults } from '../manuscript/verify.js';
+import { BUILTIN_JOURNAL_PROFILES, describeProfile } from '../manuscript/journals.js';
+import { BLINDING_DISCLAIMER, compileSummary } from '../manuscript/compile.js';
 import type { HostCallContext, HostRpcServer } from './server.js';
 import type { ShimPending, ShimSurface } from './shim.js';
 
@@ -40,6 +50,26 @@ export interface HostMethodDeps {
    * 控制面池，因此「MCP 只能从控制面调」这件事由池边界保证，不靠条件判断。
    */
   mcp?: McpManager;
+
+  /*
+   * M4 的三层（任务 13.1-13.6）都用**惰性取**而不是直接持有实例。
+   *
+   * 原因是接线顺序：控制面在会话初始化的早期就要注册好（内核池、shim、RPC 都依赖
+   * 它的表面清单），而文献库要接审批服务与域名授权、Claim Ledger 要接制品库与文献库、
+   * 手稿编译器要接前两者——它们都在更后面才建得起来。反过来把它们全提前，要连带
+   * 挪动审批与授权那几段接线，改动面大得多。
+   *
+   * 这些回调只在模型真的调用对应方法时才执行，那时三层一定已经就绪。
+   */
+
+  /** 文献库（任务 13.1-13.3）。 */
+  refs?: () => RefLibrary;
+  /** 断言台账（任务 13.4）。 */
+  claims?: () => ClaimLedger;
+  /** 引文核实器（任务 13.5）。 */
+  citations?: () => CitationVerifier;
+  /** 手稿编译器（任务 13.6）。 */
+  manuscripts?: () => ManuscriptCompiler;
 }
 
 /* ------------------------------------------------------------------ *
@@ -62,6 +92,12 @@ function optStr(params: Record<string, unknown>, key: string): string | undefine
 function optInt(params: Record<string, unknown>, key: string, fallback: number): number {
   const value = params[key];
   return typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+}
+
+/** 可选整数。与 `optInt` 的区别是没有默认值——「没传」要能与「传了 0」区分。 */
+function optIntOpt(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  return typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : undefined;
 }
 
 function optBool(params: Record<string, unknown>, key: string): boolean | undefined {
@@ -138,11 +174,20 @@ export interface RegisteredHost {
 
 /** 尚未实现的表面。列在这里，访问时给出明确原因。 */
 const PENDING: readonly ShimPending[] = [
-  { name: 'refs', reason: '文献库属 M4（任务 13.1-13.3），尚未落地' },
-  { name: 'claims', reason: 'Claim Ledger 属 M4（任务 13.4），尚未落地' },
-  { name: 'manuscripts', reason: 'Manuscript Compiler 属 M4（任务 13.6），尚未落地' },
   { name: 'compute', reason: '远程算力属 M5（任务 14.2），尚未落地' },
 ];
+
+/**
+ * M4 三层缺席时的说法。
+ *
+ * 与「尚未落地」分开：这三层已经做完了，缺席只可能是本次运行没给它们接上依赖
+ * （比如一个只跑控制面的测试装置）。说成「尚未落地」会让用户去等一个已经存在的东西。
+ */
+const M4_ABSENT: Readonly<Record<'refs' | 'claims' | 'manuscripts', string>> = {
+  refs: '本次运行没有可用的文献库（项目未完成初始化）',
+  claims: '本次运行没有可用的断言台账（项目未完成初始化）',
+  manuscripts: '本次运行没有可用的手稿编译器（项目未完成初始化）',
+};
 
 /**
  * 把控制面方法注册到 RPC 服务上，并返回 shim 需要的表面描述。
@@ -429,6 +474,741 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
     failures: () => deps.usage.failures({}),
   });
 
+  /* ---------------- 文献库（任务 13.1-13.3）---------------- */
+
+  /*
+   * 刻意**不暴露 delete**。
+   *
+   * 制品表面也只给 `describeDeletion` 不给删除，理由一样：删掉一条被引用的文献会让
+   * 引它的断言指向一个不存在的 id，而那个后果在删除的那一刻看不出来。控制面是编排面，
+   * 不该拥有让台账悄悄变得不自洽的能力——删除留在界面上，那里有确认与影响说明。
+   *
+   * `merge` 例外并且必要：查重之后合并 `same` 档是文献库的主要维护动作，而
+   * `RefLibrary.merge` 自己会拒绝两个不同 DOI 的合并，坏结果被结构挡住了。
+   */
+  if (deps.refs !== undefined) {
+    const refsOf = deps.refs;
+
+    surface(
+      'refs',
+      '文献库：查库、解析标识符、检索上游、查重合并、抓全文、导出引用。检索与抓取会触发域名审批。',
+      {
+        list: (p) => {
+          const library = refsOf();
+          const refs = library.repo.list({
+            ...(optStr(p, 'query') === undefined ? {} : { query: optStr(p, 'query') }),
+            ...(optIntOpt(p, 'year') === undefined ? {} : { year: optIntOpt(p, 'year') }),
+            ...(optStr(p, 'type') === undefined ? {} : { type: optStr(p, 'type') }),
+            ...(optBool(p, 'hasFulltext') === undefined
+              ? {}
+              : { hasFulltext: optBool(p, 'hasFulltext') }),
+            limit: optInt(p, 'limit', 100),
+            offset: optInt(p, 'offset', 0),
+          });
+          return refs.map((r) => ({
+            id: r.id,
+            doi: r.doi,
+            type: r.type,
+            cite: citeLine(r.csl),
+            title: r.csl.title ?? null,
+            year: r.year,
+            container: r.container,
+            firstAuthor: r.firstAuthor,
+            source: r.source,
+            oaStatus: r.oaStatus,
+            fulltextArtifactId: r.fulltextArtifactId,
+            // 撤稿标记埋在 csl.extra 里，提到平面上：引一篇已撤稿的论文是硬错误
+            retracted: r.csl.extra?.retracted === true,
+            addedAt: r.addedAt,
+          }));
+        },
+
+        get: (p) => {
+          const library = refsOf();
+          const ref = library.repo.get(reqStr(p, 'refId'));
+          if (ref === null) throw new Error(`文献不存在：${String(p.refId)}`);
+          return {
+            ...ref,
+            cite: citeLine(ref.csl),
+            bibtex: library.bibtexFor(ref.id),
+            aliases: library.repo.aliases(ref.id),
+          };
+        },
+
+        stats: () => refsOf().repo.stats(),
+
+        /**
+         * 解析标识符并入库（DOI / PMID / PMCID / arXiv）。
+         *
+         * 六家上游并行查完按完备度合并。**不接受纯标题**——模型「记得」的标题若能
+         * 直接建记录，就会以真实文献的身份进参考文献列表。要按标题找请用 `search`，
+         * 它返回候选而不入库。
+         */
+        resolve: async (p) => {
+          const identifiers = strList(p, 'identifiers');
+          if (identifiers.length === 0) throw new Error('identifiers 不能为空');
+          if (identifiers.length > 200) throw new Error('一次最多解析 200 个标识符');
+
+          const result = await refsOf().addMany(identifiers, {
+            ...(optBool(p, 'refresh') === undefined ? {} : { refresh: optBool(p, 'refresh') }),
+          });
+          return {
+            created: result.created,
+            duplicates: result.duplicates,
+            failed: result.failed,
+            outcomes: result.outcomes.map((o) => ({
+              input: o.input,
+              ok: o.ok,
+              refId: o.ref?.id ?? null,
+              cite: o.ref === null ? null : citeLine(o.ref.csl),
+              created: o.created,
+              enriched: o.enriched,
+              reason: o.reason,
+              suspects: o.suspects,
+              // 逐源结果原样给出：失败时要能区分「这条不存在」与「网络不通」
+              attempts: o.attempts.map((a) => ({
+                source: a.source,
+                ok: a.ok,
+                reason: a.reason,
+              })),
+            })),
+          };
+        },
+
+        /** 检索上游。返回候选，**不入库**。`inLibraryRefId` 非空表示库里已有。 */
+        search: async (p) => {
+          const result = await refsOf().search({
+            text: reqStr(p, 'query'),
+            ...(optStr(p, 'author') === undefined ? {} : { author: optStr(p, 'author') }),
+            ...(optIntOpt(p, 'year') === undefined ? {} : { year: optIntOpt(p, 'year') }),
+            rows: optInt(p, 'limit', 10),
+          });
+          return {
+            ok: result.ok,
+            reason: result.reason,
+            candidates: result.candidates.map((c) => ({
+              source: c.source,
+              cite: c.cite,
+              title: c.item.title ?? null,
+              doi: c.item.DOI ?? null,
+              year: c.item.issued?.['date-parts']?.[0]?.[0] ?? null,
+              container: c.item['container-title'] ?? null,
+              abstract: c.item.abstract ?? null,
+              retracted: c.item.extra?.retracted === true,
+              inLibraryRefId: c.inLibraryRefId,
+            })),
+            attempts: result.attempts,
+          };
+        },
+
+        duplicates: (p) => refsOf().scanDuplicates({ limit: optInt(p, 'limit', 50) }),
+
+        merge: (p) => {
+          const result = refsOf().merge(reqStr(p, 'keepId'), reqStr(p, 'dropId'));
+          if (!result.ok || result.ref === null) {
+            throw new Error(result.reason ?? '合并失败');
+          }
+          return { ...result.ref, cite: citeLine(result.ref.csl) };
+        },
+
+        /**
+         * 抓全文（需求 12.3、12.4、12.6）。
+         *
+         * 按开放获取优先链依次试；每个来源的成败都记进 `attempts`，失败时那份记录
+         * 就是「试过谁、各自为什么不行」的答案。抓到的正文与随文图像落成制品，
+         * 用 `host.artifacts.path` 读。
+         */
+        fetchFulltext: async (p) => {
+          const result = await refsOf().fetchFulltext(reqStr(p, 'refId'), {
+            ...(p.sources === undefined ? {} : { sources: strList(p, 'sources') as never }),
+            ...(optBool(p, 'force') === undefined ? {} : { force: optBool(p, 'force') }),
+          });
+          return {
+            ok: result.ok,
+            source: result.source,
+            summary: result.summary,
+            fulltextArtifactId: result.fulltextArtifactId,
+            fulltextVersionId: result.fulltextVersionId,
+            assets: result.assets,
+            attempts: result.attempts,
+            article:
+              result.article === null
+                ? null
+                : {
+                    title: result.article.title,
+                    figures: result.article.figures.length,
+                    tables: result.article.tables.length,
+                    references: result.article.references.length,
+                    license: result.article.license,
+                  },
+          };
+        },
+
+        assets: (p) => {
+          const library = refsOf();
+          const refId = reqStr(p, 'refId');
+          const ref = library.repo.get(refId);
+          if (ref === null) throw new Error(`文献不存在：${refId}`);
+          return {
+            assets: library.repo.assets(refId),
+            attempts: library.repo.fetchAttempts(refId),
+            fulltextArtifactId: ref.fulltextArtifactId,
+            oaStatus: ref.oaStatus,
+          };
+        },
+
+        /**
+         * 导出引用（BibTeX / CSL-JSON / RIS）。
+         *
+         * 三种格式共用同一套引用键，因此手稿在 pandoc 与 LaTeX 之间切换时引用不会失效。
+         * 结果落成制品；内容超过 2 MB 时不再内联返回（读制品即可），否则一次控制面
+         * 调用的返回值就能把上下文占满。
+         */
+        export: (p) => {
+          const format = reqStr(p, 'format');
+          if (format !== 'bibtex' && format !== 'csl-json' && format !== 'ris') {
+            throw new Error('format 必须是 bibtex / csl-json / ris 之一');
+          }
+          const refIds = strList(p, 'refIds');
+          const outcome = refsOf().exportRefs({
+            format,
+            ...(refIds.length === 0 ? {} : { refIds }),
+            ...(optStr(p, 'stem') === undefined ? {} : { stem: optStr(p, 'stem') }),
+            ...(optBool(p, 'asciiOnly') === undefined
+              ? {}
+              : { asciiOnly: optBool(p, 'asciiOnly') }),
+            ...(optBool(p, 'includeAbstract') === undefined
+              ? {}
+              : { includeAbstract: optBool(p, 'includeAbstract') }),
+          });
+          if (!outcome.ok || outcome.result === null) {
+            throw new Error(outcome.reason ?? '导出失败');
+          }
+          const inline = outcome.result.content.length <= 2 * 1024 * 1024;
+          return {
+            format: outcome.result.format,
+            filename: outcome.result.filename,
+            entryCount: outcome.result.entryCount,
+            keys: outcome.result.keys,
+            // 缺字段的条目照样导出，但要报出来：这是投稿前最后一次能看见它们的机会
+            warnings: outcome.result.warnings,
+            artifactId: outcome.artifactId,
+            versionId: outcome.versionId,
+            missingIds: outcome.missingIds,
+            content: inline ? outcome.result.content : null,
+            contentOmitted: !inline,
+          };
+        },
+      },
+    );
+  }
+
+  /* ---------------- 断言台账与引文核实（任务 13.4、13.5）---------------- */
+
+  if (deps.claims !== undefined) {
+    const claimsOf = deps.claims;
+    const verifierOf = deps.citations;
+
+    surface(
+      'claims',
+      '断言台账与引文核实：登记、绑定证据、记核验结论、查无证据项。状态由证据推导，不能直接写。',
+      {
+        list: (p) => {
+          const status = optStr(p, 'status');
+          const claims = claimsOf().repo.list({
+            ...(optStr(p, 'conversationId') === undefined
+              ? {}
+              : { conversationId: optStr(p, 'conversationId') }),
+            ...(optStr(p, 'manuscriptId') === undefined
+              ? {}
+              : { manuscriptId: optStr(p, 'manuscriptId') }),
+            ...(status === undefined ? {} : { status: status as never }),
+            ...(optStr(p, 'kind') === undefined ? {} : { kind: optStr(p, 'kind') as never }),
+            ...(optBool(p, 'unsupportedOnly') === undefined
+              ? {}
+              : { unsupportedOnly: optBool(p, 'unsupportedOnly') }),
+            limit: optInt(p, 'limit', 100),
+          });
+          return claims.map((c) => ({
+            ...c,
+            unsupported: c.evidence.length === 0,
+            verifiedCount: c.evidence.filter((e) => e.verdict !== null).length,
+          }));
+        },
+
+        get: (p) => {
+          const ledger = claimsOf();
+          const claim = ledger.repo.get(reqStr(p, 'claimId'));
+          if (claim === null) throw new Error(`断言不存在：${String(p.claimId)}`);
+          return {
+            ...claim,
+            retrievalBacked: ledger.repo.hasRetrievalBackedCheck(claim.id),
+            checks: ledger.repo.citationChecks({ claimId: claim.id, limit: 20 }),
+          };
+        },
+
+        summary: (p) => {
+          const scope = {
+            ...(optStr(p, 'conversationId') === undefined
+              ? {}
+              : { conversationId: optStr(p, 'conversationId') }),
+            ...(optStr(p, 'manuscriptId') === undefined
+              ? {}
+              : { manuscriptId: optStr(p, 'manuscriptId') }),
+          };
+          const ledger = claimsOf();
+          return { ...ledger.summary(scope), gate: ledger.gateSummary(scope) };
+        },
+
+        /** 无证据的断言。`confirmed` 会开 FAIL，`extracted` 只是 WARN。 */
+        unsupported: (p) =>
+          claimsOf().unsupported({
+            ...(optStr(p, 'conversationId') === undefined
+              ? {}
+              : { conversationId: optStr(p, 'conversationId') }),
+            ...(optStr(p, 'manuscriptId') === undefined
+              ? {}
+              : { manuscriptId: optStr(p, 'manuscriptId') }),
+          }),
+
+        /** 证据矛盾的断言。比无证据更严重：手稿里有一句已知错误的陈述。 */
+        refuted: (p) =>
+          claimsOf().refuted({
+            ...(optStr(p, 'conversationId') === undefined
+              ? {}
+              : { conversationId: optStr(p, 'conversationId') }),
+            ...(optStr(p, 'manuscriptId') === undefined
+              ? {}
+              : { manuscriptId: optStr(p, 'manuscriptId') }),
+          }),
+
+        /**
+         * 从手稿抽取并批量登记。
+         *
+         * 抽取是**确定性规则**，不经模型：模型会漏，而漏掉的可能正是编造的那个数字。
+         * 已登记的同一条文本跳过，因此改一个错别字重跑不会让核验过的断言退回未核验。
+         */
+        extract: (p, ctx) => {
+          const markdown = optStr(p, 'markdown');
+          const versionId = optStr(p, 'sourceVersionId');
+          let text = markdown;
+          if (text === undefined && versionId !== undefined) {
+            const bytes = deps.artifacts.readVersion(versionId);
+            if (bytes === null) throw new Error(`制品版本不存在：${versionId}`);
+            text = bytes.toString('utf8');
+          }
+          if (text === undefined) throw new Error('传 markdown 或 sourceVersionId');
+
+          const result = claimsOf().extractAndRegister({
+            markdown: text,
+            conversationId: conv(p, ctx),
+            ...(optStr(p, 'manuscriptId') === undefined
+              ? {}
+              : { manuscriptId: optStr(p, 'manuscriptId') }),
+            options: {
+              ...(optIntOpt(p, 'limit') === undefined ? {} : { limit: optIntOpt(p, 'limit') }),
+              ...(strList(p, 'sections').length === 0 ? {} : { sections: strList(p, 'sections') }),
+            },
+          });
+          return {
+            created: result.created.length,
+            skippedExisting: result.skippedExisting,
+            extraction: result.extraction,
+            claims: result.created.map((c) => ({
+              id: c.id,
+              text: c.text,
+              kinds: c.kinds,
+              locator: c.locator,
+              section: c.section,
+            })),
+          };
+        },
+
+        register: (p, ctx) => {
+          const result = claimsOf().register({
+            text: reqStr(p, 'text'),
+            conversationId: conv(p, ctx),
+            ...(optStr(p, 'manuscriptId') === undefined
+              ? {}
+              : { manuscriptId: optStr(p, 'manuscriptId') }),
+            ...(optStr(p, 'locator') === undefined ? {} : { locator: optStr(p, 'locator') }),
+            ...(optStr(p, 'section') === undefined ? {} : { section: optStr(p, 'section') }),
+            ...(optStr(p, 'note') === undefined ? {} : { note: optStr(p, 'note') }),
+          });
+          if (!result.ok || result.claim === null) throw new Error(result.reason ?? '登记失败');
+          return { claim: result.claim, existing: result.existing, note: result.reason };
+        },
+
+        /** 确认一条自动抽取的断言。确认后它无证据时会开 FAIL 级发现。 */
+        confirm: (p) => {
+          const result = claimsOf().confirm(
+            reqStr(p, 'claimId'),
+            optStr(p, 'note') ?? '控制面确认',
+          );
+          if (!result.ok) throw new Error(result.reason ?? '确认失败');
+          return result.claim;
+        },
+
+        /**
+         * 绑定证据（需求 13.2）。
+         *
+         * 被指向的对象要**真的存在**才绑得上。放行的话断言在计数上「有证据」、
+         * 检查放过它、用户点开是空的——那是最坏的失败形态。
+         */
+        bind: (p) => {
+          const result = claimsOf().bind({
+            claimId: reqStr(p, 'claimId'),
+            kind: reqStr(p, 'kind') as ClaimEvidenceKind,
+            ref: reqStr(p, 'ref'),
+            ...(optStr(p, 'locator') === undefined ? {} : { locator: optStr(p, 'locator') }),
+            ...(optStr(p, 'quote') === undefined ? {} : { quote: optStr(p, 'quote') }),
+            ...(optStr(p, 'note') === undefined ? {} : { note: optStr(p, 'note') }),
+          });
+          if (!result.ok) {
+            throw new Error(
+              result.advice === null
+                ? (result.reason ?? '绑定失败')
+                : `${result.reason ?? '绑定失败'}\n${result.advice}`,
+            );
+          }
+          return { evidence: result.evidence, claim: result.claim };
+        },
+
+        unbind: (p) => {
+          const ledger = claimsOf();
+          const claimId = reqStr(p, 'claimId');
+          const result = ledger.unbind(
+            claimId,
+            reqStr(p, 'kind') as ClaimEvidenceKind,
+            reqStr(p, 'ref'),
+          );
+          if (!result.ok) throw new Error(result.reason ?? '解绑失败');
+          // 解绑会重新推导状态，回显新状态而不是只说「删了」
+          return ledger.repo.get(claimId);
+        },
+
+        /**
+         * 记一条核验结论（需求 13.3）。
+         *
+         * `modelId` 不接受参数，由平台从本次控制面执行的上下文注入——自报的执行者
+         * 标识在「这个结论有多可信」上没有任何价值。控制面之外的调用者拿不到它，
+         * 这里就拒绝。
+         *
+         * 断言状态由这些结论推导，不能直接写：让调用方设状态等于取消核验。
+         * 一条 `contradicts` 压倒任意多条 `supports`。
+         */
+        verify: (p, ctx) => {
+          if (ctx.modelId === null) {
+            throw new Error(
+              '这次调用没有执行者身份，核验结论无法记录。\n' +
+                '需求 13.3 要求每条核验都记下是谁判的——一个没有执行者的结论在半年后' +
+                '无法判断可信度。控制面 REPL 会自动带上当前模型；' +
+                '从别处调用请改走 manage_claims 工具或界面。',
+            );
+          }
+          const result = claimsOf().verify({
+            claimId: reqStr(p, 'claimId'),
+            kind: reqStr(p, 'kind') as ClaimEvidenceKind,
+            ref: reqStr(p, 'ref'),
+            verdict: reqStr(p, 'verdict') as ClaimVerdict,
+            modelId: ctx.modelId,
+            ...(optStr(p, 'note') === undefined ? {} : { note: optStr(p, 'note') }),
+          });
+          if (!result.ok) throw new Error(result.reason ?? '核验记录失败');
+          return result.claim;
+        },
+
+        close: (p) => {
+          const status = reqStr(p, 'status');
+          if (status !== 'retracted' && status !== 'dismissed') {
+            throw new Error('status 必须是 retracted（已从稿中删除）或 dismissed（不是断言）');
+          }
+          const result = claimsOf().close(reqStr(p, 'claimId'), status, reqStr(p, 'reason'));
+          if (!result.ok) throw new Error(result.reason ?? '关闭失败');
+          return result.claim;
+        },
+
+        reopen: (p) => {
+          const result = claimsOf().reopen(reqStr(p, 'claimId'), reqStr(p, 'reason'));
+          if (!result.ok) throw new Error(result.reason ?? '重开失败');
+          return result.claim;
+        },
+
+        /** 渲染成文本。写「还剩哪些事」的小结时比自己拼字符串省事。 */
+        render: (p) => {
+          const ledger = claimsOf();
+          const scope = {
+            ...(optStr(p, 'conversationId') === undefined
+              ? {}
+              : { conversationId: optStr(p, 'conversationId') }),
+            ...(optStr(p, 'manuscriptId') === undefined
+              ? {}
+              : { manuscriptId: optStr(p, 'manuscriptId') }),
+          };
+          const status = optStr(p, 'status');
+          return ledger.render(
+            ledger.repo.list({
+              ...scope,
+              ...(status === undefined ? {} : { status: status as never }),
+              limit: optInt(p, 'limit', 50),
+            }),
+            { showEvidence: optBool(p, 'showEvidence') ?? true },
+          );
+        },
+
+        /**
+         * 解析引文但**不检索**（需求 13.9）。
+         *
+         * 先看解析对不对，再决定要不要花几十次上游请求。纯引用标记（`[12]`）会被
+         * 标成不可检索——拿它当标题去查会返回一堆无关文献，其中最相似的被判成命中，
+         * 于是编造的引文「核实通过」。
+         */
+        parseCitations: (p) => {
+          const raw = optStr(p, 'referenceList');
+          const listed = strList(p, 'citations');
+          const targets =
+            raw === undefined
+              ? [...listed]
+              : [...listed, ...parseReferenceList(raw).map((c) => c.raw)];
+          if (targets.length === 0) throw new Error('传 citations 或 referenceList');
+          return targets.map((text) => {
+            const parsed = parseCitation(text);
+            return {
+              raw: text,
+              shape: parsed.shape,
+              searchable: parsed.searchable,
+              doi: parsed.doi,
+              pmid: parsed.pmid,
+              firstAuthorSurname: parsed.firstAuthorSurname,
+              year: parsed.year,
+              title: parsed.title,
+              container: parsed.container,
+              reason: parsed.reason,
+              summary: describeCitation(parsed),
+            };
+          });
+        },
+
+        /**
+         * 核实引文（需求 13.9）。
+         *
+         * 检索由这一层做，**结论也由这一层算**——控制面代码给不了 verdict。
+         * 这是「禁止凭记忆作答」在接口形状上的实现：没有可以写结论的参数，
+         * 因此没有绕过检索的路径。
+         */
+        verifyCitations: async (p, ctx) => {
+          if (verifierOf === undefined) {
+            throw new Error('引文核实需要文献库，本次运行没有可用的文献库');
+          }
+          const raw = optStr(p, 'referenceList');
+          const listed = strList(p, 'citations');
+          const targets = [
+            ...new Set(
+              (raw === undefined
+                ? listed
+                : [...listed, ...parseReferenceList(raw).map((c) => c.raw)]
+              )
+                .map((t) => t.replace(/\s+/gu, ' ').trim())
+                .filter((t) => t !== ''),
+            ),
+          ];
+          if (targets.length === 0) throw new Error('传 citations 或 referenceList');
+          if (targets.length > 100) throw new Error('一次最多核实 100 条');
+
+          const outcome = await verifierOf().verifyMany(targets, {
+            ...(optStr(p, 'claimId') === undefined ? {} : { claimId: optStr(p, 'claimId') }),
+            // 执行者由平台注入。没有时也照样核实（判定不依赖它），但记录里会是空
+            modelId: ctx.modelId,
+          });
+          return {
+            counts: outcome.counts,
+            summary: renderVerifyResults(outcome.results, outcome.counts),
+            results: outcome.results.map((r) => ({
+              raw: r.raw,
+              verdict: r.verdict,
+              shape: r.parsed.shape,
+              matchedRefId: r.matchedRefId,
+              matchedDoi: r.matchedDoi,
+              matchedCite: r.matchedCite,
+              similarity: r.similarity,
+              mismatches: r.mismatches,
+              // 实际发出的查询一并返回：需求 13.9 的可核查性靠它
+              queries: r.queries,
+              attempts: r.attempts,
+              detail: r.detail,
+              checkId: r.checkId,
+            })),
+          };
+        },
+
+        /** 核实记录（需求 13.9 的审计面）。`not-found` 那些是「可能编造」的凭据。 */
+        checks: (p) => {
+          const ledger = claimsOf();
+          const verdict = optStr(p, 'verdict');
+          const checks = ledger.repo.citationChecks({
+            ...(optStr(p, 'claimId') === undefined ? {} : { claimId: optStr(p, 'claimId') }),
+            ...(verdict === undefined ? {} : { verdict: verdict as never }),
+            limit: optInt(p, 'limit', 100),
+          });
+          return {
+            checks: checks.map((check) => ({
+              ...check,
+              retrievalBacked: check.queries.length > 0 && check.verdict !== 'unverifiable',
+            })),
+            suspectCount: ledger.repo.fabricationSuspects(200).length,
+          };
+        },
+      },
+    );
+  }
+
+  /* ---------------- 手稿编译（任务 13.6）---------------- */
+
+  if (deps.manuscripts !== undefined) {
+    const compilerOf = deps.manuscripts;
+
+    surface(
+      'manuscripts',
+      '手稿编译：按目标期刊档案检查与渲染、生成双盲送审版、查编译历史与问题数趋势。',
+      {
+        /**
+         * 内置期刊档案。
+         *
+         * 免责说明随档案一起返回：显示「摘要上限 150 词」而不说这个数字的来源，
+         * 用户会照它删稿——而档案里的数值是内置近似值，会随期刊改版过期。
+         */
+        profiles: () => ({
+          profiles: BUILTIN_JOURNAL_PROFILES.map((profile) => ({
+            ...profile,
+            summary: describeProfile(profile, true),
+          })),
+          disclaimer:
+            '档案里的字数与条数是各刊作者指南的近似值，会随期刊改版而过期。' +
+            '编译报告里的提示是「按该档案的上限」，不是对该刊当前规则的断言。改稿前请核对官方要求。',
+        }),
+
+        list: (p) =>
+          compilerOf()
+            .repo.list({
+              ...(optStr(p, 'conversationId') === undefined
+                ? {}
+                : { conversationId: optStr(p, 'conversationId') }),
+              limit: optInt(p, 'limit', 50),
+            })
+            .map((m) => ({
+              ...m,
+              latestRun: compilerOf().repo.compileRuns(m.id, 1)[0] ?? null,
+            })),
+
+        get: (p) => {
+          const compiler = compilerOf();
+          const manuscriptId = reqStr(p, 'manuscriptId');
+          const manuscript = compiler.repo.get(manuscriptId);
+          if (manuscript === null) throw new Error(`手稿不存在：${manuscriptId}`);
+          return {
+            manuscript,
+            runs: compiler.repo.compileRuns(manuscriptId, 20),
+            // 趋势与「上次报告」是两个问题：12 个问题可能是从 40 降下来的
+            trend: compiler.repo.trend(manuscriptId, 20),
+          };
+        },
+
+        /** 只解析不编译。先确认作者、机构、图表都解析对了再编译。 */
+        parse: (p) => {
+          const parsed = compilerOf().parse({
+            ...(optStr(p, 'markdown') === undefined ? {} : { markdown: optStr(p, 'markdown') }),
+            ...(optStr(p, 'sourceVersionId') === undefined
+              ? {}
+              : { sourceVersionId: optStr(p, 'sourceVersionId') }),
+          });
+          if (!parsed.ok || parsed.doc === null) throw new Error(parsed.reason ?? '解析失败');
+          const doc = parsed.doc;
+          return {
+            meta: doc.meta,
+            counts: doc.counts,
+            hasFrontMatter: doc.hasFrontMatter,
+            warnings: doc.warnings,
+            sections: doc.sections.map((s) => ({
+              title: s.title,
+              level: s.level,
+              line: s.line,
+              words: s.words,
+            })),
+            figures: doc.figures,
+            tables: doc.tables,
+            citationCount: doc.citations.length,
+          };
+        },
+
+        /**
+         * 编译（需求 13.5-13.8）。
+         *
+         * **只检查不自动改**，唯一例外是引用重编号：自动删字毁论证，自动重排打乱
+         * 交叉引用。双盲版只删结构化字段、正文一个字不改，移除项逐条列出——
+         * 因此对正文里的隐式身份线索无保证，这句话同时进输出文件与报告。
+         */
+        compile: async (p, ctx) => {
+          const outcome = await compilerOf().compile({
+            ...(optStr(p, 'markdown') === undefined ? {} : { markdown: optStr(p, 'markdown') }),
+            ...(optStr(p, 'sourceVersionId') === undefined
+              ? {}
+              : { sourceVersionId: optStr(p, 'sourceVersionId') }),
+            ...(optStr(p, 'manuscriptId') === undefined
+              ? {}
+              : { manuscriptId: optStr(p, 'manuscriptId') }),
+            ...(optStr(p, 'targetJournal') === undefined
+              ? {}
+              : { targetJournal: optStr(p, 'targetJournal') }),
+            ...(p.customProfile === undefined ? {} : { customProfile: p.customProfile }),
+            ...(optBool(p, 'blinded') === undefined ? {} : { blinded: optBool(p, 'blinded') }),
+            ...(optBool(p, 'both') === undefined ? {} : { both: optBool(p, 'both') }),
+            ...(optStr(p, 'stem') === undefined ? {} : { stem: optStr(p, 'stem') }),
+            conversationId: ctx.conversationId,
+            modelId: ctx.modelId,
+          });
+          if (!outcome.ok || outcome.manuscript === null) {
+            throw new Error(outcome.reason ?? '编译失败');
+          }
+          return {
+            manuscript: outcome.manuscript,
+            outputs: outcome.outputs.map((o) => ({
+              blinded: o.blinded,
+              artifactId: o.artifactId,
+              versionId: o.versionId,
+              filename: o.filename,
+              bibArtifactId: o.bibArtifactId,
+              bibVersionId: o.bibVersionId,
+              summary: compileSummary(o.result),
+              profile: o.result.profile.id,
+              profileMatched: o.result.profileMatched,
+              counts: o.result.counts,
+              issues: o.result.issues,
+              // 移除项逐条列出：「已移除作者信息」核对不了任何东西
+              removedFields: o.result.removedFields,
+              selfCitationLeaks: o.result.selfCitationLeaks,
+              citationMap: o.result.citationMap,
+              report: o.result.report,
+              // 需求 13.8：双盲处理只覆盖结构化字段，这句话必须跟着结果走
+              disclaimer: o.blinded ? BLINDING_DISCLAIMER : null,
+            })),
+          };
+        },
+
+        history: (p) => {
+          const compiler = compilerOf();
+          const manuscriptId = reqStr(p, 'manuscriptId');
+          if (compiler.repo.get(manuscriptId) === null) {
+            throw new Error(`手稿不存在：${manuscriptId}`);
+          }
+          return {
+            runs: compiler.repo.compileRuns(manuscriptId, optInt(p, 'limit', 20)),
+            trend: compiler.repo.trend(manuscriptId, optInt(p, 'limit', 20)),
+          };
+        },
+      },
+    );
+  }
+
   /* ---------------- MCP 连接器 ---------------- */
 
   /*
@@ -441,87 +1221,81 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
   if (deps.mcp !== undefined) {
     const mcp = deps.mcp;
 
-    surface(
-      'mcp',
-      '外部连接器：列出可用工具、调用它们、查连接状态。工具调用可能触发用户审批。',
-      {
-        /** 连接器状态总览。不触发连接，能在什么都没连时回答。 */
-        connectors: () => mcp.status(),
+    surface('mcp', '外部连接器：列出可用工具、调用它们、查连接状态。工具调用可能触发用户审批。', {
+      /** 连接器状态总览。不触发连接，能在什么都没连时回答。 */
+      connectors: () => mcp.status(),
 
-        /**
-         * 列出全部生效连接器的工具。
-         *
-         * 会逐个建立连接，第一次调用可能慢。某个连接器连不上不影响其余——五十个内置
-         * 连接器里有一个的服务临时挂了，不该让整个清单报错。
-         */
-        tools: async () => {
-          const tools = await mcp.tools();
-          return tools.map((t) => ({
-            connectorId: t.connectorId,
-            connectorName: t.connectorName,
-            name: t.tool.name,
-            description: t.tool.description ?? '',
-            inputSchema: t.tool.inputSchema,
-            readOnly: t.tool.annotations?.readOnlyHint === true,
-          }));
-        },
-
-        /** 只列某个连接器的工具。比 `tools()` 快得多，知道要用哪个时用它。 */
-        toolsOf: async (p) => {
-          const client = await mcp.client(reqStr(p, 'connectorId'));
-          return client.tools.map((t) => ({
-            name: t.name,
-            description: t.description ?? '',
-            inputSchema: t.inputSchema,
-            readOnly: t.annotations?.readOnlyHint === true,
-          }));
-        },
-
-        /**
-         * 调用一个工具。
-         *
-         * 非只读工具会触发审批并阻塞等待。被拒绝时返回 `denied: true` 而不是抛错——
-         * 拒绝是正常结果，而且需求 17.3 要求拒绝后不得重试同一请求。
-         */
-        call: async (p, ctx) => {
-          const args =
-            typeof p.arguments === 'object' && p.arguments !== null && !Array.isArray(p.arguments)
-              ? (p.arguments as Record<string, unknown>)
-              : {};
-          const outcome = await mcp.callTool(
-            reqStr(p, 'connectorId'),
-            reqStr(p, 'tool'),
-            args,
-            { conversationId: ctx.conversationId, projectId: deps.projectId },
-          );
-          return {
-            ok: outcome.ok,
-            denied: outcome.denied,
-            text: outcome.text,
-            data: outcome.structured,
-          };
-        },
-
-        /** 读一个资源。 */
-        readResource: async (p) => {
-          const client = await mcp.client(reqStr(p, 'connectorId'));
-          return client.readResource(reqStr(p, 'uri'));
-        },
-
-        /** 取一个提示模板。 */
-        prompt: async (p) => {
-          const client = await mcp.client(reqStr(p, 'connectorId'));
-          const args =
-            typeof p.arguments === 'object' && p.arguments !== null && !Array.isArray(p.arguments)
-              ? (p.arguments as Record<string, unknown>)
-              : {};
-          return client.getPrompt(reqStr(p, 'name'), args);
-        },
-
-        /** 测试连接。设置页与排查时用。 */
-        check: async (p) => mcp.check(reqStr(p, 'connectorId')),
+      /**
+       * 列出全部生效连接器的工具。
+       *
+       * 会逐个建立连接，第一次调用可能慢。某个连接器连不上不影响其余——五十个内置
+       * 连接器里有一个的服务临时挂了，不该让整个清单报错。
+       */
+      tools: async () => {
+        const tools = await mcp.tools();
+        return tools.map((t) => ({
+          connectorId: t.connectorId,
+          connectorName: t.connectorName,
+          name: t.tool.name,
+          description: t.tool.description ?? '',
+          inputSchema: t.tool.inputSchema,
+          readOnly: t.tool.annotations?.readOnlyHint === true,
+        }));
       },
-    );
+
+      /** 只列某个连接器的工具。比 `tools()` 快得多，知道要用哪个时用它。 */
+      toolsOf: async (p) => {
+        const client = await mcp.client(reqStr(p, 'connectorId'));
+        return client.tools.map((t) => ({
+          name: t.name,
+          description: t.description ?? '',
+          inputSchema: t.inputSchema,
+          readOnly: t.annotations?.readOnlyHint === true,
+        }));
+      },
+
+      /**
+       * 调用一个工具。
+       *
+       * 非只读工具会触发审批并阻塞等待。被拒绝时返回 `denied: true` 而不是抛错——
+       * 拒绝是正常结果，而且需求 17.3 要求拒绝后不得重试同一请求。
+       */
+      call: async (p, ctx) => {
+        const args =
+          typeof p.arguments === 'object' && p.arguments !== null && !Array.isArray(p.arguments)
+            ? (p.arguments as Record<string, unknown>)
+            : {};
+        const outcome = await mcp.callTool(reqStr(p, 'connectorId'), reqStr(p, 'tool'), args, {
+          conversationId: ctx.conversationId,
+          projectId: deps.projectId,
+        });
+        return {
+          ok: outcome.ok,
+          denied: outcome.denied,
+          text: outcome.text,
+          data: outcome.structured,
+        };
+      },
+
+      /** 读一个资源。 */
+      readResource: async (p) => {
+        const client = await mcp.client(reqStr(p, 'connectorId'));
+        return client.readResource(reqStr(p, 'uri'));
+      },
+
+      /** 取一个提示模板。 */
+      prompt: async (p) => {
+        const client = await mcp.client(reqStr(p, 'connectorId'));
+        const args =
+          typeof p.arguments === 'object' && p.arguments !== null && !Array.isArray(p.arguments)
+            ? (p.arguments as Record<string, unknown>)
+            : {};
+        return client.getPrompt(reqStr(p, 'name'), args);
+      },
+
+      /** 测试连接。设置页与排查时用。 */
+      check: async (p) => mcp.check(reqStr(p, 'connectorId')),
+    });
   }
 
   /* ---------------- 只读查询 ---------------- */
@@ -569,21 +1343,23 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
   );
 
   /*
-   * `mcp` 只在连接器管理缺席时才算未实现。
+   * 缺席与未实现是两回事，说法必须不同。
    *
-   * 两种情况的原因不同，说法也必须不同：M4/M5 的表面是「还没做」，而 mcp 缺席是
-   * 「这个部署里没启用连接器」。用同一句「尚未落地」会让用户去等一个已经做完的东西。
+   * `compute` 是「还没做」；`mcp` 缺席是「这个部署里没启用连接器」；M4 三层缺席是
+   * 「这次运行没接上」。用同一句「尚未落地」会让用户去等一个已经做完的东西。
    */
-  const pending =
-    deps.mcp === undefined
-      ? [
-          ...PENDING,
-          {
-            name: 'mcp',
-            reason: '连接器管理未启用（本次运行没有可用的连接器注册表）',
-          },
-        ]
-      : PENDING;
+  const pending: ShimPending[] = [...PENDING];
+  if (deps.mcp === undefined) {
+    pending.push({
+      name: 'mcp',
+      reason: '连接器管理未启用（本次运行没有可用的连接器注册表）',
+    });
+  }
+  if (deps.refs === undefined) pending.push({ name: 'refs', reason: M4_ABSENT.refs });
+  if (deps.claims === undefined) pending.push({ name: 'claims', reason: M4_ABSENT.claims });
+  if (deps.manuscripts === undefined) {
+    pending.push({ name: 'manuscripts', reason: M4_ABSENT.manuscripts });
+  }
 
   return { surfaces, pending };
 }
