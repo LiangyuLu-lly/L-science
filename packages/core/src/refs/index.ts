@@ -140,10 +140,32 @@ export type {
 export { FULLTEXT_HOSTS, FULLTEXT_SOURCE_LABEL, FulltextFetcher } from './fulltext.js';
 
 export type { AddOutcome, DuplicateSuspect, RefLibraryDeps } from './library.js';
-export { REF_SOURCE_HOSTS, RefLibrary, SOURCE_LABEL, bibtexKeyFor } from './library.js';
+export { REF_SOURCE_HOSTS, RefLibrary, SOURCE_LABEL } from './library.js';
 
 export type { RefAction, RefToolInput, RefToolOptions } from './tools.js';
 export { createManageReferencesTool } from './tools.js';
 
 export type { BibtexOptions } from './bibtex.js';
-export { escapeLatex, protectAcronyms, sanitizeKey, toBibtex, toBibtexFile } from './bibtex.js';
+export {
+  bibtexKeyFor,
+  escapeLatex,
+  protectAcronyms,
+  sanitizeKey,
+  toBibtex,
+  toBibtexFile,
+} from './bibtex.js';
+
+export type { ExportFormat, ExportOptions, ExportResult, ExportWarning } from './export.js';
+export {
+  EXPORT_FORMAT_EXT,
+  EXPORT_FORMAT_LABEL,
+  EXPORT_FORMAT_MIME,
+  assignKeys,
+  checkExportQuality,
+  exportRefs,
+  fullAuthorList,
+  renderExportWarnings,
+  toCslJsonFile,
+  toCslJsonItem,
+  toRisFile,
+} from './export.js';

@@ -45,7 +45,12 @@ import {
 import { MemoryRepo, type MemoryKind, type MemoryScope } from './repo/memory.js';
 import { ConnectorRepo } from './repo/connectors.js';
 import { BRIDGE_SPECS, McpBridgeServer, McpManager, syncBuiltinConnectors } from './mcp/index.js';
-import { RefLibrary, citeLine, createManageReferencesTool } from './refs/index.js';
+import {
+  RefLibrary,
+  citeLine,
+  createManageReferencesTool,
+  renderExportWarnings,
+} from './refs/index.js';
 import { RefsRepo } from './repo/refs.js';
 import {
   createGeneratePlanTool,
@@ -2887,6 +2892,60 @@ async function main(): Promise<void> {
       refIds: [req.refId],
     });
     return { artifactId: result.artifactId, versionId: result.versionId };
+  });
+
+  /* --- 引用导出（任务 13.3，需求 12.5）--- */
+
+  d.register('ref.export', async (req) => {
+    const library = await refsFor(req.projectId);
+    const outcome = library.exportRefs({
+      format: req.format,
+      ...(req.refIds === undefined ? {} : { refIds: req.refIds }),
+      ...(req.refIds !== undefined
+        ? {}
+        : {
+            filter: {
+              ...(req.query === undefined ? {} : { query: req.query }),
+              ...(req.year === undefined ? {} : { year: req.year }),
+              ...(req.type === undefined ? {} : { type: req.type }),
+            },
+          }),
+      ...(req.stem === undefined ? {} : { stem: req.stem }),
+      asciiOnly: req.asciiOnly,
+      includeAbstract: req.includeAbstract,
+      sort: req.sort,
+    });
+
+    if (!outcome.ok || outcome.result === null) {
+      throw new DispatchError(
+        makeError('conflict', outcome.reason ?? '导出失败', {
+          remediation: '确认库里有符合条件的文献，或去掉筛选条件再试。',
+        }),
+      );
+    }
+
+    if (outcome.artifactId !== null) {
+      d.broadcast({
+        kind: 'refs.changed',
+        projectId: req.projectId,
+        action: 'export',
+        refIds: [],
+      });
+    }
+
+    return {
+      filename: outcome.result.filename,
+      mime: outcome.result.mime,
+      entryCount: outcome.result.entryCount,
+      keys: outcome.result.keys,
+      // 内容一并返回：UI 要能直接预览与「另存为」，不必再去读一次制品
+      content: outcome.result.content,
+      warnings: outcome.result.warnings,
+      warningText: renderExportWarnings(outcome.result.warnings),
+      artifactId: outcome.artifactId,
+      versionId: outcome.versionId,
+      missingIds: outcome.missingIds,
+    };
   });
 
   d.register('credential.delete', async (req) => {

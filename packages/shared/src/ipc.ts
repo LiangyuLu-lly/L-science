@@ -842,6 +842,28 @@ export const requestSchema = z.discriminatedUnion('method', [
     contentBase64: z.string().min(1),
     note: z.string().max(500).optional(),
   }),
+
+  /* --- 引用导出（任务 13.3，需求 12.5）--- */
+
+  /**
+   * 导出引用并存为制品。
+   *
+   * `refIds` 省略时按筛选条件取全库。三种格式共用同一套引用键，因此同一批文献
+   * 可以同时导出 .bib 与 .csl.json 而不会让手稿里的引用失配。
+   */
+  z.object({
+    method: z.literal('ref.export'),
+    projectId: idSchema,
+    format: z.enum(['bibtex', 'csl-json', 'ris']),
+    refIds: z.array(idSchema).max(1000).optional(),
+    query: z.string().max(500).optional(),
+    year: z.number().int().min(1000).max(3000).optional(),
+    type: z.string().min(1).max(60).optional(),
+    stem: z.string().min(1).max(80).optional(),
+    asciiOnly: z.boolean().default(false),
+    includeAbstract: z.boolean().default(false),
+    sort: z.enum(['key', 'author-year', 'year-desc', 'added']).default('key'),
+  }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

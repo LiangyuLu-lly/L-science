@@ -15,6 +15,8 @@
 import { errorOutput, textOutput } from '../tools/registry.js';
 import type { ToolDefinition, ToolResult } from '../tools/types.js';
 import { citeLine } from './csl.js';
+import type { ExportFormat } from './export.js';
+import { EXPORT_FORMAT_LABEL, renderExportWarnings } from './export.js';
 import type { RefLibrary } from './library.js';
 import { SOURCE_LABEL } from './library.js';
 import type { RefSourceId } from './http.js';
@@ -26,7 +28,7 @@ export interface RefToolOptions {
 }
 
 export type RefAction =
-  'resolve' | 'search' | 'list' | 'get' | 'remove' | 'merge' | 'fulltext' | 'assets';
+  'resolve' | 'search' | 'list' | 'get' | 'remove' | 'merge' | 'fulltext' | 'assets' | 'export';
 
 export interface RefToolInput {
   action: RefAction;
@@ -35,11 +37,15 @@ export interface RefToolInput {
   author?: string;
   year?: number;
   refId?: string;
+  refIds?: readonly string[];
   keepId?: string;
   dropId?: string;
   limit?: number;
   refresh?: boolean;
   force?: boolean;
+  format?: ExportFormat;
+  stem?: string;
+  asciiOnly?: boolean;
 }
 
 const SCHEMA = {
@@ -47,14 +53,15 @@ const SCHEMA = {
   properties: {
     action: {
       type: 'string',
-      enum: ['resolve', 'search', 'list', 'get', 'remove', 'merge', 'fulltext', 'assets'],
+      enum: ['resolve', 'search', 'list', 'get', 'remove', 'merge', 'fulltext', 'assets', 'export'],
       description:
         'resolve：按 DOI/PMID/PMCID/arXiv 标识解析元数据并入库（支持一次多个）。' +
         'search：按标题或书目信息检索上游，返回候选但**不入库**。' +
         'list：列出文献库里已有的条目。get：看某一条的完整元数据。' +
         'remove：删除一条。merge：把两条重复记录合并。' +
         'fulltext：按开放获取优先的顺序抓全文（PMC 开放获取包能一并拿到插图）。' +
-        'assets：列出某条文献已抓到的全文、插图与补充材料，含制品版本 id。\n' +
+        'assets：列出某条文献已抓到的全文、插图与补充材料，含制品版本 id。' +
+        'export：导出 BibTeX / CSL-JSON / RIS 并存为制品，返回可直接用的引用键。\n' +
         '只知道标题时必须先 search 确认是哪一篇，再用它的 DOI 走 resolve。' +
         '不要凭记忆构造 DOI——错的 DOI 会解析出另一篇文献，而结果看起来是成功的。',
     },
@@ -89,6 +96,29 @@ const SCHEMA = {
       type: 'boolean',
       description: 'action=fulltext 时即使已有全文也重抓。用于换一个能拿到插图的来源。',
     },
+    refIds: {
+      type: 'array',
+      items: { type: 'string' },
+      maxItems: 500,
+      description: 'action=export 时只导出这些文献。省略则导出全库（可配合 query/year 筛选）。',
+    },
+    format: {
+      type: 'string',
+      enum: ['bibtex', 'csl-json', 'ris'],
+      description:
+        'action=export 的格式。bibtex 给 LaTeX；csl-json 给 pandoc 与 Word 的 CSL 引擎；' +
+        'ris 给 EndNote 与多数期刊投稿系统。三种格式的引用键一致，可以混用。',
+    },
+    stem: {
+      type: 'string',
+      description: 'action=export 的输出文件名（不含扩展名）。默认 references。',
+    },
+    asciiOnly: {
+      type: 'boolean',
+      description:
+        'action=export 且 format=bibtex 时把重音字符转成 LaTeX 写法。传统 bibtex ' +
+        '工具链需要；用 biblatex + biber 则不需要。',
+    },
   },
   required: ['action'],
   additionalProperties: false,
@@ -107,13 +137,29 @@ function parseInput(raw: unknown): RefToolInput {
     action !== 'remove' &&
     action !== 'merge' &&
     action !== 'fulltext' &&
-    action !== 'assets'
+    action !== 'assets' &&
+    action !== 'export'
   ) {
     throw new Error(
-      `action 必须是 resolve/search/list/get/remove/merge/fulltext/assets 之一，` +
+      'action 必须是 resolve/search/list/get/remove/merge/fulltext/assets/export 之一，' +
         `收到 ${String(action)}`,
     );
   }
+
+  const format = obj.format;
+  if (format !== undefined && format !== 'bibtex' && format !== 'csl-json' && format !== 'ris') {
+    throw new Error(`format 必须是 bibtex/csl-json/ris 之一，收到 ${String(format)}`);
+  }
+
+  const refIds: string[] = [];
+  if (Array.isArray(obj.refIds)) {
+    for (const entry of obj.refIds) {
+      if (typeof entry !== 'string') throw new Error('refIds 的每一项必须是字符串');
+      const trimmed = entry.trim();
+      if (trimmed !== '') refIds.push(trimmed);
+    }
+  }
+  if (refIds.length > 500) throw new Error('一次最多导出 500 条');
 
   const identifiers: string[] = [];
   if (Array.isArray(obj.identifiers)) {
@@ -168,6 +214,10 @@ function parseInput(raw: unknown): RefToolInput {
     ...(num(obj.limit, 'limit') === undefined ? {} : { limit: num(obj.limit, 'limit') as number }),
     ...(obj.refresh === undefined ? {} : { refresh: obj.refresh === true }),
     ...(obj.force === undefined ? {} : { force: obj.force === true }),
+    ...(refIds.length === 0 ? {} : { refIds }),
+    ...(format === undefined ? {} : { format }),
+    ...(text(obj.stem, 'stem') === undefined ? {} : { stem: text(obj.stem, 'stem') as string }),
+    ...(obj.asciiOnly === undefined ? {} : { asciiOnly: obj.asciiOnly === true }),
   };
 }
 
@@ -190,6 +240,7 @@ export function createManageReferencesTool(options: RefToolOptions): ToolDefinit
     name: 'manage_references',
     description:
       '文献库：解析 DOI/PMID/arXiv 元数据、检索上游、去重入库、查看与合并。\n' +
+      '导出 BibTeX / CSL-JSON / RIS（三种格式的引用键一致）。\n' +
       '元数据同时取自 Crossref、OpenAlex、Semantic Scholar、PubMed、Europe PMC 与 DataCite ' +
       '并合并，因此比任何单一来源完整。入库时按 DOI 精确匹配与标题模糊匹配去重；' +
       '两个不同 DOI 但标题几乎相同的条目（preprint 与正式版）会被报告为可疑重复但**不自动合并**。\n' +
@@ -536,6 +587,78 @@ export function createManageReferencesTool(options: RefToolOptions): ToolDefinit
             }
           }
 
+          return { ok: true, output: textOutput(lines.join('\n')) };
+        }
+
+        case 'export': {
+          if (input.format === undefined) {
+            return {
+              ok: false,
+              output: errorOutput(
+                'MissingFormat',
+                'action=export 需要 format：bibtex（LaTeX）、csl-json（pandoc/Word）或 ris（EndNote/投稿系统）。',
+              ),
+            };
+          }
+
+          const outcome = library.exportRefs({
+            format: input.format,
+            ...(input.refIds === undefined ? {} : { refIds: input.refIds }),
+            ...(input.refIds !== undefined
+              ? {}
+              : {
+                  filter: {
+                    ...(input.query === undefined ? {} : { query: input.query }),
+                    ...(input.year === undefined ? {} : { year: input.year }),
+                  },
+                }),
+            ...(input.stem === undefined ? {} : { stem: input.stem }),
+            ...(input.asciiOnly === undefined ? {} : { asciiOnly: input.asciiOnly }),
+          });
+
+          if (!outcome.ok || outcome.result === null) {
+            return {
+              ok: false,
+              output: errorOutput('ExportFailed', outcome.reason ?? '导出失败'),
+            };
+          }
+
+          const lines = [
+            `已导出 ${String(outcome.result.entryCount)} 条为 ${EXPORT_FORMAT_LABEL[input.format]}。`,
+            `文件：${outcome.result.filename}`,
+          ];
+          if (outcome.artifactId !== null) {
+            lines.push(`制品：${outcome.artifactId}`);
+            lines.push(`执行期路径占位符：{{artifact:${outcome.versionId ?? ''}}}`);
+          } else if (outcome.reason !== null) {
+            lines.push(outcome.reason);
+          }
+          if (outcome.missingIds.length > 0) {
+            // 请求了但不存在的 id 必须报出来：静默少几条会让手稿里的引用编译不过
+            lines.push(
+              '',
+              `以下 ${String(outcome.missingIds.length)} 个 id 在库里不存在，未包含在导出里：` +
+                outcome.missingIds.join('、'),
+            );
+          }
+
+          lines.push('', '引用键（正文里就用这些）：');
+          lines.push(outcome.result.keys.slice(0, 60).join('、'));
+          if (outcome.result.keys.length > 60) {
+            lines.push(`… 共 ${String(outcome.result.keys.length)} 个`);
+          }
+
+          const warningText = renderExportWarnings(outcome.result.warnings);
+          if (warningText !== '') {
+            lines.push('', warningText);
+            lines.push(
+              '',
+              '这些问题不影响文件生成，但会让引用输出出错或不合规。' +
+                '用 action=resolve 加 refresh 重新解析元数据通常能补上缺失字段。',
+            );
+          }
+
+          options.onChanged?.({ action: 'export', refIds: [] });
           return { ok: true, output: textOutput(lines.join('\n')) };
         }
 

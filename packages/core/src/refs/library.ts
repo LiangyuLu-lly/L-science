@@ -16,7 +16,9 @@
 import type { ArtifactStore } from '../artifact/store.js';
 import type { RefRecord, RefsRepo } from '../repo/refs.js';
 import { mergeSourceLabel } from '../repo/refs.js';
-import { toBibtex } from './bibtex.js';
+import { bibtexKeyFor, toBibtex } from './bibtex.js';
+import type { ExportFormat, ExportOptions, ExportResult } from './export.js';
+import { assignKeys, exportRefs } from './export.js';
 import type { FulltextResult, FulltextSource } from './fulltext.js';
 import { FulltextFetcher } from './fulltext.js';
 import type { CslItem } from './csl.js';
@@ -749,6 +751,125 @@ export class RefLibrary {
     return { pairs, scanned: refs.length, total, truncated: total > refs.length };
   }
 
+  /**
+   * 导出引用（需求 12.5）。
+   *
+   * `refIds` 给出时只导这些（按给的顺序无关，导出内部会重排）；省略时按筛选条件
+   * 取全库。落成制品，因此导出结果可以被手稿编译引用、可以被版本追溯，也会跟着
+   * 项目一起归档——而「用户点了导出然后文件去哪了」是一次性下载最容易出的问题。
+   */
+  exportRefs(options: {
+    format: ExportFormat;
+    refIds?: readonly string[];
+    filter?: { query?: string; year?: number; type?: string; hasFulltext?: boolean };
+    stem?: string;
+    asciiOnly?: boolean;
+    includeAbstract?: boolean;
+    sort?: ExportOptions['sort'];
+  }): {
+    ok: boolean;
+    result: ExportResult | null;
+    artifactId: string | null;
+    versionId: string | null;
+    /** 请求了但库里没有的 id。静默忽略会让导出结果少几条而用户不知道。 */
+    missingIds: readonly string[];
+    reason: string | null;
+  } {
+    const missingIds: string[] = [];
+    let refs: readonly RefRecord[];
+
+    if (options.refIds !== undefined) {
+      const found: RefRecord[] = [];
+      for (const id of options.refIds) {
+        const ref = this.repo.get(id);
+        if (ref === null) missingIds.push(id);
+        else found.push(ref);
+      }
+      refs = found;
+    } else {
+      refs = this.repo.list({
+        ...(options.filter?.query === undefined ? {} : { query: options.filter.query }),
+        ...(options.filter?.year === undefined ? {} : { year: options.filter.year }),
+        ...(options.filter?.type === undefined ? {} : { type: options.filter.type }),
+        ...(options.filter?.hasFulltext === undefined
+          ? {}
+          : { hasFulltext: options.filter.hasFulltext }),
+        limit: 1000,
+      });
+    }
+
+    if (refs.length === 0) {
+      return {
+        ok: false,
+        result: null,
+        artifactId: null,
+        versionId: null,
+        missingIds,
+        reason:
+          missingIds.length > 0
+            ? `请求的 ${String(missingIds.length)} 个 id 在库里都不存在：${missingIds.join('、')}`
+            : '没有可导出的文献。先用 resolve 添加文献，或放宽筛选条件。',
+      };
+    }
+
+    const result = exportRefs(refs, {
+      format: options.format,
+      ...(options.stem === undefined ? {} : { stem: options.stem }),
+      ...(options.asciiOnly === undefined ? {} : { asciiOnly: options.asciiOnly }),
+      ...(options.includeAbstract === undefined
+        ? {}
+        : { includeAbstract: options.includeAbstract }),
+      ...(options.sort === undefined ? {} : { sort: options.sort }),
+    });
+
+    if (this.#artifacts === null) {
+      // 没有制品库时仍然把内容返回：调用方可以自己处理（测试、纯计算路径）
+      return {
+        ok: true,
+        result,
+        artifactId: null,
+        versionId: null,
+        missingIds,
+        reason: '没有接制品库，导出内容只在返回值里，未落盘。',
+      };
+    }
+
+    const saved = this.#artifacts.save({
+      filename: result.filename,
+      content: Buffer.from(result.content, 'utf8'),
+      mime: result.mime,
+    });
+
+    /*
+     * 顺手把 BibTeX 缓存回每条记录。
+     *
+     * 导出时已经为每条算过一遍，扔掉再让详情页各算一次是白费；更重要的是缓存下来
+     * 之后，详情页显示的引用键与刚导出的那份文件一致——不一致会让用户在手稿里
+     * 复制到一个 .bib 里不存在的键。
+     */
+    if (options.format === 'bibtex') {
+      const keyed = assignKeys(
+        [...refs].sort((a, b) => bibtexKeyFor(a).localeCompare(bibtexKeyFor(b))),
+      );
+      for (const { ref, key } of keyed) {
+        try {
+          this.repo.setBibtex(ref.id, toBibtex(ref.csl, { key }));
+        } catch {
+          // 缓存失败不该让一次成功的导出变成失败
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      result,
+      artifactId: saved.artifact.id,
+      versionId: saved.version.id,
+      missingIds,
+      reason: null,
+    };
+  }
+
   /** 生成并缓存 BibTeX。已有缓存且未强制刷新时直接返回。 */
   bibtexFor(refId: string, options: { refresh?: boolean } = {}): string | null {
     const ref = this.repo.get(refId);
@@ -767,48 +888,6 @@ function oaStatusOf(csl: CslItem): string | null {
   if (csl.extra?.isOpenAccess === true) return 'open';
   return null;
 }
-
-/**
- * BibTeX 引用键。
- *
- * 形式是 `姓氏年份首词`（`smith2023sleep`），这是 LaTeX 社区的事实标准，也是
- * Google Scholar 与 Zotero 的默认。用 DOI 当键会在正文里出现 `\cite{10.1038/...}`，
- * 而 BibTeX 的键不允许含 `/` 与 `.`——那份 .bib 编译不过。
- */
-export function bibtexKeyFor(ref: RefRecord): string {
-  const author = (ref.firstAuthor ?? '').replace(/[^a-z0-9]/gu, '');
-  const year = ref.year === null ? '' : String(ref.year);
-  const firstWord =
-    (ref.titleNorm ?? '').split(' ').find((w) => w.length > 3 && !STOPWORDS.has(w)) ?? '';
-
-  const key = `${author}${year}${firstWord}`.slice(0, 48);
-  // 三部分都取不到时退回记录 id 去掉前缀。它一定唯一，只是不好读
-  return key === '' ? ref.id.replace(/^rf_/u, 'ref').replace(/-/gu, '') : key;
-}
-
-/** 引用键里跳过的首词。只列真正会出现在标题开头的。 */
-const STOPWORDS = new Set([
-  'the',
-  'and',
-  'for',
-  'with',
-  'from',
-  'into',
-  'that',
-  'this',
-  'their',
-  'these',
-  'those',
-  'using',
-  'towards',
-  'toward',
-  'about',
-  'after',
-  'before',
-  'between',
-  'among',
-  'during',
-]);
 
 /** 上游标识的中文名，用于工具输出与界面。 */
 export const SOURCE_LABEL: Readonly<Record<RefSourceId, string>> = {

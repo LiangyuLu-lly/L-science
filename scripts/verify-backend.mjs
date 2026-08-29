@@ -892,6 +892,25 @@ try {
     String(byId('rf9').result?.summary ?? '').slice(0, 40),
   );
 
+  // 导出：空库要报 conflict 而不是产出一个空文件。空 .bib 被 LaTeX 吃掉之后
+  // 报的是「Citation undefined」，与「忘了导出」的症状一样
+  send(req('rf10', { method: 'ref.export', projectId: createdProject.id, format: 'bibtex' }));
+  await waitFor(() => byId('rf10') !== undefined, 8000, 'ref.export 空库');
+  check(
+    byId('rf10').ok === false && byId('rf10').error?.code === 'conflict',
+    '空库导出被拒        ',
+    String(byId('rf10').error?.message ?? '').slice(0, 40),
+  );
+
+  // 非法格式必须在 schema 层就被挡住
+  send(req('rf11', { method: 'ref.export', projectId: createdProject.id, format: 'endnote' }));
+  await waitFor(() => byId('rf11') !== undefined, 8000, 'ref.export 非法格式');
+  check(
+    byId('rf11').ok === false && byId('rf11').error?.code === 'bad_request',
+    '非法导出格式被挡住  ',
+    String(byId('rf11').error?.code ?? '?'),
+  );
+
   // --- 14. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();

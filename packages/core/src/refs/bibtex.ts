@@ -337,6 +337,61 @@ export function toBibtex(item: CslItem, options: BibtexOptions = {}): string {
 }
 
 /**
+ * BibTeX 引用键。
+ *
+ * 形式是 `姓氏年份首词`（`smith2023sleep`），这是 LaTeX 社区的事实标准，也是
+ * Google Scholar 与 Zotero 的默认。用 DOI 当键会在正文里出现 `\cite{10.1038/...}`，
+ * 而 BibTeX 的键不允许含 `/` 与 `.`——那份 .bib 编译不过。
+ *
+ * 放在 bibtex.ts 而不是 library.ts：`export.ts` 与 `library.ts` 都要用它，而
+ * library → export → library 会成环。引用键本来就是 BibTeX 的概念。
+ */
+export function bibtexKeyFor(ref: {
+  firstAuthor: string | null;
+  year: number | null;
+  titleNorm: string | null;
+  id: string;
+}): string {
+  const author = (ref.firstAuthor ?? '').replace(/[^a-z0-9]/gu, '');
+  const year = ref.year === null ? '' : String(ref.year);
+  const firstWord =
+    (ref.titleNorm ?? '').split(' ').find((w) => w.length > 3 && !KEY_STOPWORDS.has(w)) ?? '';
+
+  const key = `${author}${year}${firstWord}`.slice(0, 48);
+  // 三部分都取不到时退回记录 id 去掉前缀。它一定唯一，只是不好读
+  return key === '' ? ref.id.replace(/^rf_/u, 'ref').replace(/-/gu, '') : key;
+}
+
+/**
+ * 引用键里跳过的首词。
+ *
+ * 只列真正会出现在标题开头的。列宽了会让键失去辨识度——把 `effects` 也当停用词
+ * 的话，`smith2023sleep` 会变成 `smith2023memory`，而那与另一篇论文更容易撞。
+ */
+const KEY_STOPWORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'from',
+  'into',
+  'that',
+  'this',
+  'their',
+  'these',
+  'those',
+  'using',
+  'towards',
+  'toward',
+  'about',
+  'after',
+  'before',
+  'between',
+  'among',
+  'during',
+]);
+
+/**
  * 清洗引用键。
  *
  * BibTeX 的键不允许含 `,`、`{`、`}`、空白与 `%`；实践中还要避开 `/`、`.`、`:`

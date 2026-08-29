@@ -133,7 +133,8 @@ export function inferKind(filename: string, mime: string | null): ArtifactKind {
   if (mime?.startsWith('image/') === true) return 'image';
   if (['png', 'jpg', 'jpeg', 'svg', 'pdf_page', 'tiff', 'webp'].includes(ext)) return 'image';
   if (['csv', 'tsv', 'xlsx', 'parquet'].includes(ext)) return 'table';
-  if (['md', 'txt', 'docx', 'tex', 'pdf'].includes(ext)) return 'document';
+  // bib/ris/nbib 是书目文件：它们是参考文献列表的可投稿形态，与手稿同类
+  if (['md', 'txt', 'docx', 'tex', 'pdf', 'bib', 'ris', 'nbib'].includes(ext)) return 'document';
   if (['py', 'r', 'ipynb', 'sh', 'ps1', 'sql'].includes(ext)) return 'code';
   if (['npy', 'npz', 'h5', 'hdf5', 'mat', 'edf', 'fif', 'nii', 'pkl'].includes(ext)) return 'data';
   return 'other';
