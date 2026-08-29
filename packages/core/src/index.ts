@@ -71,6 +71,16 @@ export * from './reviewer/index.js';
 
 export * from './memory/index.js';
 
+export * from './mcp/index.js';
+
+export { ConnectorRepo } from './repo/connectors.js';
+export type {
+  ConnectorGroup,
+  ConnectorKind,
+  ConnectorRecord,
+  ToolGrant,
+} from './repo/connectors.js';
+
 export { MemoryRepo, normalizeMemoryContent } from './repo/memory.js';
 export type { MemoryKind, MemoryNote, MemoryRepoOptions, MemoryScope } from './repo/memory.js';
 

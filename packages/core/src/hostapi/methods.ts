@@ -17,6 +17,7 @@ import type { RegistryRepo } from '../repo/registry.js';
 import type { SkillAuditRepo } from '../repo/skills.js';
 import type { UsageRepo } from '../repo/usage.js';
 import type { SkillManager } from '../skills/manager.js';
+import type { McpManager } from '../mcp/manager.js';
 import type { HostCallContext, HostRpcServer } from './server.js';
 import type { ShimPending, ShimSurface } from './shim.js';
 
@@ -31,6 +32,14 @@ export interface HostMethodDeps {
   usage: UsageRepo;
   registry: RegistryRepo;
   subAgents: SubAgentRunner;
+  /**
+   * MCP 连接器（需求 14.2）。
+   *
+   * 只在这里出现，**不注册任何 `mcp_*` 工具**——需求 14.2 规定 Python 与 R 内核不得具备
+   * MCP 通道，而注册一个工具进 ToolRegistry 就等于把通道给了普通内核。控制面 token 只注入
+   * 控制面池，因此「MCP 只能从控制面调」这件事由池边界保证，不靠条件判断。
+   */
+  mcp?: McpManager;
 }
 
 /* ------------------------------------------------------------------ *
@@ -133,7 +142,6 @@ const PENDING: readonly ShimPending[] = [
   { name: 'claims', reason: 'Claim Ledger 属 M4（任务 13.4），尚未落地' },
   { name: 'manuscripts', reason: 'Manuscript Compiler 属 M4（任务 13.6），尚未落地' },
   { name: 'compute', reason: '远程算力属 M5（任务 14.2），尚未落地' },
-  { name: 'mcp', reason: 'MCP 连接器属 M5（任务 14.1），尚未落地' },
 ];
 
 /**
@@ -421,6 +429,101 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
     failures: () => deps.usage.failures({}),
   });
 
+  /* ---------------- MCP 连接器 ---------------- */
+
+  /*
+   * 需求 14.2：MCP 表面只在控制面暴露。
+   *
+   * 这个表面只有在 `deps.mcp` 存在时才注册。它不存在时 `host.mcp` 会走 pending 分支
+   * 抛出带说明的错误，而不是返回空——空壳会让模型以为「查了但没有连接器」，然后基于
+   * 一个不存在的事实继续推理。
+   */
+  if (deps.mcp !== undefined) {
+    const mcp = deps.mcp;
+
+    surface(
+      'mcp',
+      '外部连接器：列出可用工具、调用它们、查连接状态。工具调用可能触发用户审批。',
+      {
+        /** 连接器状态总览。不触发连接，能在什么都没连时回答。 */
+        connectors: () => mcp.status(),
+
+        /**
+         * 列出全部生效连接器的工具。
+         *
+         * 会逐个建立连接，第一次调用可能慢。某个连接器连不上不影响其余——五十个内置
+         * 连接器里有一个的服务临时挂了，不该让整个清单报错。
+         */
+        tools: async () => {
+          const tools = await mcp.tools();
+          return tools.map((t) => ({
+            connectorId: t.connectorId,
+            connectorName: t.connectorName,
+            name: t.tool.name,
+            description: t.tool.description ?? '',
+            inputSchema: t.tool.inputSchema,
+            readOnly: t.tool.annotations?.readOnlyHint === true,
+          }));
+        },
+
+        /** 只列某个连接器的工具。比 `tools()` 快得多，知道要用哪个时用它。 */
+        toolsOf: async (p) => {
+          const client = await mcp.client(reqStr(p, 'connectorId'));
+          return client.tools.map((t) => ({
+            name: t.name,
+            description: t.description ?? '',
+            inputSchema: t.inputSchema,
+            readOnly: t.annotations?.readOnlyHint === true,
+          }));
+        },
+
+        /**
+         * 调用一个工具。
+         *
+         * 非只读工具会触发审批并阻塞等待。被拒绝时返回 `denied: true` 而不是抛错——
+         * 拒绝是正常结果，而且需求 17.3 要求拒绝后不得重试同一请求。
+         */
+        call: async (p, ctx) => {
+          const args =
+            typeof p.arguments === 'object' && p.arguments !== null && !Array.isArray(p.arguments)
+              ? (p.arguments as Record<string, unknown>)
+              : {};
+          const outcome = await mcp.callTool(
+            reqStr(p, 'connectorId'),
+            reqStr(p, 'tool'),
+            args,
+            { conversationId: ctx.conversationId, projectId: deps.projectId },
+          );
+          return {
+            ok: outcome.ok,
+            denied: outcome.denied,
+            text: outcome.text,
+            data: outcome.structured,
+          };
+        },
+
+        /** 读一个资源。 */
+        readResource: async (p) => {
+          const client = await mcp.client(reqStr(p, 'connectorId'));
+          return client.readResource(reqStr(p, 'uri'));
+        },
+
+        /** 取一个提示模板。 */
+        prompt: async (p) => {
+          const client = await mcp.client(reqStr(p, 'connectorId'));
+          const args =
+            typeof p.arguments === 'object' && p.arguments !== null && !Array.isArray(p.arguments)
+              ? (p.arguments as Record<string, unknown>)
+              : {};
+          return client.getPrompt(reqStr(p, 'name'), args);
+        },
+
+        /** 测试连接。设置页与排查时用。 */
+        check: async (p) => mcp.check(reqStr(p, 'connectorId')),
+      },
+    );
+  }
+
   /* ---------------- 只读查询 ---------------- */
 
   surface(
@@ -465,5 +568,22 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
     },
   );
 
-  return { surfaces, pending: PENDING };
+  /*
+   * `mcp` 只在连接器管理缺席时才算未实现。
+   *
+   * 两种情况的原因不同，说法也必须不同：M4/M5 的表面是「还没做」，而 mcp 缺席是
+   * 「这个部署里没启用连接器」。用同一句「尚未落地」会让用户去等一个已经做完的东西。
+   */
+  const pending =
+    deps.mcp === undefined
+      ? [
+          ...PENDING,
+          {
+            name: 'mcp',
+            reason: '连接器管理未启用（本次运行没有可用的连接器注册表）',
+          },
+        ]
+      : PENDING;
+
+  return { surfaces, pending };
 }

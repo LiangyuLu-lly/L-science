@@ -43,6 +43,8 @@ import {
   createRememberTool,
 } from './memory/index.js';
 import { MemoryRepo, type MemoryKind, type MemoryScope } from './repo/memory.js';
+import { ConnectorRepo } from './repo/connectors.js';
+import { BRIDGE_SPECS, McpBridgeServer, McpManager, syncBuiltinConnectors } from './mcp/index.js';
 import {
   createGeneratePlanTool,
   createPlanStatusTool,
@@ -113,6 +115,14 @@ import { InterruptEvent } from './win32/index.js';
 function log(msg: string): void {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
 }
+
+/**
+ * 连接器带来的域名放行的标记。
+ *
+ * 用它区分「平台因为某个连接器启用而加的」与「用户自己批准的」。分不清的后果是：
+ * 关掉一个连接器时把用户手工批准过的同一域名一起撤了，而他不会知道为什么。
+ */
+const CONNECTOR_DOMAIN_REASON = 'connector:auto';
 
 function notFound(message: string, remediation?: string): DispatchError {
   return new DispatchError(
@@ -284,6 +294,7 @@ async function main(): Promise<void> {
   const findingsRepos = new Map<string, FindingsRepo>();
   const reviewers = new Map<string, ReviewerService>();
   const memories = new Map<string, MemoryService>();
+  const mcpManagers = new Map<string, McpManager>();
   const subAgentRunners = new Map<string, SubAgentRunner>();
 
   /**
@@ -325,6 +336,90 @@ async function main(): Promise<void> {
   } catch {
     wslAvailable = false;
   }
+
+  /*
+   * 宿主路径与域名授权。
+   *
+   * 声明位置提到这里是因为连接器的域名联动要用它，而那发生在启动路径上。
+   */
+  const grants = new GrantRepo(store.db);
+
+  /* --- 连接器（任务 12.13、12.14，需求 14.1、14.2）------------------- */
+
+  /*
+   * 连接器注册表在**应用库**：一份连接器配置服务所有项目。与供应商注册表同理——
+   * 放进项目库会让每个项目各有一份，改一处不影响其他项目。
+   */
+  const connectorRepo = new ConnectorRepo(store.db);
+
+  /*
+   * REST→MCP 桥。
+   *
+   * 五十个公共数据库都有现成的 REST 接口，桥把它们按声明式端点变成 MCP 工具。
+   * 替代方案是为每个库装一个 MCP 服务端包，那在没有 C 工具链的机器上有很大概率
+   * 因为某个传递依赖需要现场编译而整体安装失败。
+   *
+   * 必须在同步内置目录**之前**起来：目录里每个连接器的 url 指向桥的地址，而端口是
+   * 监听之后才确定的。顺序反了会把 `http://127.0.0.1:0/...` 写进配置。
+   */
+  const bridge = new McpBridgeServer({
+    specs: BRIDGE_SPECS,
+    onLog: log,
+  });
+  await bridge.start();
+
+  {
+    const result = syncBuiltinConnectors({
+      repo: connectorRepo,
+      bridgeUrl: bridge.baseUrl,
+      onLog: log,
+    });
+    log(
+      `连接器：${String(connectorRepo.list({ includeDisabled: true }).length)} 个` +
+        `（${String(result.groups)} 组，生效 ${String(connectorRepo.listEffective().length)}）`,
+    );
+  }
+
+  /*
+   * 连接器所需的域名进出口白名单。
+   *
+   * 不联动会出现两种半开状态，两种都没人能解释：连接器开着但域名没放行 → 每次调用都
+   * 弹审批；连接器关了但域名还在白名单 → 用户以为断网了而内核里的代码照样能连。
+   *
+   * 用 `always` 作用域并标注来源，这样用户在授权列表里能看出这批是连接器带来的，
+   * 而不是他自己批准过的。
+   */
+  const syncConnectorDomains = (): void => {
+    const wanted = new Set(connectorRepo.effectiveDomains());
+    const existing = new Map(
+      grants
+        .listDomains()
+        .filter((d) => d.reason === CONNECTOR_DOMAIN_REASON)
+        .map((d) => [d.domain, d.id]),
+    );
+
+    for (const domain of wanted) {
+      if (existing.has(domain)) continue;
+      try {
+        grants.allowDomain({
+          domain,
+          mode: 'ro',
+          scope: 'always',
+          scopeId: null,
+          reason: CONNECTOR_DOMAIN_REASON,
+        });
+      } catch (err) {
+        log(`连接器域名放行失败 ${domain}：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // 已关闭连接器留下的域名要撤回。只撤我们自己加的那些
+    for (const [domain, id] of existing) {
+      if (wanted.has(domain)) continue;
+      grants.removeDomain(id);
+    }
+  };
+  syncConnectorDomains();
 
   /*
    * 供应商与模型注册表在**应用库**里，与项目无关：一份凭据配置服务所有项目。
@@ -818,6 +913,23 @@ async function main(): Promise<void> {
     });
     await hostServer.start();
 
+    /*
+     * 连接器管理按项目建实例。
+     *
+     * 注册表本身是全局的（应用库），但审批要落到发起它的项目的审计里，而 McpManager
+     * 持有审批服务的引用。共用一个实例会让所有项目的连接器审批记进同一个项目库。
+     */
+    const mcpManager = new McpManager({
+      repo: connectorRepo,
+      resolveCredential: (ref) =>
+        !vault.available || !vault.exists ? null : (vault.get(ref) ?? null),
+      approvals: () => approvalFor(projectId),
+      onLog: (line) => {
+        log(`[mcp ${projectId}] ${line}`);
+      },
+    });
+    mcpManagers.set(projectId, mcpManager);
+
     const host = registerHostMethods(hostServer, {
       projectId,
       db: project.db,
@@ -829,6 +941,9 @@ async function main(): Promise<void> {
       usage: usageRepo,
       registry: modelRegistry,
       subAgents,
+      // 需求 14.2：MCP 只从控制面暴露。这里是它唯一的注册点，
+      // ToolRegistry 里刻意没有任何 mcp_* 工具
+      mcp: mcpManager,
     });
 
     /*
@@ -1890,6 +2005,171 @@ async function main(): Promise<void> {
     return { deleted: true };
   });
 
+  /* --- 连接器（任务 12.13、12.14，需求 14.1、14.2）--- */
+
+  /**
+   * 取连接器管理实例。
+   *
+   * 没有项目上下文时（设置页可以在不打开项目的情况下看目录）返回 null，此时只能做
+   * 不需要审批的操作——列目录、开关。真正的调用与握手需要项目，因为审批要落到项目审计里。
+   */
+  const mcpFor = async (projectId: string): Promise<McpManager> => {
+    await orchestratorFor(projectId);
+    const manager = mcpManagers.get(projectId);
+    if (manager === undefined) throw notFound(`项目不可用：${projectId}`);
+    return manager;
+  };
+
+  d.register('connector.list', async (req) => {
+    // 有项目上下文时带上运行时状态（是否已连接、工具数）；没有就只给注册表内容
+    const status = req.projectId === undefined ? null : (await mcpFor(req.projectId)).status();
+    const byId = new Map((status ?? []).map((s) => [s.id, s]));
+
+    return {
+      groups: connectorRepo.listGroups(),
+      connectors: connectorRepo.list({ includeDisabled: true }).map((c) => {
+        const group = c.groupId === null ? null : connectorRepo.getGroup(c.groupId);
+        const live = byId.get(c.id);
+        return {
+          id: c.id,
+          name: c.name,
+          kind: c.kind,
+          groupId: c.groupId,
+          builtin: c.builtin,
+          // 两级开关都算进来：UI 上显示的「已启用」要与实际可用一致
+          enabled: c.enabled && (group === null || group.enabled),
+          selfEnabled: c.enabled,
+          groupEnabled: group === null ? true : group.enabled,
+          credentialRef: c.credentialRef,
+          domains: c.domains,
+          health: c.health,
+          lastError: c.lastError,
+          connected: live?.connected ?? false,
+          toolCount: live?.toolCount ?? 0,
+          serverInfo: live?.serverInfo ?? null,
+          sources: Array.isArray(c.config.sources) ? (c.config.sources as string[]) : [],
+        };
+      }),
+    };
+  });
+
+  d.register('connector.setEnabled', async (req) => {
+    if (req.groupId !== undefined) {
+      if (!connectorRepo.setGroupEnabled(req.groupId, req.enabled)) {
+        throw notFound(`连接器组不存在：${req.groupId}`);
+      }
+    } else if (req.connectorId !== undefined) {
+      if (!connectorRepo.setEnabled(req.connectorId, req.enabled)) {
+        throw notFound(`连接器不存在：${req.connectorId}`);
+      }
+    } else {
+      throw new DispatchError(makeError('bad_request', '必须指定 connectorId 或 groupId'));
+    }
+
+    /*
+     * 关掉之后必须做三件事，少一件就会留下半开状态：
+     * 1. 断开已建立的连接——只改数据库标记的话缓存的客户端还在，模型仍然能调用
+     * 2. 撤销工具授权——否则重新启用时它会带着旧授权直接放行
+     * 3. 撤回域名白名单——否则用户以为断网了而内核里的代码照样能连
+     */
+    if (!req.enabled) {
+      const affected =
+        req.groupId === undefined
+          ? req.connectorId === undefined
+            ? []
+            : [req.connectorId]
+          : connectorRepo.list({ groupId: req.groupId, includeDisabled: true }).map((c) => c.id);
+
+      for (const manager of mcpManagers.values()) {
+        for (const id of affected) await manager.disconnect(id);
+      }
+      for (const id of affected) connectorRepo.revokeAllForConnector(id);
+    }
+
+    syncConnectorDomains();
+
+    return {
+      groups: connectorRepo.listGroups(),
+      effective: connectorRepo.listEffective().length,
+    };
+  });
+
+  d.register('connector.check', async (req) => {
+    const manager = await mcpFor(req.projectId);
+    return manager.check(req.connectorId);
+  });
+
+  d.register('connector.tools', async (req) => {
+    const manager = await mcpFor(req.projectId);
+    const client = await manager.client(req.connectorId).catch((err: unknown) => {
+      throw new DispatchError(
+        makeError(
+          'unavailable',
+          `连接器不可用：${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    });
+    return {
+      tools: client.tools.map((t) => ({
+        name: t.name,
+        description: t.description ?? '',
+        inputSchema: t.inputSchema,
+        readOnly: t.annotations?.readOnlyHint === true,
+        destructive: t.annotations?.destructiveHint === true,
+      })),
+      resources: client.resources.length,
+      prompts: client.prompts.length,
+    };
+  });
+
+  d.register('connector.upsert', async (req) => {
+    const existing = connectorRepo.get(req.connectorId);
+    if (existing !== null && existing.builtin) {
+      throw new DispatchError(
+        makeError('conflict', '不能覆盖内置连接器', {
+          remediation: '内置连接器只能禁用。要自定义请用另一个 id 新建。',
+        }),
+      );
+    }
+
+    const record = connectorRepo.upsert({
+      id: req.connectorId,
+      kind: req.kind,
+      name: req.name,
+      builtin: false,
+      config: req.config,
+      ...(req.credentialRef === undefined ? {} : { credentialRef: req.credentialRef }),
+      ...(req.domains === undefined ? {} : { domains: req.domains }),
+    });
+
+    // 改了配置就断开重连，否则还在用旧配置的连接
+    for (const manager of mcpManagers.values()) await manager.disconnect(req.connectorId);
+    syncConnectorDomains();
+
+    return { connector: { id: record.id, name: record.name, kind: record.kind } };
+  });
+
+  d.register('connector.delete', async (req) => {
+    const result = connectorRepo.delete(req.connectorId);
+    if (!result.deleted) {
+      throw new DispatchError(makeError('conflict', result.reason ?? '删除失败'));
+    }
+    for (const manager of mcpManagers.values()) await manager.disconnect(req.connectorId);
+    syncConnectorDomains();
+    return { deleted: true };
+  });
+
+  d.register('connector.grants', async (req) => ({
+    grants: connectorRepo.listToolGrants({ includeRevoked: req.includeRevoked }),
+  }));
+
+  d.register('connector.revokeGrant', async (req) => {
+    if (!connectorRepo.revokeToolGrant(req.grantId)) {
+      throw notFound(`工具授权不存在或已撤销：${req.grantId}`);
+    }
+    return { revoked: true };
+  });
+
   d.register('credential.delete', async (req) => {
     requireVault();
 
@@ -1984,8 +2264,6 @@ async function main(): Promise<void> {
     return { answered: true };
   });
 
-  const grants = new GrantRepo(store.db);
-
   d.register('grant.revoke', async (req) => {
     if (grants.revokeHostPath(req.grantId)) return { revoked: true, kind: 'host-path' };
     if (grants.removeDomain(req.grantId)) return { revoked: true, kind: 'domain' };
@@ -2051,6 +2329,16 @@ async function main(): Promise<void> {
     const closers: Array<Promise<unknown>> = [];
     // 审查服务先关：它持有在途的模型调用，不中止的话进程要等它跑完才退
     for (const reviewer of reviewers.values()) reviewer.close();
+
+    /*
+     * 连接器与桥要收掉。
+     *
+     * stdio 传输的连接器是我们 spawn 的子进程，不关就变成孤儿；HTTP 的会话不显式结束
+     * 会让服务端一直留着资源。桥自己也是一个监听中的服务，不关会让下一次启动看起来
+     * 「莫名有个旧实例在」。
+     */
+    for (const manager of mcpManagers.values()) closers.push(manager.close());
+    closers.push(bridge.stop());
 
     for (const plane of computePlanes.values()) {
       plane.background.close();

@@ -154,7 +154,61 @@ CREATE TABLE skill_embeddings (
 );
 `;
 
+/**
+ * 连接器分组与内置目录（任务 12.13、12.14，需求 14.1、14.2）。
+ *
+ * 初版 `connectors` 表只有 id / kind / name / config / credential / enabled / health。
+ * 内置目录有约五十个公共库连接器，靠这几列撑不起两件事：
+ *
+ * 1. **按组开关。** 用户不会逐个去关五十个连接器，他关的是「结构与相互作用」这一组。
+ *    组同时也是出口白名单的单位——关掉一组就要把它依赖的域名一起从白名单撤下，
+ *    否则「关了连接器但网络还通」这种半开状态没人能解释清楚。
+ * 2. **区分内置与自建。** 内置的随平台分发、只读、免凭据，升级时要能被整体替换；
+ *    自建的是用户资产，升级绝不能碰。混在一张表里且无标记的话，同步逻辑只能靠
+ *    id 前缀猜，而猜错的方向是「把用户的连接器删了」。
+ *
+ * `tool_grants` 独立于 `domain_allowlist`：域名授权管的是「能不能连这个主机」，
+ * 工具授权管的是「能不能调这个具体的工具」。同一个连接器上「查基因」与「提交作业」
+ * 的风险完全不同，用一条域名授权覆盖两者等于没有管控。
+ */
+const M003 = `
+ALTER TABLE connectors ADD COLUMN group_id TEXT;
+ALTER TABLE connectors ADD COLUMN builtin INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE connectors ADD COLUMN transport TEXT;
+ALTER TABLE connectors ADD COLUMN source_sha256 TEXT;
+ALTER TABLE connectors ADD COLUMN last_error TEXT;
+CREATE INDEX idx_connectors_group ON connectors (group_id, enabled);
+
+CREATE TABLE connector_groups (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT,
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  sort_order  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE connector_domains (
+  connector_id TEXT NOT NULL REFERENCES connectors (id) ON DELETE CASCADE,
+  domain       TEXT NOT NULL,
+  PRIMARY KEY (connector_id, domain)
+);
+
+CREATE TABLE tool_grants (
+  id           TEXT PRIMARY KEY,
+  connector_id TEXT NOT NULL REFERENCES connectors (id) ON DELETE CASCADE,
+  tool_name    TEXT NOT NULL,
+  scope        TEXT NOT NULL,
+  scope_id     TEXT,
+  granted_at   INTEGER NOT NULL,
+  expires_at   INTEGER,
+  revoked_at   INTEGER
+);
+CREATE INDEX idx_tool_grants_lookup
+  ON tool_grants (connector_id, tool_name, scope) WHERE revoked_at IS NULL;
+`;
+
 export const APP_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'app-initial', sql: M001 },
   { version: 2, name: 'skill-embeddings', sql: M002 },
+  { version: 3, name: 'connector-groups', sql: M003 },
 ];

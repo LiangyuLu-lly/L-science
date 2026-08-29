@@ -587,6 +587,52 @@ export const requestSchema = z.discriminatedUnion('method', [
   }),
 
   z.object({ method: z.literal('memory.delete'), projectId: idSchema, memoryId: idSchema }),
+
+  /* --- 连接器（任务 12.13、12.14，需求 14.1、14.2）--- */
+
+  /** 连接器目录与状态。按组返回，组是用户操作的单位。 */
+  z.object({ method: z.literal('connector.list'), projectId: idSchema.optional() }),
+
+  /**
+   * 开关某个连接器或整组。
+   *
+   * 两级开关都要有：用户关的是「结构与相互作用」这一组，不会逐个去关五十个连接器。
+   */
+  z.object({
+    method: z.literal('connector.setEnabled'),
+    connectorId: idSchema.optional(),
+    groupId: z.string().min(1).max(120).optional(),
+    enabled: z.boolean(),
+  }),
+
+  /** 测试连接。会真的握手一次并拉取工具清单。 */
+  z.object({ method: z.literal('connector.check'), projectId: idSchema, connectorId: idSchema }),
+
+  /** 某个连接器暴露的工具清单。 */
+  z.object({ method: z.literal('connector.tools'), projectId: idSchema, connectorId: idSchema }),
+
+  /**
+   * 登记用户自建的连接器。
+   *
+   * `kind` 决定 config 的形状：mcp-stdio 要 command/args/env，mcp-http 要 url/headers。
+   * 凭据用 `${credential}` 占位，明文进凭据库而不落配置文件。
+   */
+  z.object({
+    method: z.literal('connector.upsert'),
+    connectorId: idSchema,
+    name: z.string().min(1).max(200),
+    kind: z.enum(['mcp-stdio', 'mcp-http']),
+    config: z.record(z.string(), z.unknown()),
+    credentialRef: z.string().min(1).max(200).nullable().optional(),
+    domains: z.array(z.string().min(1).max(253)).max(50).optional(),
+  }),
+
+  z.object({ method: z.literal('connector.delete'), connectorId: idSchema }),
+
+  /** 工具级授权列表与撤销（需求 17.5）。 */
+  z.object({ method: z.literal('connector.grants'), includeRevoked: z.boolean().default(false) }),
+
+  z.object({ method: z.literal('connector.revokeGrant'), grantId: idSchema }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;
