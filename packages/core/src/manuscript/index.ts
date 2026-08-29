@@ -46,3 +46,59 @@ export {
 
 export type { VerifyCitationsInput, VerifyCitationsOptions } from './verify-tools.js';
 export { createVerifyCitationsTool } from './verify-tools.js';
+
+export type { ParsedFrontMatter, YamlMap, YamlValue } from './frontmatter.js';
+export {
+  FrontMatterError,
+  asBoolean,
+  asMapList,
+  asString,
+  asStringList,
+  parseManuscriptFrontMatter,
+} from './frontmatter.js';
+
+export type {
+  CitationMarker,
+  DisplayItem,
+  ManuscriptAuthor,
+  ManuscriptDocument,
+  ManuscriptMeta,
+  ManuscriptSection,
+} from './document.js';
+export { authorNames, countWords, parseManuscript, resolveAbstract } from './document.js';
+
+export type {
+  CitationStyleFamily,
+  JournalProfile,
+  LengthLimits,
+  NumberingRule,
+} from './journals.js';
+export {
+  BUILTIN_JOURNAL_PROFILES,
+  CITATION_STYLE_LABEL,
+  describeProfile,
+  findJournalProfile,
+  parseJournalProfile,
+} from './journals.js';
+
+export type {
+  CompileIssue,
+  CompileIssueSeverity,
+  CompileOptions,
+  CompileResult,
+  SelfCitationLeak,
+} from './compile.js';
+export {
+  BLINDING_DISCLAIMER,
+  buildCitationMap,
+  compileManuscript,
+  compileSummary,
+  detectSelfCitationLeaks,
+  surnameOf,
+} from './compile.js';
+
+export type { CompileOutcome, CompileRequest, CompileServiceDeps } from './compile-service.js';
+export { ManuscriptCompiler } from './compile-service.js';
+
+export type { CompileToolInput, CompileToolOptions } from './compile-tools.js';
+export { createCompileManuscriptTool } from './compile-tools.js';

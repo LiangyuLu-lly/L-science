@@ -1015,6 +1015,57 @@ export const requestSchema = z.discriminatedUnion('method', [
       .optional(),
     limit: z.number().int().min(1).max(500).default(100),
   }),
+
+  /* --- 手稿编译（任务 13.6，需求 13.5-13.8）--- */
+
+  /** 内置期刊格式档案。 */
+  z.object({ method: z.literal('manuscript.profiles') }),
+
+  z.object({
+    method: z.literal('manuscript.list'),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+    limit: z.number().int().min(1).max(200).default(50),
+  }),
+
+  z.object({ method: z.literal('manuscript.get'), projectId: idSchema, manuscriptId: idSchema }),
+
+  /** 只解析不编译。让用户先确认作者、机构、图表都解析对了。 */
+  z.object({
+    method: z.literal('manuscript.parse'),
+    projectId: idSchema,
+    markdown: z.string().max(600_000).optional(),
+    sourceVersionId: idSchema.optional(),
+  }),
+
+  /**
+   * 编译。
+   *
+   * `blinded` 省略时按档案默认（NeurIPS/APA 类默认双盲）。`both` 为真时两版都出。
+   */
+  z.object({
+    method: z.literal('manuscript.compile'),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+    manuscriptId: idSchema.optional(),
+    markdown: z.string().max(600_000).optional(),
+    sourceVersionId: idSchema.optional(),
+    targetJournal: z.string().max(200).optional(),
+    customProfile: z.record(z.string(), z.unknown()).optional(),
+    blinded: z.boolean().optional(),
+    both: z.boolean().default(false),
+    stem: z.string().min(1).max(80).optional(),
+  }),
+
+  /** 编译历史与问题数趋势。 */
+  z.object({
+    method: z.literal('manuscript.history'),
+    projectId: idSchema,
+    manuscriptId: idSchema,
+    limit: z.number().int().min(1).max(200).default(20),
+  }),
+
+  z.object({ method: z.literal('manuscript.delete'), projectId: idSchema, manuscriptId: idSchema }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

@@ -524,6 +524,67 @@ CREATE INDEX idx_citation_checks_verdict ON citation_checks (verdict);
 CREATE INDEX idx_citation_checks_raw ON citation_checks (raw);
 `;
 
+/**
+ * 手稿编译（任务 13.6，需求 13.5-13.8）。
+ *
+ * `manuscripts` 在 M001 里只有六列，够不上编译要用的东西。补上的部分：
+ *
+ * - **`source_artifact_id` 与 `source_version_id`**：手稿本身是一个制品，而编译要
+ *   记住「编的是哪一版」。只存 artifact_id 的话，之后有人在同一制品上存了新版本，
+ *   回看时分不清那次编译用的是哪一版——而编译报告里的行号只对那一版有效。
+ *
+ * - **`compiled_*` 与 `blinded_*`**：正式版与双盲版是两个不同的产物，都要能追溯。
+ *   共用一列会让「上次编的是双盲版还是正式版」不可知。
+ *
+ * - **`profile_id` 与 `profile_json`**：档案 id 记住用了哪个内置档案；自定义档案
+ *   的完整内容也要存下来，否则用户改了自定义档案之后旧的编译报告无法解释。
+ *
+ * `compile_runs` 单独一张表而不是往 manuscripts 上加列：一份手稿会被编译几十次
+ * （改一句就重编一次），而「上次编译报告是什么」与「历史上编译过几次、每次有多少
+ * 问题」是两个不同的问题。后者是投稿前判断「稿子在收敛还是在发散」的依据。
+ */
+const M009 = `
+ALTER TABLE manuscripts ADD COLUMN conversation_id TEXT REFERENCES conversations (id) ON DELETE SET NULL;
+ALTER TABLE manuscripts ADD COLUMN source_artifact_id TEXT;
+ALTER TABLE manuscripts ADD COLUMN source_version_id TEXT;
+ALTER TABLE manuscripts ADD COLUMN profile_id TEXT;
+ALTER TABLE manuscripts ADD COLUMN profile_json TEXT;
+ALTER TABLE manuscripts ADD COLUMN compiled_artifact_id TEXT;
+ALTER TABLE manuscripts ADD COLUMN compiled_version_id TEXT;
+ALTER TABLE manuscripts ADD COLUMN blinded_artifact_id TEXT;
+ALTER TABLE manuscripts ADD COLUMN blinded_version_id TEXT;
+ALTER TABLE manuscripts ADD COLUMN created_at INTEGER;
+ALTER TABLE manuscripts ADD COLUMN updated_at INTEGER;
+
+CREATE INDEX idx_manuscripts_conversation ON manuscripts (conversation_id)
+  WHERE conversation_id IS NOT NULL;
+
+CREATE TABLE compile_runs (
+  id             TEXT PRIMARY KEY,
+  manuscript_id  TEXT NOT NULL REFERENCES manuscripts (id) ON DELETE CASCADE,
+  /* 编的是哪一版源稿 */
+  source_version_id TEXT,
+  profile_id     TEXT NOT NULL,
+  blinded        INTEGER NOT NULL DEFAULT 0,
+  /* 产物 */
+  artifact_id    TEXT,
+  version_id     TEXT,
+  bib_artifact_id TEXT,
+  bib_version_id TEXT,
+  /* 问题计数，用于看稿子在收敛还是发散 */
+  errors         INTEGER NOT NULL DEFAULT 0,
+  warnings       INTEGER NOT NULL DEFAULT 0,
+  self_citation_leaks INTEGER NOT NULL DEFAULT 0,
+  /* 完整报告与移除字段清单，JSON */
+  report         TEXT,
+  removed_json   TEXT,
+  counts_json    TEXT,
+  model_id       TEXT,
+  created_at     INTEGER NOT NULL
+);
+CREATE INDEX idx_compile_runs_manuscript ON compile_runs (manuscript_id, created_at DESC);
+`;
+
 export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'project-initial', sql: M001 },
   { version: 2, name: 'blob-eviction', sql: M002 },
@@ -533,4 +594,5 @@ export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 6, name: 'reference-fulltext', sql: M006 },
   { version: 7, name: 'claim-ledger', sql: M007 },
   { version: 8, name: 'citation-checks', sql: M008 },
+  { version: 9, name: 'manuscript-compile', sql: M009 },
 ];

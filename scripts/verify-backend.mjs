@@ -1126,7 +1126,160 @@ try {
     '',
   );
 
-  // --- 16. stdin 关闭后自行退出 ---
+  // --- 16. 手稿编译（任务 13.6，需求 13.5-13.8）---
+  //
+  // 完全不需要网络，因此覆盖得深：解析、编译、双盲移除清单、自引泄露、局限说明。
+
+  const MANUSCRIPT = [
+    '---',
+    'title: Sleep spindles predict overnight memory consolidation',
+    'journal: NeurIPS',
+    'authors:',
+    '  - name: Jane Smith',
+    '    affiliations: [1]',
+    '    corresponding: true',
+    '  - name: Bob Jones',
+    '    affiliations: [1]',
+    'affiliations:',
+    '  - Department of Neuroscience, University X',
+    'funding: [NIH R01-MH123456]',
+    'acknowledgements: We thank the University X sleep laboratory staff.',
+    '---',
+    '',
+    '## Introduction',
+    '',
+    'Spindles matter [1]. Our previous work showed that spindle density',
+    'predicts recall [1].',
+    '',
+    '## Results',
+    '',
+    'Density was higher in good sleepers (p = 0.003). See Figure 1.',
+    '',
+    '**Figure 1.** Analysis pipeline.',
+    '',
+  ].join('\n');
+
+  send(req('mc1', { method: 'manuscript.profiles' }));
+  await waitFor(() => byId('mc1') !== undefined, 8000, 'manuscript.profiles');
+  check(
+    byId('mc1').ok === true &&
+      (byId('mc1').result?.profiles ?? []).length >= 8 &&
+      String(byId('mc1').result?.disclaimer ?? '').includes('核对官方要求'),
+    '档案清单带免责说明  ',
+    `${String((byId('mc1').result?.profiles ?? []).length)} 个档案`,
+  );
+
+  send(
+    req('mc2', {
+      method: 'manuscript.parse',
+      projectId: createdProject.id,
+      markdown: MANUSCRIPT,
+    }),
+  );
+  await waitFor(() => byId('mc2') !== undefined, 20000, 'manuscript.parse');
+  check(
+    byId('mc2').ok === true &&
+      (byId('mc2').result?.meta?.identifying?.authors ?? []).length === 2 &&
+      (byId('mc2').result?.figures ?? []).length === 1 &&
+      byId('mc2').result?.meta?.identifying?.affiliations?.length === 1,
+    '嵌套元数据解析正确  ',
+    `${String((byId('mc2').result?.meta?.identifying?.authors ?? []).length)} 作者`,
+  );
+
+  send(
+    req('mc3', {
+      method: 'manuscript.compile',
+      projectId: createdProject.id,
+      conversationId: conversation.id,
+      markdown: MANUSCRIPT,
+      both: true,
+    }),
+  );
+  await waitFor(() => byId('mc3') !== undefined, 30000, 'manuscript.compile');
+  const outputs = byId('mc3').result?.outputs ?? [];
+  check(
+    byId('mc3').ok === true && outputs.length === 2,
+    'both 出两个版本      ',
+    outputs.map((o) => (o.blinded ? '双盲' : '正式')).join('/'),
+  );
+
+  const blindedOutput = outputs.find((o) => o.blinded === true);
+  check(
+    blindedOutput !== undefined &&
+      !String(blindedOutput.content ?? '').includes('Jane Smith') &&
+      !String(blindedOutput.content ?? '').includes('NIH R01-MH123456') &&
+      !String(blindedOutput.content ?? '').includes('sleep laboratory'),
+    '双盲版移除身份字段  ',
+    `移除 ${String((blindedOutput?.removedFields ?? []).length)} 项`,
+  );
+
+  check(
+    (blindedOutput?.removedFields ?? []).join(' ').includes('Jane Smith'),
+    '移除清单逐项列出    ',
+    (blindedOutput?.removedFields ?? []).slice(0, 2).join('；').slice(0, 40),
+  );
+
+  // 需求 13.8：必须明示双盲基于结构化元数据，对隐式线索不作保证
+  check(
+    String(blindedOutput?.content ?? '').includes('对正文里的隐式身份线索不作任何保证') &&
+      String(blindedOutput?.report ?? '').includes('正文一个字都没改'),
+    '明示双盲处理的局限  ',
+    '',
+  );
+
+  const formalOutput = outputs.find((o) => o.blinded === false);
+  check(
+    formalOutput !== undefined && String(formalOutput.content ?? '').includes('Jane Smith'),
+    '正式版保留身份信息  ',
+    '',
+  );
+
+  send(req('mc4', { method: 'manuscript.list', projectId: createdProject.id }));
+  await waitFor(() => byId('mc4') !== undefined, 8000, 'manuscript.list');
+  const manuscripts = byId('mc4').result?.manuscripts ?? [];
+  check(
+    byId('mc4').ok === true && manuscripts.length === 1 && manuscripts[0]?.status === 'compiled',
+    'manuscript.list 可用 ',
+    `${String(manuscripts.length)} 份，状态 ${String(manuscripts[0]?.status ?? '?')}`,
+  );
+
+  send(
+    req('mc5', {
+      method: 'manuscript.history',
+      projectId: createdProject.id,
+      manuscriptId: manuscripts[0]?.id ?? 'ms_missing',
+    }),
+  );
+  await waitFor(() => byId('mc5') !== undefined, 8000, 'manuscript.history');
+  check(
+    byId('mc5').ok === true && (byId('mc5').result?.runs ?? []).length === 2,
+    '编译历史记两次      ',
+    `${String((byId('mc5').result?.runs ?? []).length)} 次`,
+  );
+
+  send(
+    req('mc6', {
+      method: 'manuscript.compile',
+      projectId: createdProject.id,
+      markdown: '---\nmeta: {a: 1}\n---\nbody\n',
+    }),
+  );
+  await waitFor(() => byId('mc6') !== undefined, 20000, 'manuscript.compile 坏语法');
+  check(
+    byId('mc6').ok === false && byId('mc6').error?.code === 'bad_request',
+    '不支持的语法被挡住  ',
+    String(byId('mc6').error?.message ?? '').slice(0, 40),
+  );
+
+  send(req('mc7', { method: 'tool.list', projectId: createdProject.id }));
+  await waitFor(() => byId('mc7') !== undefined, 30000, 'tool.list 编译工具');
+  check(
+    (byId('mc7').result?.available ?? []).some((t) => t.name === 'compile_manuscript'),
+    'compile_manuscript 已注册',
+    '',
+  );
+
+  // --- 17. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

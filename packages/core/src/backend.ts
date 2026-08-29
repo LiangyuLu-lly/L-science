@@ -53,8 +53,11 @@ import {
 } from './refs/index.js';
 import { RefsRepo } from './repo/refs.js';
 import {
+  BUILTIN_JOURNAL_PROFILES,
   CitationVerifier,
   ClaimLedger,
+  ManuscriptCompiler,
+  createCompileManuscriptTool,
   createManageClaimsTool,
   createVerifyCitationsTool,
   describeCheck,
@@ -64,6 +67,7 @@ import {
   renderVerifyResults,
 } from './manuscript/index.js';
 import { ClaimsRepo, type ClaimRecord } from './repo/claims.js';
+import { ManuscriptRepo } from './repo/manuscripts.js';
 import {
   createGeneratePlanTool,
   createPlanStatusTool,
@@ -329,6 +333,7 @@ async function main(): Promise<void> {
   const refLibraries = new Map<string, RefLibrary>();
   const claimLedgers = new Map<string, ClaimLedger>();
   const citationVerifiers = new Map<string, CitationVerifier>();
+  const manuscriptCompilers = new Map<string, ManuscriptCompiler>();
 
   /**
    * 每个项目的执行平面资源，退出时要逐个关掉。
@@ -1402,6 +1407,46 @@ async function main(): Promise<void> {
               trigger: 'artifact-saved',
             });
           }
+        },
+      }),
+    );
+
+    /* --- 手稿编译（任务 13.6，需求 13.5-13.8）------------------------ */
+
+    const manuscriptCompiler = new ManuscriptCompiler({
+      repo: new ManuscriptRepo(project.db),
+      artifacts: artifactStore,
+      // 文献库在下面才建，用惰性取。编译只在用户或模型发起时跑
+      refs: () => refLibraries.get(projectId)?.repo.list({ limit: 1000 }) ?? [],
+      /*
+       * 编译前触发审查（需求 11.3 把「手稿编译前」列为触发点）。
+       *
+       * 编译是投稿前最后一道工序，而无证据断言与编造引文在这之后就没有机会被
+       * 发现了。不触发的话用户会在「编译成功」的报告上直接投稿。
+       */
+      onBeforeCompile: ({ conversationId }) => {
+        if (conversationId === null) return;
+        void reviewer.schedule({ conversationId, trigger: 'pre-compile' });
+      },
+      onLog: (line) => {
+        log(`[manuscript ${projectId}] ${line}`);
+      },
+    });
+    manuscriptCompilers.set(projectId, manuscriptCompiler);
+
+    tools.register(
+      createCompileManuscriptTool({
+        compiler: () => manuscriptCompiler,
+        onCompiled: (info) => {
+          d.broadcast({
+            kind: 'manuscript.compiled',
+            projectId,
+            conversationId: info.conversationId,
+            manuscriptId: info.manuscriptId,
+            errors: info.errors,
+            warnings: info.warnings,
+            selfCitationLeaks: info.leaks,
+          });
         },
       }),
     );
@@ -3486,6 +3531,172 @@ async function main(): Promise<void> {
       })),
       suspects: ledger.repo.fabricationSuspects(50).length,
     };
+  });
+
+  /* --- 手稿编译（任务 13.6，需求 13.5-13.8）--- */
+
+  const compilerFor = async (projectId: string): Promise<ManuscriptCompiler> => {
+    await orchestratorFor(projectId);
+    const compiler = manuscriptCompilers.get(projectId);
+    if (compiler === undefined) throw notFound(`项目不可用：${projectId}`);
+    return compiler;
+  };
+
+  d.register('manuscript.profiles', async () => ({
+    profiles: BUILTIN_JOURNAL_PROFILES,
+    /*
+     * 免责说明随档案一起返回。
+     *
+     * 界面上显示「摘要上限 150 词」而不说这个数字的来源，用户会按它删稿——
+     * 而档案里的数值是内置的近似值，会随期刊改版过期。
+     */
+    disclaimer:
+      '档案里的字数与条数是各刊作者指南的近似值，会随期刊改版而过期。' +
+      '编译报告里的提示是「按该档案的上限」，不是对该刊当前规则的断言。改稿前请核对官方要求。',
+  }));
+
+  d.register('manuscript.list', async (req) => {
+    const compiler = await compilerFor(req.projectId);
+    return {
+      manuscripts: compiler.repo
+        .list({
+          ...(req.conversationId === undefined ? {} : { conversationId: req.conversationId }),
+          limit: req.limit,
+        })
+        .map((manuscript) => ({
+          ...manuscript,
+          latestRun: compiler.repo.compileRuns(manuscript.id, 1)[0] ?? null,
+        })),
+    };
+  });
+
+  d.register('manuscript.get', async (req) => {
+    const compiler = await compilerFor(req.projectId);
+    const manuscript = compiler.repo.get(req.manuscriptId);
+    if (manuscript === null) throw notFound(`手稿不存在：${req.manuscriptId}`);
+    return {
+      manuscript,
+      runs: compiler.repo.compileRuns(req.manuscriptId, 20),
+      trend: compiler.repo.trend(req.manuscriptId, 20),
+    };
+  });
+
+  d.register('manuscript.parse', async (req) => {
+    const compiler = await compilerFor(req.projectId);
+    const parsed = compiler.parse({
+      ...(req.markdown === undefined ? {} : { markdown: req.markdown }),
+      ...(req.sourceVersionId === undefined ? {} : { sourceVersionId: req.sourceVersionId }),
+    });
+
+    if (!parsed.ok || parsed.doc === null) {
+      throw new DispatchError(
+        makeError('bad_request', parsed.reason ?? '解析失败', {
+          remediation:
+            'front matter 只支持受限的 YAML 子集（标量、列表、嵌套映射、块标量），' +
+            '不支持锚点、别名与流式映射 {}。',
+        }),
+      );
+    }
+
+    const doc = parsed.doc;
+    return {
+      meta: doc.meta,
+      counts: doc.counts,
+      hasFrontMatter: doc.hasFrontMatter,
+      warnings: doc.warnings,
+      sections: doc.sections.map((s) => ({
+        title: s.title,
+        level: s.level,
+        line: s.line,
+        words: s.words,
+      })),
+      figures: doc.figures,
+      tables: doc.tables,
+      citationCount: doc.citations.length,
+    };
+  });
+
+  d.register('manuscript.compile', async (req) => {
+    const compiler = await compilerFor(req.projectId);
+    const outcome = await compiler.compile({
+      ...(req.markdown === undefined ? {} : { markdown: req.markdown }),
+      ...(req.sourceVersionId === undefined ? {} : { sourceVersionId: req.sourceVersionId }),
+      ...(req.manuscriptId === undefined ? {} : { manuscriptId: req.manuscriptId }),
+      ...(req.targetJournal === undefined ? {} : { targetJournal: req.targetJournal }),
+      ...(req.customProfile === undefined ? {} : { customProfile: req.customProfile }),
+      ...(req.blinded === undefined ? {} : { blinded: req.blinded }),
+      both: req.both,
+      ...(req.stem === undefined ? {} : { stem: req.stem }),
+      ...(req.conversationId === undefined ? {} : { conversationId: req.conversationId }),
+      // 界面发起的编译记成 user:manual，与模型发起的区分开
+      modelId: 'user:manual',
+    });
+
+    if (!outcome.ok || outcome.manuscript === null) {
+      throw new DispatchError(makeError('bad_request', outcome.reason ?? '编译失败'));
+    }
+
+    const totalErrors = outcome.outputs.reduce(
+      (sum, o) => sum + o.result.issues.filter((i) => i.severity === 'error').length,
+      0,
+    );
+
+    d.broadcast({
+      kind: 'manuscript.compiled',
+      projectId: req.projectId,
+      conversationId: req.conversationId ?? null,
+      manuscriptId: outcome.manuscript.id,
+      errors: totalErrors,
+      warnings: outcome.outputs.reduce(
+        (sum, o) => sum + o.result.issues.filter((i) => i.severity === 'warn').length,
+        0,
+      ),
+      selfCitationLeaks: Math.max(
+        0,
+        ...outcome.outputs.map((o) => o.result.selfCitationLeaks.length),
+      ),
+    });
+
+    return {
+      manuscript: outcome.manuscript,
+      outputs: outcome.outputs.map((output) => ({
+        blinded: output.blinded,
+        filename: output.filename,
+        artifactId: output.artifactId,
+        versionId: output.versionId,
+        bibArtifactId: output.bibArtifactId,
+        bibVersionId: output.bibVersionId,
+        // 内容一并返回：界面要能直接预览，不必再读一次制品
+        content: output.result.content,
+        bibliography: output.result.bibliography,
+        report: output.result.report,
+        issues: output.result.issues,
+        selfCitationLeaks: output.result.selfCitationLeaks,
+        removedFields: output.result.removedFields,
+        profileId: output.result.profile.id,
+        profileMatched: output.result.profileMatched,
+        counts: output.result.counts,
+      })),
+    };
+  });
+
+  d.register('manuscript.history', async (req) => {
+    const compiler = await compilerFor(req.projectId);
+    if (compiler.repo.get(req.manuscriptId) === null) {
+      throw notFound(`手稿不存在：${req.manuscriptId}`);
+    }
+    return {
+      runs: compiler.repo.compileRuns(req.manuscriptId, req.limit),
+      trend: compiler.repo.trend(req.manuscriptId, req.limit),
+    };
+  });
+
+  d.register('manuscript.delete', async (req) => {
+    const compiler = await compilerFor(req.projectId);
+    if (compiler.repo.get(req.manuscriptId) === null) {
+      throw notFound(`手稿不存在：${req.manuscriptId}`);
+    }
+    return { deleted: compiler.repo.delete(req.manuscriptId) };
   });
 
   /* --- 引用导出（任务 13.3，需求 12.5）--- */

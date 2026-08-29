@@ -96,6 +96,9 @@ export {
   VERDICT_LABEL,
 } from './repo/claims.js';
 
+export { MANUSCRIPT_STATUS_LABEL, ManuscriptRepo } from './repo/manuscripts.js';
+export type { CompileRunRecord, ManuscriptRecord, ManuscriptStatus } from './repo/manuscripts.js';
+
 export { FULL_SCAN_LIMIT, RefsRepo, mergeSourceLabel } from './repo/refs.js';
 export type {
   FetchOutcome,
