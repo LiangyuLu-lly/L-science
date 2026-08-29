@@ -1427,6 +1427,35 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
           computeOf().grants.list({
             ...(optStr(p, 'target') === undefined ? {} : { targetId: optStr(p, 'target') }),
           }),
+
+        /** 一个目标的环境笔记（需求 14.5）。跨项目共享。 */
+        notes: (p) => {
+          const service = computeOf();
+          const target = service.targets.resolve(reqStr(p, 'target'));
+          if (target === null) throw new Error(`找不到算力目标：${String(p.target)}`);
+          return { ...service.notes(target.id), rendered: service.renderNotes(target.id) };
+        },
+
+        /**
+         * 记一条环境笔记。
+         *
+         * 过准入规则：只收这台机器自身的知识。项目内容与分析结果会被拒，拒绝理由里
+         * 带改写建议——那段话要照原样传给用户，压成「失败」之后他只能猜。
+         */
+        addNote: (p) => {
+          const service = computeOf();
+          const target = service.targets.resolve(reqStr(p, 'target'));
+          if (target === null) throw new Error(`找不到算力目标：${String(p.target)}`);
+
+          const result = service.addNote({
+            targetId: target.id,
+            content: reqStr(p, 'content'),
+            reason: reqStr(p, 'reason'),
+            ...(optStr(p, 'replaceId') === undefined ? {} : { replaceId: optStr(p, 'replaceId') }),
+          });
+          if (!result.ok) throw new Error(result.reason);
+          return { note: result.note, created: result.created, deduped: result.deduped };
+        },
       },
     );
   }

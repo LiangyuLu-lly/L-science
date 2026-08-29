@@ -41,6 +41,8 @@ import {
   grantScopeOptions,
   isTerminalJobState,
   jobPaths,
+  MemoryRepo,
+  MemoryService,
   parseNvidiaSmi,
   parseOutputs,
   parseSchedulerProbe,
@@ -1190,7 +1192,242 @@ describe('审批门控', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * 12. 状态标签
+ * 12. 环境笔记（任务 14.3，需求 14.5）
+ * ------------------------------------------------------------------ */
+
+describe('算力环境笔记', () => {
+  let root: string;
+  let store: AppStore;
+  let project: ProjectStore;
+  let projectId: string;
+  let targets: ComputeTargetsRepo;
+  let grants: ComputeGrantsRepo;
+  let jobs: ComputeJobsRepo;
+  let memory: MemoryService;
+  let service: ComputeService;
+  let targetId: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'lsci-notes-'));
+    store = AppStore.open(root);
+    const created = store.createProject({ name: '笔记测试' });
+    projectId = created.id;
+    project = store.openProject(created.id);
+
+    targets = new ComputeTargetsRepo(store.db);
+    grants = new ComputeGrantsRepo(store.db);
+    jobs = new ComputeJobsRepo(project.db);
+    memory = new MemoryService({
+      repo: new MemoryRepo({ appDb: store.db, projectDb: project.db, projectId }),
+      computeTargetExists: (id) => targets.exists(id),
+    });
+
+    service = new ComputeService({
+      projectId,
+      targets,
+      jobs,
+      grants,
+      gate: new ComputeGate({
+        approvals: () =>
+          ({ request: async () => ({ state: 'denied', fromPriorDenial: false }) }) as never,
+        grants,
+        projectId,
+      }),
+      artifacts: new ArtifactStore(project.db, project.paths.blobs),
+      memory: () => memory,
+    });
+
+    targetId = targets.add({
+      name: 'hpc1',
+      family: 'ssh',
+      config: SSH_CONFIG,
+      hostKeyFingerprint: SSH_CONFIG.hostKeyFingerprint,
+      notesMd: '这台机器是学院的，问王老师要账号。',
+    }).id;
+  });
+
+  afterEach(() => {
+    service.close();
+    store.close?.();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('登记说明与逐条笔记分开返回', () => {
+    const before = service.notes(targetId);
+    // 登记说明是用户填的登记材料，不受准入规则约束
+    expect(before.description).toContain('王老师');
+    expect(before.notes).toHaveLength(0);
+
+    const added = service.addNote({
+      targetId,
+      content: 'gpu 分区最长 24 小时，超了会被直接杀掉。',
+      reason: '默认队列上限踩过一次，作业跑到一半没了。',
+    });
+    expect(added.ok).toBe(true);
+
+    const after = service.notes(targetId);
+    expect(after.notes).toHaveLength(1);
+    // 两组各自独立：加笔记不该动登记说明
+    expect(after.description).toContain('王老师');
+  });
+
+  it('项目内容写不进环境笔记，理由指向 project 作用域', () => {
+    const result = service.addNote({
+      targetId,
+      content: '本研究的实验设计是被试内设计。',
+      reason: '以后每次都要按这个设计来。',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.rule).toBe('project-content-in-environment-note');
+      expect(result.reason).toContain('跨项目共享');
+    }
+  });
+
+  it('写给不存在的目标被拒', () => {
+    const result = service.addNote({
+      targetId: 'ct_不存在',
+      content: 'gpu 分区最长 24 小时。',
+      reason: '踩过一次。',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.rule).toBe('unknown-target');
+  });
+
+  it('笔记跨项目共享：换个项目仍然读得到', () => {
+    service.addNote({
+      targetId,
+      content: '/scratch 上的文件 30 天后被清理。',
+      reason: '丢过一次中间结果。',
+    });
+
+    // 另一个项目、另一套 per-project 服务，但目标与笔记都在应用库里
+    const other = store.createProject({ name: '另一个项目' });
+    const otherProject = store.openProject(other.id);
+    const otherMemory = new MemoryService({
+      repo: new MemoryRepo({
+        appDb: store.db,
+        projectDb: otherProject.db,
+        projectId: other.id,
+      }),
+      computeTargetExists: (id) => targets.exists(id),
+    });
+    const otherService = new ComputeService({
+      projectId: other.id,
+      targets,
+      jobs: new ComputeJobsRepo(otherProject.db),
+      grants,
+      gate: new ComputeGate({
+        approvals: () =>
+          ({ request: async () => ({ state: 'denied', fromPriorDenial: false }) }) as never,
+        grants,
+        projectId: other.id,
+      }),
+      artifacts: new ArtifactStore(otherProject.db, otherProject.paths.blobs),
+      memory: () => otherMemory,
+    });
+
+    try {
+      // 需求 14.5：一台集群的环境知识不该因为换了项目就要重写一遍
+      expect(otherService.notes(targetId).notes).toHaveLength(1);
+      expect(otherService.renderNotes(targetId)).toContain('30 天后被清理');
+    } finally {
+      otherService.close();
+    }
+  });
+
+  it('replaceId 覆盖旧笔记而不是新增一条相矛盾的', () => {
+    const first = service.addNote({
+      targetId,
+      content: 'gpu 分区最长 24 小时。',
+      reason: '踩过一次墙钟。',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const second = service.addNote({
+      targetId,
+      content: 'gpu 分区最长 48 小时（管理员本月调过）。',
+      reason: '上一条已经过时。',
+      replaceId: first.note.id,
+    });
+    expect(second.ok).toBe(true);
+    expect(service.notes(targetId).notes).toHaveLength(1);
+    expect(service.notes(targetId).notes[0]?.content).toContain('48');
+  });
+
+  it('删除笔记只由这条路径做，模型面没有对应 action', () => {
+    const added = service.addNote({
+      targetId,
+      content: 'sacct 没开，作业结束后查不到成败。',
+      reason: '解释为什么作业会以「结果不明」收尾。',
+    });
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    expect(service.deleteNote(added.note.id)).toBe(true);
+    expect(service.notes(targetId).notes).toHaveLength(0);
+  });
+
+  it('没有笔记时给出「该记什么」而不是一句空话', () => {
+    const empty = targets.add({ name: 'hpc2', family: 'ssh', config: SSH_CONFIG }).id;
+    const rendered = service.renderNotes(empty);
+    expect(rendered).toContain('还没有');
+    expect(rendered).toContain('清理策略');
+  });
+
+  it('注入只带本会话碰过的目标', () => {
+    const conversationId = project.conversations.create({ title: '会话' }).id;
+    const otherTarget = targets.add({ name: 'hpc2', family: 'ssh', config: SSH_CONFIG }).id;
+
+    service.addNote({
+      targetId,
+      content: 'gpu 分区最长 24 小时。',
+      reason: '墙钟踩过一次。',
+    });
+    service.addNote({
+      targetId: otherTarget,
+      content: '/data 是只读挂载，写不进去。',
+      reason: '第一次提交在那里失败过。',
+    });
+
+    // 还没碰过任何目标
+    expect(service.activeTargetIds(conversationId)).toEqual([]);
+
+    // 跑过一条命令就算碰过：那时「这个集群 sacct 没开」这类笔记最该在场
+    jobs.addCommand({ targetId, conversationId, command: 'squeue', risk: 'read' });
+    expect(service.activeTargetIds(conversationId)).toEqual([targetId]);
+
+    const injected = memory.injection({
+      computeTargetIds: service.activeTargetIds(conversationId),
+    });
+    expect(injected).toContain('24 小时');
+    // 没碰过的目标的笔记是纯噪声，而注入有字符预算
+    expect(injected).not.toContain('只读挂载');
+  });
+
+  it('提交过作业的目标也算碰过', () => {
+    const conversationId = project.conversations.create({ title: '会话' }).id;
+    jobs.add({ targetId, conversationId, name: 'j', scheduler: 'slurm', spec: spec() });
+    expect(service.activeTargetIds(conversationId)).toEqual([targetId]);
+  });
+
+  it('已删除的目标不再注入笔记', () => {
+    const conversationId = project.conversations.create({ title: '会话' }).id;
+    jobs.addCommand({ targetId, conversationId, command: 'ls', risk: 'read' });
+    targets.delete(targetId);
+    // 作业与命令记录不随目标消失，但给一台已经没有的机器注入笔记只会让模型引用它
+    expect(service.activeTargetIds(conversationId)).toEqual([]);
+  });
+
+  it('setDescription 不走准入规则', () => {
+    // 准入规则是为了挡模型把结论写进记忆；用户手写的登记说明不需要这个保护
+    expect(service.setDescription(targetId, '这台机器很好用，p = 0.03 也没关系。')).toBe(true);
+    expect(service.notes(targetId).description).toContain('p = 0.03');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 13. 状态标签
  * ------------------------------------------------------------------ */
 
 describe('作业状态', () => {

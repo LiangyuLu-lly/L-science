@@ -23,9 +23,11 @@ import {
   MemoryRepo,
   MemoryService,
   buildSystemPrompt,
+  classifyEnvironmentNote,
   classifyMemoryCandidate,
   createRecallMemoryTool,
   createRememberTool,
+  environmentNoteGuidance,
   memoryGuidance,
   normalizeMemoryContent,
   type MemoryKind,
@@ -304,6 +306,102 @@ describe('classifyMemoryCandidate 放行', () => {
     expect(ok({ scope: 'compute', kind: 'environment', content: 'GPU 分区叫 gpu-v100。' }).ok).toBe(
       true,
     );
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 环境笔记的内容门（任务 14.3，需求 14.5）
+ * ------------------------------------------------------------------ */
+
+describe('环境笔记内容门（需求 14.5）', () => {
+  const env = (content: string) => classifyEnvironmentNote(content);
+
+  it('收各类真实的环境事实', () => {
+    for (const content of [
+      'gpu 分区最长 24 小时，long 分区要走管理员审批。',
+      '记账账户是 lab-a，每月配额 5000 机时。',
+      '/scratch 上的文件 30 天后被清理，家目录只有 20 GB。',
+      '先 module load python/3.11 再 conda activate lsci，顺序反了会用到系统 python。',
+      '不给 --time 会用默认 10 分钟然后被杀掉，报错里不会提到墙钟。',
+      '要经跳板机 bastion 才连得上，直连不通。',
+      '周三 8 点到 10 点例行维护，作业会被排空。',
+      'sacct 没开，作业结束后查不到成败。',
+      '数据放在 /scratch/eeg 下按被试编号分目录。',
+      '登录节点上没有 GPU，nvidia-smi 只在计算节点上有输出。',
+    ]) {
+      expect(env(content).ok, content).toBe(true);
+    }
+  });
+
+  it('研究内容被拒，并指向 project 作用域', () => {
+    // 环境笔记跨项目共享：写进来之后，另一个研究方向完全不同的项目也会看到它
+    for (const content of [
+      '本研究的研究问题是睡眠剥夺是否影响工作记忆。',
+      '实验设计是被试内设计，每人做两次。',
+      '干预组做正念训练，对照组只做放松。',
+      '用 PSQI 量表测睡眠质量。',
+      '被试招募走学校的伦理审查流程。',
+      '投稿目标是 Sleep，参考文献用 APA 格式。',
+      '自变量是睡眠时长，因变量是反应时。',
+    ]) {
+      const verdict = env(content);
+      expect(verdict.ok, content).toBe(false);
+      expect(verdict.rule, content).toBe('project-content-in-environment-note');
+      expect(verdict.reason, content).toContain('跨项目共享');
+      // 拒绝要给出去处，否则模型只会放弃使用这个能力
+      expect(verdict.reason, content).toContain('scope=project');
+    }
+  });
+
+  it('没有任何环境信号的空话被拒', () => {
+    // 黑名单挡不住这些：它们一个禁用词都没有
+    for (const content of [
+      '这台机器很好用，速度也快。',
+      '以后优先用这个目标跑分析。',
+      '整体来说没什么问题。',
+    ]) {
+      const verdict = env(content);
+      expect(verdict.ok, content).toBe(false);
+      expect(verdict.rule, content).toBe('not-environment-knowledge');
+      expect(verdict.reason, content).toContain('环境笔记要落到具体的环境事实上');
+    }
+  });
+
+  it('提到被试但说的是目录布局的，不该被误伤', () => {
+    // 文件系统布局是环境知识里最有用的一类，为了挡「被试」这个词把它一起挡掉是过头的
+    expect(env('/scratch/proj 下每个被试一个子目录，命名是 sub-01 这种。').ok).toBe(true);
+  });
+
+  it('统计结果先被通用规则挡住，建议指向数值而不是环境信号', () => {
+    // 顺序反了的话，一条既有 p 值又不像环境知识的笔记会得到「加上路径或分区」这种
+    // 帮不上忙的建议，而它真正的问题是里面有个 p 值
+    const verdict = classifyMemoryCandidate({
+      scope: 'compute',
+      kind: 'environment',
+      content: 'gpu 分区上跑出来的结果 p = 0.03。',
+      reason: '这是一条足够具体的理由说明。',
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.rule).toBe('stat-result');
+  });
+
+  it('内容门只对 compute 作用域生效', () => {
+    // 「这台机器很好用」在项目作用域下不该被这道门拦（它有别的问题，但不是这一条）
+    const verdict = classifyMemoryCandidate({
+      scope: 'project',
+      kind: 'convention',
+      content: '图表统一用深色主题，字号不小于 8pt。',
+      reason: '这是一条足够具体的理由说明。',
+    });
+    expect(verdict.ok).toBe(true);
+  });
+
+  it('指引里同时说清该写什么与不该写什么', () => {
+    const guidance = environmentNoteGuidance();
+    expect(guidance).toContain('跨项目共享');
+    expect(guidance).toContain('分区与队列');
+    expect(guidance).toContain('调度器的坑');
+    expect(guidance).toContain('不该写的');
   });
 });
 

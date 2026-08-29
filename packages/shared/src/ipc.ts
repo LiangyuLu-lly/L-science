@@ -1144,6 +1144,42 @@ export const requestSchema = z.discriminatedUnion('method', [
   /** 本机能力：有没有 ssh 客户端、有几块 GPU。登记向导用它给默认值。 */
   z.object({ method: z.literal('compute.localCapabilities') }),
 
+  /* --- 环境笔记（任务 14.3，需求 14.5）--- */
+
+  /**
+   * 一个目标的环境笔记。
+   *
+   * 返回两组：`description` 是用户登记时填的自由说明（不受准入规则约束），
+   * `notes` 是逐条累积、受准入规则约束、会注入系统提示词的环境知识。
+   * 两组分开是因为「平台该不该拒绝这段文字」对它们的答案不同。
+   */
+  z.object({ method: z.literal('compute.notes'), projectId: idSchema, targetId: idSchema }),
+
+  /** 改用户手写的那段说明。不走准入规则。 */
+  z.object({
+    method: z.literal('compute.setDescription'),
+    projectId: idSchema,
+    targetId: idSchema,
+    description: z.string().max(20_000).nullable(),
+  }),
+
+  /**
+   * 加一条环境笔记。
+   *
+   * 走记忆服务的准入规则，因此可能被拒——拒绝理由里带改写建议，要原样显示给用户，
+   * 不要压成一句「保存失败」。
+   */
+  z.object({
+    method: z.literal('compute.addNote'),
+    projectId: idSchema,
+    targetId: idSchema,
+    content: z.string().min(1).max(2000),
+    reason: z.string().min(1).max(1000),
+    replaceId: idSchema.optional(),
+  }),
+
+  z.object({ method: z.literal('compute.deleteNote'), projectId: idSchema, noteId: idSchema }),
+
   /* --- 作业 --- */
 
   z.object({

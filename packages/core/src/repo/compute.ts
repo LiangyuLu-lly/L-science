@@ -583,6 +583,27 @@ export class ComputeJobsRepo {
     return this.list({ state: 'active', limit });
   }
 
+  /**
+   * 这个会话碰过哪些算力目标（任务 14.3）。
+   *
+   * 用途是决定往系统提示词里注入**哪些**目标的环境笔记（需求 14.5）。把全部已登记
+   * 目标的笔记都注入是纯噪声：一个只做数据整理的会话不需要知道三台集群各自的分区，
+   * 而噪声会挤掉真正相关的内容（记忆注入有字符预算）。
+   *
+   * 作业与命令两张表都要看：一个会话可能只跑过几条 `squeue` 而还没提交作业，而那时
+   * 「这个集群的 sacct 没开」这类笔记恰恰最该在场。
+   */
+  targetIdsFor(conversationId: string): readonly string[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT target_id FROM compute_jobs WHERE conversation_id = ?
+         UNION
+         SELECT target_id FROM compute_commands WHERE conversation_id = ?`,
+      )
+      .all(conversationId, conversationId) as { target_id: string }[];
+    return rows.map((r) => r.target_id);
+  }
+
   summary(options: { targetId?: string; conversationId?: string } = {}): {
     total: number;
     active: number;

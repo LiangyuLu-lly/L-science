@@ -1584,6 +1584,9 @@ async function main(): Promise<void> {
       }),
       artifacts: artifactStore,
       vault,
+      // 环境笔记走记忆服务的 compute 作用域（任务 14.3，需求 14.5）：那一层已经有
+      // 跨项目存储、准入规则、条数上限与「必须给理由」，自己开表等于把它们重写一遍
+      memory: () => memory,
       onJobEvent: (event) => {
         d.broadcast({
           kind: 'compute.job',
@@ -1691,7 +1694,7 @@ async function main(): Promise<void> {
        * 工具才注册），记忆更是随时在变。缓存一份的后果是用户刚让 agent 记下一条
        * 约定，下一个回合它并不知道——而那正是记忆最该起作用的时刻。
        */
-      systemPrompt: () =>
+      systemPrompt: (conversationId) =>
         buildSystemPrompt({
           // 项目名在应用库里，每次现读：用户改了项目名之后提示词里该跟着变
           ...(() => {
@@ -1699,7 +1702,17 @@ async function main(): Promise<void> {
             return name === undefined ? {} : { projectName: name };
           })(),
           toolNames: tools.toolSchemas().map((s) => s.name),
-          memory: memory.injection(),
+          /*
+           * 算力环境笔记只带**本会话碰过的目标**（任务 14.3，需求 14.5）。
+           *
+           * 全部带上是纯噪声：一个只做数据整理的会话不需要知道三台集群各自的分区，
+           * 而记忆注入有字符预算——噪声会把真正相关的内容挤出去。碰过的目标由
+           * 作业与命令记录判定，因此只跑过一条 squeue 也算，那时「这个集群的
+           * sacct 没开」这类笔记恰恰最该在场。
+           */
+          memory: memory.injection({
+            computeTargetIds: computeService.activeTargetIds(conversationId),
+          }),
           isolation: { backend: sandbox.id, network: sandbox.isolation.network },
           pythonEnv: capabilities.pythonEnv,
           rEnv: capabilities.rEnv,
@@ -4160,6 +4173,85 @@ async function main(): Promise<void> {
       fingerprint: result.fingerprint,
       target: targetView(computeTargets.get(req.targetId)),
     };
+  });
+
+  /* --- 环境笔记（任务 14.3，需求 14.5）--- */
+
+  d.register('compute.notes', async (req) => {
+    const service = await computeFor(req.projectId);
+    if (computeTargets.get(req.targetId) === null) {
+      throw notFound(`算力目标不存在：${req.targetId}`);
+    }
+    const notes = service.notes(req.targetId);
+    return {
+      ...notes,
+      rendered: service.renderNotes(req.targetId),
+      /*
+       * 把两组的规则差异说出来。
+       *
+       * 界面上是两个输入框，而它们一个会被拒一个不会——不说明的话用户会以为是 bug。
+       */
+      note:
+        '「登记说明」是你自己写的，平台不做检查，也不注入模型的系统提示词。\n' +
+        '「环境笔记」逐条累积，会在本会话用到这台机器时注入系统提示词，因此过准入规则：' +
+        '只收这台机器自身的知识，项目内容与分析结果会被拒。它跨项目共享。',
+    };
+  });
+
+  d.register('compute.setDescription', async (req) => {
+    const service = await computeFor(req.projectId);
+    if (!service.setDescription(req.targetId, req.description)) {
+      throw notFound(`算力目标不存在：${req.targetId}`);
+    }
+    d.broadcast({
+      kind: 'compute.targets',
+      projectId: req.projectId,
+      action: 'update',
+      targetId: req.targetId,
+    });
+    return { saved: true };
+  });
+
+  d.register('compute.addNote', async (req) => {
+    const service = await computeFor(req.projectId);
+    if (computeTargets.get(req.targetId) === null) {
+      throw notFound(`算力目标不存在：${req.targetId}`);
+    }
+
+    const result = service.addNote({
+      targetId: req.targetId,
+      content: req.content,
+      reason: req.reason,
+      ...(req.replaceId === undefined ? {} : { replaceId: req.replaceId }),
+    });
+    if (!result.ok) {
+      /*
+       * 拒绝理由原样透出，不压成「保存失败」。
+       *
+       * 那段理由里带的是「该改写成什么」——压掉之后用户只能猜，而猜的结果通常是
+       * 放弃使用这个功能。
+       */
+      throw new DispatchError(
+        makeError('bad_request', result.reason, {
+          ...(result.rule === null ? {} : { detail: `规则：${result.rule}` }),
+          remediation: '按上面的说明改写内容，或者把这条改成项目作用域的记忆。',
+        }),
+      );
+    }
+
+    d.broadcast({
+      kind: 'compute.targets',
+      projectId: req.projectId,
+      action: 'update',
+      targetId: req.targetId,
+    });
+    return { note: result.note, created: result.created, deduped: result.deduped };
+  });
+
+  d.register('compute.deleteNote', async (req) => {
+    const service = await computeFor(req.projectId);
+    if (!service.deleteNote(req.noteId)) throw notFound(`环境笔记不存在：${req.noteId}`);
+    return { deleted: true };
   });
 
   /* --- 作业 --- */

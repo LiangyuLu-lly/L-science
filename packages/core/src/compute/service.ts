@@ -25,6 +25,8 @@ import type { ToolOutput } from '@l-science/shared';
 
 import type { ArtifactStore } from '../artifact/store.js';
 import type { CredentialVault } from '../credentials/vault.js';
+import type { MemoryService, RememberResult } from '../memory/service.js';
+import type { MemoryNote } from '../repo/memory.js';
 import {
   ComputeGrantsRepo,
   type ComputeJobRecord,
@@ -101,6 +103,17 @@ export interface ComputeServiceDeps {
   gate: ComputeGate;
   artifacts: ArtifactStore;
   vault?: CredentialVault;
+  /**
+   * 环境笔记（任务 14.3，需求 14.5）。
+   *
+   * 走记忆服务而不是自己开一张表：需求 14.5 要的「跨项目共享」正是 `memory_notes` 的
+   * compute 作用域已经提供的（它在应用库里），而准入规则、条数上限、必须给理由这些
+   * 约束也已经在那一层。自己开表意味着把这些逐条重新实现一遍，而重新实现的那份迟早
+   * 与记忆那份分叉。
+   *
+   * 惰性取：记忆服务按项目建，与算力服务同一批接线，顺序上它在前面但用回调更稳妥。
+   */
+  memory?: () => MemoryService;
   /** 作业状态变化时通知（广播 + 写进会话历史）。 */
   onJobEvent?: (event: JobEvent) => void;
   /** 目标增删改时通知。需求 14.6 的「无需重启即可发现」靠它。 */
@@ -357,6 +370,116 @@ export class ComputeService {
     this.#deps.targets.delete(targetId);
     this.#deps.onTargetsChanged?.({ action: 'remove', targetId });
     return { ok: true, revokedGrants: revoked, reason: null };
+  }
+
+  /* ---------------- 环境笔记（任务 14.3，需求 14.5）---------------- */
+
+  /**
+   * 一个目标的环境笔记。
+   *
+   * 两个来源，刻意分开：
+   *
+   * - `description`（`compute_targets.notes_md`）：**用户登记时填的一段自由说明**。
+   *   它是登记材料的一部分，与 host、partition 并列。不受准入规则约束——那套规则是
+   *   为了挡住模型把结论写进记忆，而用户手写的说明不需要这个保护。不进系统提示词。
+   * - `notes`（compute 作用域的记忆）：**逐条累积的环境知识**。受准入规则约束
+   *   （需求 14.5 的内容限制在这一层落地），会随会话触碰该目标而注入系统提示词。
+   *
+   * 合成一处最省事，但那会让「平台该不该拒绝这段文字」这个问题失去答案：同一个字段
+   * 既是用户的自述又是模型的写入口，只能二选一地要么全放行要么全校验。
+   */
+  notes(targetId: string): {
+    targetId: string;
+    description: string | null;
+    notes: readonly MemoryNote[];
+  } {
+    const target = this.#deps.targets.get(targetId);
+    const memory = this.#deps.memory;
+    return {
+      targetId,
+      description: target?.notesMd ?? null,
+      notes:
+        memory === undefined
+          ? []
+          : memory().list({ scope: 'compute', scopeId: targetId, kind: 'environment' }),
+    };
+  }
+
+  /**
+   * 写一条环境笔记。
+   *
+   * 目标存在性由记忆服务的 `computeTargetExists` 校验——不重复检查，两处各查一次
+   * 迟早在「什么算存在」上分叉（比如这里认停用的目标而那里不认）。
+   */
+  addNote(input: {
+    targetId: string;
+    content: string;
+    reason: string;
+    replaceId?: string;
+  }): RememberResult {
+    const memory = this.#deps.memory;
+    if (memory === undefined) {
+      return { ok: false, rule: 'no-memory-service', reason: '本次运行没有可用的记忆服务' };
+    }
+    return memory().remember({
+      scope: 'compute',
+      scopeId: input.targetId,
+      kind: 'environment',
+      content: input.content,
+      reason: input.reason,
+      ...(input.replaceId === undefined ? {} : { replaceId: input.replaceId }),
+    });
+  }
+
+  /** 删一条环境笔记。删除是用户的权力（需求 16.3），因此模型面不暴露这个。 */
+  deleteNote(noteId: string): boolean {
+    const memory = this.#deps.memory;
+    return memory === undefined ? false : memory().delete(noteId);
+  }
+
+  /** 改用户手写的那段说明。不走准入规则。 */
+  setDescription(targetId: string, markdown: string | null): boolean {
+    return this.#deps.targets.update(targetId, { notesMd: markdown }) !== null;
+  }
+
+  /**
+   * 这个会话该注入哪些目标的环境笔记（需求 14.5）。
+   *
+   * 只取会话真的碰过的目标。把全部已登记目标的笔记都注入是纯噪声，而记忆注入有字符
+   * 预算——噪声会把真正相关的内容挤出去。
+   */
+  activeTargetIds(conversationId: string): readonly string[] {
+    const touched = new Set(this.#deps.jobs.targetIdsFor(conversationId));
+    // 已删除的目标可能仍留在作业记录里（作业记录不随目标消失）。过滤掉：
+    // 给一个不存在的目标注入笔记只会让模型引用一台已经没有的机器
+    return [...touched].filter((id) => this.#deps.targets.exists(id));
+  }
+
+  /** 渲染环境笔记，用于目标详情与工具输出。 */
+  renderNotes(targetId: string): string {
+    const { description, notes } = this.notes(targetId);
+    const lines: string[] = [];
+
+    if (description !== null && description.trim() !== '') {
+      lines.push('登记时填的说明：');
+      lines.push(description.trim());
+    }
+    if (notes.length > 0) {
+      if (lines.length > 0) lines.push('');
+      lines.push(`环境笔记（${String(notes.length)} 条，跨项目共享）：`);
+      for (const note of notes) {
+        lines.push(`- ${note.content}`);
+        lines.push(`  理由：${note.reason}　id ${note.id}`);
+      }
+    }
+    if (lines.length === 0) {
+      return (
+        '还没有这个目标的环境笔记。\n' +
+        '分区上限、账户、文件系统清理策略、环境激活顺序、调度器的坑——' +
+        '这些一旦踩过一次就该记下来，它们跨项目共享，下次换个项目也还在。'
+      );
+    }
+    return lines.join('\n');
   }
 
   /* ---------------- 远程命令 ---------------- */

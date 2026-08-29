@@ -4,7 +4,12 @@
  * 三层作用域、写入需理由、可审查编辑、一次性细节被确定性规则挡在外面。
  */
 
-export { classifyMemoryCandidate, memoryGuidance } from './classify.js';
+export {
+  classifyEnvironmentNote,
+  classifyMemoryCandidate,
+  environmentNoteGuidance,
+  memoryGuidance,
+} from './classify.js';
 export type { MemoryVerdict } from './classify.js';
 
 export { MEMORY_LIMITS, MemoryService } from './service.js';

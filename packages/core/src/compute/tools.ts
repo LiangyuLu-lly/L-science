@@ -30,7 +30,8 @@ export interface ComputeToolOptions {
  * manage_compute
  * ------------------------------------------------------------------ */
 
-export type ComputeAction = 'list' | 'describe' | 'probe' | 'jobs' | 'job' | 'outputs' | 'cancel';
+export type ComputeAction =
+  'list' | 'describe' | 'probe' | 'jobs' | 'job' | 'outputs' | 'cancel' | 'notes' | 'addNote';
 
 export interface ComputeToolInput {
   action: ComputeAction;
@@ -39,6 +40,9 @@ export interface ComputeToolInput {
   state?: JobState | 'active' | 'all';
   limit?: number;
   tailLines?: number;
+  note?: string;
+  reason?: string;
+  replaceId?: string;
 }
 
 const MANAGE_SCHEMA = {
@@ -46,13 +50,15 @@ const MANAGE_SCHEMA = {
   properties: {
     action: {
       type: 'string',
-      enum: ['list', 'describe', 'probe', 'jobs', 'job', 'outputs', 'cancel'],
+      enum: ['list', 'describe', 'probe', 'jobs', 'job', 'outputs', 'cancel', 'notes', 'addNote'],
       description:
         'list：列出可用的算力目标（用户中途新增的会立刻出现，不需要重启）。' +
         'describe：看某个目标的配置、上次探测结果与环境笔记。' +
         'probe：重新探测一个目标（会连接远端，慢）。' +
         'jobs：列出作业。job：看一个作业的状态。' +
         'outputs：取一个作业的 stdout/stderr。cancel：取消一个未结束的作业。\n' +
+        'notes：看某个目标的环境笔记。' +
+        'addNote：给某个目标记一条环境笔记（踩过一次的坑就该记下来）。\n' +
         '开始规划远程计算之前先 list：目标的调度器类型、分区与 GPU 情况决定作业脚本怎么写。',
     },
     target: {
@@ -88,6 +94,23 @@ const MANAGE_SCHEMA = {
       maximum: 5000,
       description: 'action=outputs 时只取末尾多少行。省略取全文（作业输出可能很大）。',
     },
+    note: {
+      type: 'string',
+      description:
+        'action=addNote 的笔记内容。只写**这台机器自身**的事实：分区上限、账户、' +
+        '文件系统清理策略、环境激活顺序、调度器的坑、接入方式、维护窗口。\n' +
+        '环境笔记是**跨项目共享**的，因此不要写研究问题、被试、分组或统计结论——' +
+        '那些换个项目就不成立，会被拒。',
+    },
+    reason: {
+      type: 'string',
+      description:
+        'action=addNote 时说明为什么值得长期记住。用户日后审查这些笔记时靠它判断该不该留。',
+    },
+    replaceId: {
+      type: 'string',
+      description: 'action=addNote 时要覆盖的既有笔记 id（先用 action=notes 拿到它）。',
+    },
   },
   required: ['action'],
   additionalProperties: false,
@@ -101,6 +124,8 @@ const MANAGE_ACTIONS: readonly ComputeAction[] = [
   'job',
   'outputs',
   'cancel',
+  'notes',
+  'addNote',
 ];
 
 function str(value: unknown, name: string): string | undefined {
@@ -126,11 +151,14 @@ export function createManageComputeTool(
   return {
     name: 'manage_compute',
     description:
-      '算力目标与作业：列出可用目标、看配置与探测结果、查作业状态、取输出、取消作业。\n' +
+      '算力目标与作业：列出可用目标、看配置与探测结果、查作业状态、取输出、取消作业，' +
+      '以及读写每个目标的**环境笔记**。\n' +
       '登记新目标不在这里——那需要主机名、跳板机与分区这些只有用户知道的事实，' +
       '由用户在界面上完成。你能看到的是他已经登记好的那些。\n' +
       '作业状态里的「结果不明」（lost）是一档独立状态：调度器不再报告它而历史记录拿不到。' +
-      '它既不是成功也不是失败，不要按成功继续往下做。',
+      '它既不是成功也不是失败，不要按成功继续往下做。\n' +
+      '在某台机器上踩过一次坑（默认墙钟太短、要先 module load、/scratch 会被清理）' +
+      '就用 addNote 记下来：环境笔记跨项目共享，下次换个项目也还在。',
     inputSchema: MANAGE_SCHEMA as unknown as Record<string, unknown>,
     parseInput: (raw): ComputeToolInput => {
       if (typeof raw !== 'object' || raw === null) throw new Error('入参必须是对象');
@@ -157,6 +185,13 @@ export function createManageComputeTool(
         ...(int(obj.tailLines, 'tailLines') === undefined
           ? {}
           : { tailLines: int(obj.tailLines, 'tailLines') as number }),
+        ...(str(obj.note, 'note') === undefined ? {} : { note: str(obj.note, 'note') as string }),
+        ...(str(obj.reason, 'reason') === undefined
+          ? {}
+          : { reason: str(obj.reason, 'reason') as string }),
+        ...(str(obj.replaceId, 'replaceId') === undefined
+          ? {}
+          : { replaceId: str(obj.replaceId, 'replaceId') as string }),
       };
     },
 
@@ -261,7 +296,77 @@ export function createManageComputeTool(
               lines.push(`  ${check.ok ? '✓' : '✗'} ${check.name}：${check.detail}`);
             }
           }
+
+          /*
+           * 环境笔记跟着 describe 一起给（需求 14.5）。
+           *
+           * 不给的话模型要多一次调用才能知道「这个集群不给 --time 会用 10 分钟默认值」，
+           * 而它通常不会去多调一次——它已经拿到配置了，看起来够写作业脚本了。
+           */
+          lines.push('');
+          lines.push(service.renderNotes(target.id));
           return { ok: true, output: textOutput(lines.join('\n')) };
+        }
+
+        case 'notes': {
+          const ref = input.target;
+          if (ref === undefined) {
+            return { ok: false, output: errorOutput('MissingTarget', 'action=notes 需要 target') };
+          }
+          const target = service.targets.resolve(ref);
+          if (target === null) {
+            return { ok: false, output: errorOutput('TargetNotFound', `找不到算力目标：${ref}`) };
+          }
+          return {
+            ok: true,
+            output: textOutput(`${describeTarget(target)}\n\n${service.renderNotes(target.id)}`),
+          };
+        }
+
+        case 'addNote': {
+          const ref = input.target;
+          if (ref === undefined) {
+            return {
+              ok: false,
+              output: errorOutput('MissingTarget', 'action=addNote 需要 target'),
+            };
+          }
+          if (input.note === undefined) {
+            return { ok: false, output: errorOutput('MissingNote', 'action=addNote 需要 note') };
+          }
+          if (input.reason === undefined || input.reason.length < 4) {
+            return {
+              ok: false,
+              output: errorOutput(
+                'MissingReason',
+                'action=addNote 需要 reason：用户日后审查这些笔记时靠它判断该不该留，' +
+                  '「重要」这类话起不到这个作用。',
+              ),
+            };
+          }
+          const target = service.targets.resolve(ref);
+          if (target === null) {
+            return { ok: false, output: errorOutput('TargetNotFound', `找不到算力目标：${ref}`) };
+          }
+
+          const result = service.addNote({
+            targetId: target.id,
+            content: input.note,
+            reason: input.reason,
+            ...(input.replaceId === undefined ? {} : { replaceId: input.replaceId }),
+          });
+          if (!result.ok) {
+            // 拒绝理由已经带改写建议：只说「不许写」会让模型放弃使用这个能力
+            return { ok: false, output: errorOutput('EnvironmentNoteRejected', result.reason) };
+          }
+          return {
+            ok: true,
+            output: textOutput(
+              `${result.created ? '已记下' : '已覆盖'}（${target.name} 的环境笔记，id ${result.note.id}）：` +
+                `${result.note.content}\n` +
+                '这条笔记跨项目共享，换个项目用这台机器时也会看到。',
+            ),
+          };
         }
 
         case 'probe': {

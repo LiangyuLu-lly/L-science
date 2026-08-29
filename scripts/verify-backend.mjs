@@ -1449,6 +1449,98 @@ try {
     '',
   );
 
+  // 环境笔记（任务 14.3，需求 14.5）
+  send(
+    req('cp15', {
+      method: 'compute.notes',
+      projectId: createdProject.id,
+      targetId: localTarget?.id ?? 'x',
+    }),
+  );
+  await waitFor(() => byId('cp15') !== undefined, 10000, 'compute.notes');
+  check(
+    byId('cp15').ok === true &&
+      String(byId('cp15').result?.description ?? '').includes('别同时跑两个') &&
+      (byId('cp15').result?.notes ?? []).length === 0 &&
+      String(byId('cp15').result?.note ?? '').includes('跨项目共享'),
+    'compute.notes 两组分开',
+    '',
+  );
+
+  send(
+    req('cp16', {
+      method: 'compute.addNote',
+      projectId: createdProject.id,
+      targetId: localTarget?.id ?? 'x',
+      content: '本机只有一块 GPU，CUDA_VISIBLE_DEVICES 不用设。',
+      reason: '两个并行训练作业会双双 OOM，记下来避免再试。',
+    }),
+  );
+  await waitFor(() => byId('cp16') !== undefined, 10000, 'compute.addNote');
+  check(
+    byId('cp16').ok === true && byId('cp16').result?.created === true,
+    'compute.addNote 可用  ',
+    String(byId('cp16').result?.note?.id ?? ''),
+  );
+
+  // 项目内容写不进环境笔记，而且拒绝理由要带改写建议（不能压成「保存失败」）
+  send(
+    req('cp17', {
+      method: 'compute.addNote',
+      projectId: createdProject.id,
+      targetId: localTarget?.id ?? 'x',
+      content: '本研究的实验设计是被试内设计，干预组做正念训练。',
+      reason: '以后每次分析都按这个设计来。',
+    }),
+  );
+  await waitFor(() => byId('cp17') !== undefined, 10000, 'compute.addNote 项目内容');
+  check(
+    byId('cp17').ok === false &&
+      byId('cp17').error?.code === 'bad_request' &&
+      String(byId('cp17').error?.message ?? '').includes('跨项目共享') &&
+      String(byId('cp17').error?.message ?? '').includes('scope=project'),
+    '项目内容写不进环境笔记',
+    String(byId('cp17').error?.message ?? '').split('\n')[0],
+  );
+
+  send(
+    req('cp18', {
+      method: 'compute.addNote',
+      projectId: createdProject.id,
+      targetId: localTarget?.id ?? 'x',
+      content: '这台机器很好用，速度也快。',
+      reason: '以后优先用它。',
+    }),
+  );
+  await waitFor(() => byId('cp18') !== undefined, 10000, 'compute.addNote 空话');
+  check(
+    byId('cp18').ok === false &&
+      String(byId('cp18').error?.message ?? '').includes('环境笔记要落到具体的环境事实上'),
+    '没有环境信号的空话被拒',
+    '',
+  );
+
+  send(
+    req('cp19', {
+      method: 'compute.setDescription',
+      projectId: createdProject.id,
+      targetId: localTarget?.id ?? 'x',
+      description: '这台是我自己的工作站，随便用。',
+    }),
+  );
+  await waitFor(() => byId('cp19') !== undefined, 10000, 'compute.setDescription');
+  check(byId('cp19').ok === true, 'compute.setDescription', '');
+
+  send(
+    req('cp20', {
+      method: 'compute.deleteNote',
+      projectId: createdProject.id,
+      noteId: byId('cp16').result?.note?.id ?? 'mn_missing',
+    }),
+  );
+  await waitFor(() => byId('cp20') !== undefined, 10000, 'compute.deleteNote');
+  check(byId('cp20').ok === true, 'compute.deleteNote 可用', '');
+
   send(
     req('cp13', {
       method: 'compute.remove',
