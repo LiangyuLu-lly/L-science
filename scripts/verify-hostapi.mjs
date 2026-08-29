@@ -274,7 +274,9 @@ try {
   });
   check(
     textOf(pendingAttempt).includes('PENDING'),
-    '未实现的表面抛错而不是返回空',
+    '未接上的表面抛错而不是返回空',
+    // 本脚本不接算力服务，因此 host.compute 走 pending 分支。抛错而不是给空壳是关键：
+    // 空壳会让模型以为「查了但没有算力目标」，然后基于一个不存在的事实继续推理
     textOf(pendingAttempt).trim(),
   );
 

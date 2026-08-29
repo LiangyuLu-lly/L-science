@@ -1279,7 +1279,202 @@ try {
     '',
   );
 
-  // --- 17. stdin 关闭后自行退出 ---
+  // --- 17. 算力目标与作业（任务 14.2，需求 14.3、14.4、14.6、14.7）---
+  process.stdout.write('\n--- 17. 算力目标与作业 ---\n');
+
+  send(req('cp1', { method: 'compute.targets' }));
+  await waitFor(() => byId('cp1') !== undefined, 8000, 'compute.targets');
+  check(
+    byId('cp1').ok === true &&
+      Array.isArray(byId('cp1').result?.targets) &&
+      byId('cp1').result?.targets.length === 0 &&
+      typeof byId('cp1').result?.revision?.latest === 'number',
+    'compute.targets 空库可用',
+    `revision.count=${String(byId('cp1').result?.revision?.count ?? '?')}`,
+  );
+  check(
+    (byId('cp1').result?.grantScopes?.write ?? []).includes('always') === false &&
+      (byId('cp1').result?.grantScopes?.read ?? []).includes('always') === true,
+    '授权档位上限已收敛  ',
+    `write=${(byId('cp1').result?.grantScopes?.write ?? []).join(',')}`,
+  );
+
+  send(req('cp2', { method: 'compute.localCapabilities' }));
+  await waitFor(() => byId('cp2') !== undefined, 30000, 'compute.localCapabilities');
+  check(
+    byId('cp2').ok === true &&
+      typeof byId('cp2').result?.ssh?.available === 'boolean' &&
+      byId('cp2').result?.suggestedLocalConfig?.family === 'local',
+    '本机能力探测可用  ',
+    `ssh=${String(byId('cp2').result?.ssh?.available)} gpu=${String(
+      (byId('cp2').result?.gpus ?? []).length,
+    )}`,
+  );
+
+  // 登记一个本地目标：它不建立对外通道，因此不走审批，可以在无人应答的脚本里完成
+  send(
+    req('cp3', {
+      method: 'compute.register',
+      projectId: createdProject.id,
+      name: '本机',
+      config: { family: 'local', maxConcurrent: 1, visibleDevices: null, shell: 'bash' },
+      notesMd: '本机只有一块卡，别同时跑两个训练作业。',
+    }),
+  );
+  await waitFor(() => byId('cp3') !== undefined, 60000, 'compute.register 本地');
+  const localTarget = byId('cp3').result?.target;
+  check(
+    byId('cp3').ok === true && localTarget?.family === 'local' && localTarget?.enabled === true,
+    'compute.register 本地  ',
+    `${String(localTarget?.id ?? '?')} probe=${String(byId('cp3').result?.probe?.usable)}`,
+  );
+
+  // 配置不合法时要给出可执行的说明，而不是一句「校验失败」
+  send(
+    req('cp4', {
+      method: 'compute.register',
+      projectId: createdProject.id,
+      name: 'hpc-bad',
+      config: {
+        family: 'ssh',
+        host: 'hpc.example.edu',
+        user: null,
+        port: null,
+        scheduler: 'slurm',
+        remoteWorkdir: 'work',
+        activate: null,
+        partition: null,
+        account: null,
+        sshOptions: {},
+        hostKeyFingerprint: null,
+      },
+    }),
+  );
+  await waitFor(() => byId('cp4') !== undefined, 20000, 'compute.register 相对路径');
+  check(
+    byId('cp4').ok === false &&
+      byId('cp4').error?.code === 'bad_request' &&
+      String(byId('cp4').error?.message ?? '').includes('不同集群上不一样'),
+    '相对工作目录被拒    ',
+    String(byId('cp4').error?.message ?? '').split('\n')[0],
+  );
+
+  // 危险的 ssh 选项在登记时就要被挡住
+  send(
+    req('cp5', {
+      method: 'compute.register',
+      projectId: createdProject.id,
+      name: 'hpc-unsafe',
+      config: {
+        family: 'ssh',
+        host: 'hpc.example.edu',
+        user: null,
+        port: null,
+        scheduler: 'none',
+        remoteWorkdir: '/scratch/x',
+        activate: null,
+        partition: null,
+        account: null,
+        sshOptions: { StrictHostKeyChecking: 'no' },
+        hostKeyFingerprint: null,
+      },
+    }),
+  );
+  await waitFor(() => byId('cp5') !== undefined, 20000, 'compute.register 危险选项');
+  check(
+    byId('cp5').ok === false &&
+      String(byId('cp5').error?.message ?? '').includes('StrictHostKeyChecking'),
+    '危险 ssh 选项被拒   ',
+    '',
+  );
+
+  send(req('cp6', { method: 'compute.target', targetId: localTarget?.id ?? 'ct_missing' }));
+  await waitFor(() => byId('cp6') !== undefined, 8000, 'compute.target');
+  check(
+    byId('cp6').ok === true &&
+      byId('cp6').result?.target?.needsHostKeyConfirmation === false &&
+      Array.isArray(byId('cp6').result?.grants),
+    'compute.target 详情  ',
+    '',
+  );
+
+  // 停用要给原因：一个灰掉的目标而没有原因，用户唯一能做的是重新打开试试
+  send(
+    req('cp7', { method: 'compute.setEnabled', targetId: localTarget?.id ?? 'x', enabled: false }),
+  );
+  await waitFor(() => byId('cp7') !== undefined, 8000, 'compute.setEnabled 缺原因');
+  check(
+    byId('cp7').ok === false && byId('cp7').error?.code === 'bad_request',
+    '停用必须给原因      ',
+    String(byId('cp7').error?.message ?? ''),
+  );
+
+  send(
+    req('cp8', {
+      method: 'compute.setEnabled',
+      targetId: localTarget?.id ?? 'x',
+      enabled: false,
+      reason: '先不用它',
+    }),
+  );
+  await waitFor(() => byId('cp8') !== undefined, 8000, 'compute.setEnabled');
+  check(byId('cp8').ok === true, 'compute.setEnabled 停用', '');
+
+  send(req('cp9', { method: 'compute.targets' }));
+  await waitFor(() => byId('cp9') !== undefined, 8000, 'compute.targets 停用后');
+  check((byId('cp9').result?.targets ?? []).length === 0, '停用后默认不出现在列表', '');
+
+  send(
+    req('cp10', {
+      method: 'compute.setEnabled',
+      targetId: localTarget?.id ?? 'x',
+      enabled: true,
+    }),
+  );
+  await waitFor(() => byId('cp10') !== undefined, 8000, 'compute.setEnabled 启用');
+
+  send(req('cp11', { method: 'compute.jobs', projectId: createdProject.id }));
+  await waitFor(() => byId('cp11') !== undefined, 10000, 'compute.jobs');
+  check(
+    byId('cp11').ok === true && byId('cp11').result?.summary?.total === 0,
+    'compute.jobs 可用    ',
+    '',
+  );
+
+  send(req('cp12', { method: 'compute.grants' }));
+  await waitFor(() => byId('cp12') !== undefined, 8000, 'compute.grants');
+  check(
+    byId('cp12').ok === true && String(byId('cp12').result?.note ?? '').includes('破坏性命令'),
+    '授权列表说明破坏性例外',
+    '',
+  );
+
+  send(
+    req('cp13', {
+      method: 'compute.remove',
+      projectId: createdProject.id,
+      targetId: localTarget?.id ?? 'x',
+    }),
+  );
+  await waitFor(() => byId('cp13') !== undefined, 10000, 'compute.remove');
+  check(
+    byId('cp13').ok === true && byId('cp13').result?.deleted === true,
+    'compute.remove 可用   ',
+    '',
+  );
+
+  send(req('cp14', { method: 'tool.list', projectId: createdProject.id }));
+  await waitFor(() => byId('cp14') !== undefined, 30000, 'tool.list 算力工具');
+  const computeTools = (byId('cp14').result?.available ?? []).map((t) => t.name);
+  check(
+    ['manage_compute', 'run_remote_command', 'submit_compute_job'].every((n) =>
+      computeTools.includes(n),
+    ),
+    '三个算力工具已注册  ',
+    '',
+  );
+
+  // --- 18. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

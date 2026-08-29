@@ -77,6 +77,24 @@ export * from './refs/index.js';
 
 export * from './manuscript/index.js';
 
+export * from './compute/index.js';
+
+export {
+  ComputeGrantsRepo,
+  ComputeJobsRepo,
+  ComputeTargetsRepo,
+  MAX_GRANT_SCOPE,
+  clampGrantScope,
+  grantScopeOptions,
+} from './repo/compute.js';
+export type {
+  ComputeGrant,
+  ComputeGrantRisk,
+  ComputeJobRecord,
+  ComputeTargetRecord,
+  TerminalSource,
+} from './repo/compute.js';
+
 export { ClaimsRepo } from './repo/claims.js';
 export type {
   CitationCheckRecord,

@@ -69,6 +69,28 @@ import {
 import { ClaimsRepo, type ClaimRecord } from './repo/claims.js';
 import { ManuscriptRepo } from './repo/manuscripts.js';
 import {
+  ComputeGate,
+  ComputeService,
+  RISK_LABEL,
+  createManageComputeTool,
+  createRunRemoteCommandTool,
+  createSubmitJobTool,
+  detectSshClient,
+  isTerminalJobState,
+  scanHostKey,
+  sshClientRemediation,
+  suggestLocalTarget,
+  validateConfig as validateComputeConfig,
+  type ComputeTargetConfig,
+  type JobState,
+} from './compute/index.js';
+import {
+  ComputeGrantsRepo,
+  ComputeJobsRepo,
+  ComputeTargetsRepo,
+  grantScopeOptions,
+} from './repo/compute.js';
+import {
   createGeneratePlanTool,
   createPlanStatusTool,
   parsePlanSpec,
@@ -334,6 +356,7 @@ async function main(): Promise<void> {
   const claimLedgers = new Map<string, ClaimLedger>();
   const citationVerifiers = new Map<string, CitationVerifier>();
   const manuscriptCompilers = new Map<string, ManuscriptCompiler>();
+  const computeServices = new Map<string, ComputeService>();
 
   /**
    * 每个项目的执行平面资源，退出时要逐个关掉。
@@ -389,6 +412,21 @@ async function main(): Promise<void> {
    * 放进项目库会让每个项目各有一份，改一处不影响其他项目。
    */
   const connectorRepo = new ConnectorRepo(store.db);
+
+  /* --- 算力目标（任务 14.2，需求 14.3、14.6）------------------------- */
+
+  /*
+   * 算力目标与算力授权都在**应用库**，全局一份。
+   *
+   * 一台集群是研究者的基础设施，不属于某个项目。放进项目库会让「新建项目后要把三台
+   * 机器重新登记一遍」，而重新登记意味着 host key 要重新确认、环境笔记要重写——那些
+   * 恰恰是最不该重复的东西。项目隔离由 compute_grants 的 scope 负责。
+   *
+   * 声明位置提到这里是因为记忆服务的 `computeTargetExists` 要用它，而那在每个项目的
+   * 初始化路径上。
+   */
+  const computeTargets = new ComputeTargetsRepo(store.db);
+  const computeGrants = new ComputeGrantsRepo(store.db);
 
   /*
    * REST→MCP 桥。
@@ -1023,6 +1061,11 @@ async function main(): Promise<void> {
         if (compiler === undefined) throw new Error(`项目 ${projectId} 的手稿编译器尚未就绪`);
         return compiler;
       },
+      compute: () => {
+        const service = computeServices.get(projectId);
+        if (service === undefined) throw new Error(`项目 ${projectId} 的算力服务尚未就绪`);
+        return service;
+      },
     });
 
     /*
@@ -1251,12 +1294,14 @@ async function main(): Promise<void> {
      */
     const memory = new MemoryService({
       repo: new MemoryRepo({ appDb: store.db, projectDb: project.db, projectId }),
-      // 算力目标要到 M5 才有登记入口，此刻任何 id 都不存在——如实拒绝而不是放行，
-      // 否则会写出一批指向不存在目标的笔记
-      computeTargetExists: (targetId) =>
-        (store.db
-          .prepare('SELECT 1 FROM compute_targets WHERE id = ?')
-          .get(targetId) as unknown) !== undefined,
+      /*
+       * 只给已登记的目标写笔记（需求 14.5）。
+       *
+       * 走仓储而不是裸 SQL：仓储是这张表的唯一写入口，两处各自拼 SQL 迟早在列名上
+       * 分叉。放行不存在的 id 会写出一批指向已删除目标的孤儿笔记，而它们会一直被
+       * 注入 compute 作用域的检索结果里。
+       */
+      computeTargetExists: (targetId) => computeTargets.exists(targetId),
       onLog: (line) => {
         log(`[memory ${projectId}] ${line}`);
       },
@@ -1291,7 +1336,12 @@ async function main(): Promise<void> {
        * 自己在批准什么。已被连接器带进白名单的域名不再询问。
        */
       authorizeHosts: async (hosts) => {
-        const allowed = hosts.filter((h) => grants.isDomainAllowed({ domain: h, projectId }));
+        // `isDomainAllowed` 返回的是对象而不是布尔（它要带上命中的那条授权）。
+        // 直接当条件用会恒为真，于是这道门形同不存在——「授权列表里没有
+        // api.crossref.org，但一调文献工具就连上了」正是这套两级管控要防的半开状态
+        const allowed = hosts.filter(
+          (h) => grants.isDomainAllowed({ domain: h, projectId }).allowed,
+        );
         const missing = hosts.filter((h) => !allowed.includes(h));
         if (missing.length === 0) return allowed;
 
@@ -1337,7 +1387,8 @@ async function main(): Promise<void> {
        * 拉进工作区的影响与查一次元数据不是一个量级，用户有权逐个主机决定。
        */
       authorizeFulltextHost: async (host, why) => {
-        if (grants.isDomainAllowed({ domain: host, projectId })) return true;
+        // 同上：取 `.allowed`，不能把返回的对象当布尔
+        if (grants.isDomainAllowed({ domain: host, projectId }).allowed) return true;
 
         const result = await approvalFor(projectId).request({
           kind: 'domain-allowlist',
@@ -1511,6 +1562,96 @@ async function main(): Promise<void> {
         },
       }),
     );
+
+    /* --- 算力服务（任务 14.2，需求 14.3、14.4、14.6、14.7）----------- */
+
+    /*
+     * 目标与授权在应用库（全局），作业与命令审计在项目库。
+     *
+     * 门控用惰性取审批服务：`approvalFor(projectId)` 自己是惰性的，而在这里立刻调用
+     * 会在每个项目初始化时白建一个审批服务实例。
+     */
+    const computeService = new ComputeService({
+      projectId,
+      targets: computeTargets,
+      jobs: new ComputeJobsRepo(project.db),
+      grants: computeGrants,
+      gate: new ComputeGate({
+        approvals: () => approvalFor(projectId),
+        grants: computeGrants,
+        vault,
+        projectId,
+      }),
+      artifacts: artifactStore,
+      vault,
+      onJobEvent: (event) => {
+        d.broadcast({
+          kind: 'compute.job',
+          projectId,
+          event: event.kind,
+          jobId: event.jobId,
+          targetId: event.targetId,
+          conversationId: event.conversationId,
+          state: event.state,
+          detail: event.detail,
+          terminalSource: event.terminalSource,
+        });
+
+        /*
+         * 终止时往会话里写一条系统消息（需求 14.7 的「结果关联回发起会话」）。
+         *
+         * 只广播是不够的：用户可能在作业跑的两小时里关过窗口，而广播是瞬时的。
+         * 写进历史之后，下一回合模型也看得到「那个作业结束了」——否则它会一直以为
+         * 作业还在跑，或者更糟，假定它成功了。
+         */
+        if (event.kind !== 'finished' || event.conversationId === null) return;
+        const job = computeService.jobs.get(event.jobId);
+        try {
+          project.messages.append({
+            conversationId: event.conversationId,
+            role: 'system',
+            content: {
+              kind: 'compute-job-finished',
+              text:
+                job === null
+                  ? `算力作业 ${event.jobId} 结束：${event.state}`
+                  : computeService.renderJob(job),
+            },
+          });
+        } catch (err) {
+          log(`作业结束消息落库失败：${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+      onTargetsChanged: (info) => {
+        d.broadcast({
+          kind: 'compute.targets',
+          projectId,
+          action: info.action,
+          targetId: info.targetId,
+        });
+      },
+      onLog: (line) => {
+        log(`[compute ${projectId}] ${line}`);
+      },
+    });
+    computeServices.set(projectId, computeService);
+
+    /*
+     * 恢复跟踪未结束的作业（需求 14.7）。
+     *
+     * 「跟踪到终止态」不能因为用户关过一次窗口就作废，而那正是长作业期间最常发生的事。
+     */
+    computeService.resume();
+
+    const computeToolOptions = {
+      service: () => computeService,
+      onJobsChanged: (info: { action: string; jobId: string | null }) => {
+        d.broadcast({ kind: 'compute.jobs', projectId, action: info.action, jobId: info.jobId });
+      },
+    };
+    tools.register(createManageComputeTool(computeToolOptions));
+    tools.register(createRunRemoteCommandTool(computeToolOptions));
+    tools.register(createSubmitJobTool(computeToolOptions));
 
     computePlanes.set(projectId, {
       pool,
@@ -3777,6 +3918,362 @@ async function main(): Promise<void> {
     };
   });
 
+  /* --- 算力目标与作业（任务 14.2，需求 14.3、14.4、14.6、14.7）--- */
+
+  /**
+   * 取算力服务。
+   *
+   * 经 `orchestratorFor` 而不是现建：门控要接到该项目的审批服务上，现建的实例没有
+   * 这个依赖，于是「界面上提交作业不用批准、模型提交作业要批准」——同一个动作两套规则。
+   */
+  const computeFor = async (projectId: string): Promise<ComputeService> => {
+    await orchestratorFor(projectId);
+    const service = computeServices.get(projectId);
+    if (service === undefined) throw notFound(`项目不可用：${projectId}`);
+    return service;
+  };
+
+  /** 目标的 IPC 视图。指纹从列上取（那是权威值），不从 config_json 里翻。 */
+  const targetView = (target: ReturnType<ComputeTargetsRepo['get']>): Record<string, unknown> => {
+    if (target === null) return {};
+    return {
+      id: target.id,
+      name: target.name,
+      family: target.family,
+      config: target.config,
+      notesMd: target.notesMd,
+      credentialRef: target.credentialRef,
+      enabled: target.enabled,
+      disabledReason: target.disabledReason,
+      hostKeyFingerprint: target.hostKeyFingerprint,
+      lastProbe: target.lastProbe,
+      lastProbeAt: target.lastProbeAt,
+      createdAt: target.createdAt,
+      updatedAt: target.updatedAt,
+      // 需求 14.3：ssh 目标在公钥未确认前不能用。提到平面上让 UI 不必去猜
+      needsHostKeyConfirmation: target.family === 'ssh' && target.hostKeyFingerprint === null,
+    };
+  };
+
+  d.register('compute.targets', async (req) => ({
+    targets: computeTargets.list({ includeDisabled: req.includeDisabled }).map(targetView),
+    // 需求 14.6 的「无需重启即可发现」：UI 拿这个版本号做廉价轮询
+    revision: computeTargets.revision(),
+    grantScopes: {
+      read: grantScopeOptions('read'),
+      write: grantScopeOptions('write'),
+      job: grantScopeOptions('job'),
+      credential: grantScopeOptions('credential'),
+    },
+  }));
+
+  d.register('compute.target', async (req) => {
+    const target = computeTargets.get(req.targetId);
+    if (target === null) throw notFound(`算力目标不存在：${req.targetId}`);
+    return {
+      target: targetView(target),
+      grants: computeGrants.list({ targetId: req.targetId }),
+    };
+  });
+
+  d.register('compute.localCapabilities', async () => {
+    const [ssh, local] = await Promise.all([detectSshClient(), suggestLocalTarget()]);
+    return {
+      ssh,
+      // 缺客户端时给出可以直接照做的步骤，而不是等第一次连接报 ENOENT ssh
+      sshRemediation: ssh.available ? null : sshClientRemediation(),
+      gpus: local.gpus,
+      gpuDetail: local.detail,
+      suggestedLocalConfig: local.config,
+    };
+  });
+
+  d.register('compute.register', async (req) => {
+    const service = await computeFor(req.projectId);
+    const config = req.config as unknown as ComputeTargetConfig;
+
+    const validation = validateComputeConfig(config);
+    if (!validation.ok) {
+      throw new DispatchError(
+        makeError('bad_request', validation.reason, {
+          remediation: '按上面的说明改配置后重试。',
+        }),
+      );
+    }
+
+    const result = await service.register({
+      name: req.name,
+      config,
+      ...(req.notesMd === undefined ? {} : { notesMd: req.notesMd }),
+      ...(req.credentialRef === undefined ? {} : { credentialRef: req.credentialRef }),
+      conversationId: req.conversationId ?? null,
+    });
+
+    if (!result.ok || result.target === null) {
+      throw new DispatchError(
+        makeError('conflict', result.reason ?? '登记失败', {
+          remediation: 'ssh 目标登记成功后还要确认主机公钥才能连接——那一步在目标详情里。',
+        }),
+      );
+    }
+
+    return { target: targetView(result.target), probe: result.probe };
+  });
+
+  d.register('compute.update', async (req) => {
+    const existing = computeTargets.get(req.targetId);
+    if (existing === null) throw notFound(`算力目标不存在：${req.targetId}`);
+
+    if (req.config !== undefined) {
+      const validation = validateComputeConfig(req.config as unknown as ComputeTargetConfig);
+      if (!validation.ok) {
+        throw new DispatchError(makeError('bad_request', validation.reason));
+      }
+    }
+
+    let updated;
+    try {
+      updated = computeTargets.update(req.targetId, {
+        ...(req.name === undefined ? {} : { name: req.name }),
+        ...(req.config === undefined
+          ? {}
+          : { config: req.config as unknown as ComputeTargetConfig }),
+        ...(req.notesMd === undefined ? {} : { notesMd: req.notesMd }),
+        ...(req.credentialRef === undefined ? {} : { credentialRef: req.credentialRef }),
+      });
+    } catch (err) {
+      throw new DispatchError(
+        makeError('conflict', err instanceof Error ? err.message : String(err)),
+      );
+    }
+    if (updated === null) throw notFound(`算力目标不存在：${req.targetId}`);
+
+    d.broadcast({
+      kind: 'compute.targets',
+      projectId: null,
+      action: 'update',
+      targetId: req.targetId,
+    });
+    return { target: targetView(updated) };
+  });
+
+  d.register('compute.setEnabled', async (req) => {
+    if (computeTargets.get(req.targetId) === null) {
+      throw notFound(`算力目标不存在：${req.targetId}`);
+    }
+    if (!req.enabled && (req.reason ?? '').trim() === '') {
+      throw new DispatchError(
+        makeError('bad_request', '停用算力目标必须说明原因', {
+          remediation:
+            '一个灰掉的目标而没有原因，用户唯一能做的是把它重新打开试试——' +
+            '而那可能正是探测判定它不可用的原因。',
+        }),
+      );
+    }
+
+    const changed = computeTargets.setEnabled(req.targetId, req.enabled, req.reason ?? null);
+    /*
+     * 停用时同时撤销它的授权。
+     *
+     * 不撤的话，用户「关掉」这台机器之后那些 always 级授权还在库里；他日后重新启用时
+     * 会发现命令直接放行——而他记得的是自己关掉过它。
+     */
+    const revoked = req.enabled ? 0 : computeGrants.revokeForTarget(req.targetId);
+
+    d.broadcast({
+      kind: 'compute.targets',
+      projectId: null,
+      action: 'update',
+      targetId: req.targetId,
+    });
+    return { changed, revokedGrants: revoked };
+  });
+
+  d.register('compute.remove', async (req) => {
+    const service = await computeFor(req.projectId);
+    const result = service.remove(req.targetId);
+    if (!result.ok) {
+      throw new DispatchError(
+        makeError('conflict', result.reason ?? '删除失败', {
+          remediation: '先取消或等待未结束的作业。',
+        }),
+      );
+    }
+    return { deleted: true, revokedGrants: result.revokedGrants };
+  });
+
+  d.register('compute.probe', async (req) => {
+    const service = await computeFor(req.projectId);
+    const report = await service.probe(req.targetId);
+    if (report === null) throw notFound(`算力目标不存在：${req.targetId}`);
+    return { probe: report };
+  });
+
+  d.register('compute.ping', async (req) => {
+    const service = await computeFor(req.projectId);
+    return service.ping(req.targetId);
+  });
+
+  d.register('compute.scanHostKey', async (req) => {
+    const target = computeTargets.get(req.targetId);
+    if (target === null) throw notFound(`算力目标不存在：${req.targetId}`);
+    if (target.config.family !== 'ssh') {
+      throw new DispatchError(makeError('bad_request', '只有 ssh 目标有主机公钥'));
+    }
+
+    const scan = await scanHostKey(target.config);
+    return {
+      ...scan,
+      current: target.hostKeyFingerprint,
+      /*
+       * 指纹变了要显式标出来。
+       *
+       * 「取到了一个指纹」与「取到的指纹和上次不一样」在界面上必须长得不一样：
+       * 后者要么是主机重装了系统，要么是中间人，而这两者只能由人分辨。
+       */
+      changed:
+        target.hostKeyFingerprint !== null &&
+        scan.fingerprint !== null &&
+        target.hostKeyFingerprint !== scan.fingerprint,
+    };
+  });
+
+  d.register('compute.confirmHostKey', async (req) => {
+    const service = await computeFor(req.projectId);
+    const result = await service.confirmHostKey({
+      targetId: req.targetId,
+      conversationId: req.conversationId ?? null,
+      ...(req.expectedFingerprint === undefined
+        ? {}
+        : { expectedFingerprint: req.expectedFingerprint }),
+    });
+    if (!result.ok) {
+      throw new DispatchError(
+        makeError('conflict', result.reason ?? '确认失败', {
+          remediation:
+            '指纹必须由人去和管理员公布的值核对。「再连一次看看」核实不了任何东西——' +
+            '中间人每次都会给出同一个（它自己的）指纹。',
+        }),
+      );
+    }
+    return {
+      fingerprint: result.fingerprint,
+      target: targetView(computeTargets.get(req.targetId)),
+    };
+  });
+
+  /* --- 作业 --- */
+
+  d.register('compute.jobs', async (req) => {
+    const service = await computeFor(req.projectId);
+    const jobs = service.jobs.list({
+      ...(req.targetId === undefined ? {} : { targetId: req.targetId }),
+      ...(req.conversationId === undefined ? {} : { conversationId: req.conversationId }),
+      state: req.state as JobState | 'active' | 'all',
+      limit: req.limit,
+    });
+
+    return {
+      jobs: jobs.map((job) => ({
+        ...job,
+        targetName: computeTargets.get(job.targetId)?.name ?? null,
+        terminal: isTerminalJobState(job.state),
+      })),
+      summary: service.jobs.summary(
+        req.conversationId === undefined ? {} : { conversationId: req.conversationId },
+      ),
+    };
+  });
+
+  d.register('compute.job', async (req) => {
+    const service = await computeFor(req.projectId);
+    if (service.jobs.get(req.jobId) === null) throw notFound(`作业不存在：${req.jobId}`);
+
+    // 主动问一次：用户点开详情时想知道的是现在的状态，不是上次轮询时的
+    await service.pollOnce(req.jobId);
+    const job = service.jobs.get(req.jobId);
+    if (job === null) throw notFound(`作业不存在：${req.jobId}`);
+
+    return {
+      job: {
+        ...job,
+        targetName: computeTargets.get(job.targetId)?.name ?? null,
+        terminal: isTerminalJobState(job.state),
+      },
+      summary: service.renderJob(job),
+    };
+  });
+
+  d.register('compute.jobOutputs', async (req) => {
+    const service = await computeFor(req.projectId);
+    if (service.jobs.get(req.jobId) === null) throw notFound(`作业不存在：${req.jobId}`);
+    const outputs = await service.collectOutputs(req.jobId, {
+      ...(req.tailLines === undefined ? {} : { tailLines: req.tailLines }),
+    });
+    return outputs;
+  });
+
+  d.register('compute.cancelJob', async (req) => {
+    const service = await computeFor(req.projectId);
+    const result = await service.cancelJob(req.jobId);
+    if (!result.ok) {
+      throw new DispatchError(makeError('conflict', result.reason ?? '取消失败'));
+    }
+    d.broadcast({
+      kind: 'compute.jobs',
+      projectId: req.projectId,
+      action: 'cancel',
+      jobId: req.jobId,
+    });
+    return { cancelled: true };
+  });
+
+  d.register('compute.commands', async (req) => {
+    const service = await computeFor(req.projectId);
+    const commands = service.jobs.commands({
+      ...(req.targetId === undefined ? {} : { targetId: req.targetId }),
+      ...(req.conversationId === undefined ? {} : { conversationId: req.conversationId }),
+      limit: req.limit,
+    });
+    return {
+      commands: commands.map((c) => ({
+        ...c,
+        targetName: computeTargets.get(c.targetId)?.name ?? null,
+        riskLabel: RISK_LABEL[c.risk as keyof typeof RISK_LABEL] ?? c.risk,
+      })),
+    };
+  });
+
+  /* --- 算力授权 --- */
+
+  d.register('compute.grants', async (req) => ({
+    grants: computeGrants
+      .list({
+        ...(req.targetId === undefined ? {} : { targetId: req.targetId }),
+        includeRevoked: req.includeRevoked,
+      })
+      .map((grant) => ({
+        ...grant,
+        targetName: computeTargets.get(grant.targetId)?.name ?? null,
+      })),
+    /*
+     * 把「破坏性命令不受持久授权约束」这件事随授权列表一起说明。
+     *
+     * 用户在这个页面上看到一条 always 级的读授权时，最自然的疑问是「那 rm -rf 呢」。
+     * 答案不在任何一条记录里，因此必须由这个字段说出来。
+     */
+    note:
+      '破坏性命令（rm -r、scancel、sudo、kill -9 这类）不受这些授权约束——' +
+      '它们每次都会单独询问。这是「不被 ls 烦到」与「rm -rf 要经过我」能同时成立的办法。',
+  }));
+
+  d.register('compute.revokeGrant', async (req) => {
+    if (!computeGrants.revoke(req.grantId)) {
+      throw notFound(`算力授权不存在或已撤销：${req.grantId}`);
+    }
+    return { revoked: true };
+  });
+
   d.register('credential.delete', async (req) => {
     requireVault();
 
@@ -3946,6 +4443,14 @@ async function main(): Promise<void> {
      */
     for (const manager of mcpManagers.values()) closers.push(manager.close());
     closers.push(bridge.stop());
+
+    /*
+     * 算力服务只收轮询定时器，**不动远端作业**。
+     *
+     * 这是刻意的：作业在集群上跑，平台退出与它无关。退出时顺手取消远端作业会让
+     * 「关一下窗口」变成「几小时的计算白跑了」。下次启动 `resume()` 会把跟踪接上。
+     */
+    for (const service of computeServices.values()) service.close();
 
     for (const plane of computePlanes.values()) {
       plane.background.close();

@@ -1066,6 +1066,138 @@ export const requestSchema = z.discriminatedUnion('method', [
   }),
 
   z.object({ method: z.literal('manuscript.delete'), projectId: idSchema, manuscriptId: idSchema }),
+
+  /* --- 算力目标与作业（任务 14.2，需求 14.3、14.4、14.6、14.7）--- */
+
+  /**
+   * 列出算力目标。
+   *
+   * 需求 14.6 要求「用户中途新增后无需重启即可发现」：这个方法每次读库，不缓存。
+   * `revision` 一并返回，UI 可以用它做廉价轮询而不必每次拉全量。
+   */
+  z.object({
+    method: z.literal('compute.targets'),
+    includeDisabled: z.boolean().default(false),
+  }),
+
+  z.object({ method: z.literal('compute.target'), targetId: idSchema }),
+
+  /**
+   * 登记一个算力目标。
+   *
+   * `config` 不在这里做结构校验，交给 core 的 `validateConfig`：校验规则里带的是
+   * 可执行的补救说明（「远端工作目录要用绝对路径，相对路径会相对于登录时的家目录，
+   * 而那在不同集群上不一样」），把它拆成 zod 报错会把这些说明丢掉。
+   */
+  z.object({
+    method: z.literal('compute.register'),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+    name: z.string().min(1).max(80),
+    config: z.record(z.string(), z.unknown()),
+    notesMd: z.string().max(20_000).optional(),
+    credentialRef: z.string().min(1).max(200).optional(),
+  }),
+
+  z.object({
+    method: z.literal('compute.update'),
+    targetId: idSchema,
+    name: z.string().min(1).max(80).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+    notesMd: z.string().max(20_000).nullable().optional(),
+    credentialRef: z.string().min(1).max(200).nullable().optional(),
+  }),
+
+  z.object({
+    method: z.literal('compute.setEnabled'),
+    targetId: idSchema,
+    enabled: z.boolean(),
+    /** 停用必须给原因：一个灰掉的目标而没有原因，用户唯一能做的是把它重新打开试试。 */
+    reason: z.string().min(1).max(500).optional(),
+  }),
+
+  z.object({ method: z.literal('compute.remove'), projectId: idSchema, targetId: idSchema }),
+
+  /** 探测。会连接远端，慢。 */
+  z.object({ method: z.literal('compute.probe'), projectId: idSchema, targetId: idSchema }),
+
+  /** 快速测活，用于列表页刷新。 */
+  z.object({ method: z.literal('compute.ping'), projectId: idSchema, targetId: idSchema }),
+
+  /**
+   * 确认主机公钥。
+   *
+   * `expectedFingerprint` 给了就要求与取回的一致——用户从管理员那里拿到指纹之后
+   * 应该能把它贴进来核对，而不是靠眼睛比对两串 base64。
+   */
+  z.object({
+    method: z.literal('compute.confirmHostKey'),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+    targetId: idSchema,
+    expectedFingerprint: z.string().max(200).optional(),
+  }),
+
+  /** 取回主机公钥指纹但**不写入** known_hosts。给用户先看。 */
+  z.object({ method: z.literal('compute.scanHostKey'), projectId: idSchema, targetId: idSchema }),
+
+  /** 本机能力：有没有 ssh 客户端、有几块 GPU。登记向导用它给默认值。 */
+  z.object({ method: z.literal('compute.localCapabilities') }),
+
+  /* --- 作业 --- */
+
+  z.object({
+    method: z.literal('compute.jobs'),
+    projectId: idSchema,
+    targetId: idSchema.optional(),
+    conversationId: idSchema.optional(),
+    state: z
+      .enum([
+        'active',
+        'all',
+        'submitted',
+        'queued',
+        'running',
+        'completed',
+        'failed',
+        'cancelled',
+        'timeout',
+        'lost',
+      ])
+      .default('all'),
+    limit: z.number().int().min(1).max(200).default(50),
+  }),
+
+  /** 单个作业。**会主动问一次调度器**——用户点开详情时想知道的是现在的状态。 */
+  z.object({ method: z.literal('compute.job'), projectId: idSchema, jobId: idSchema }),
+
+  z.object({
+    method: z.literal('compute.jobOutputs'),
+    projectId: idSchema,
+    jobId: idSchema,
+    tailLines: z.number().int().min(1).max(10_000).optional(),
+  }),
+
+  z.object({ method: z.literal('compute.cancelJob'), projectId: idSchema, jobId: idSchema }),
+
+  /** 远程命令审计（需求 14.4）。 */
+  z.object({
+    method: z.literal('compute.commands'),
+    projectId: idSchema,
+    targetId: idSchema.optional(),
+    conversationId: idSchema.optional(),
+    limit: z.number().int().min(1).max(200).default(50),
+  }),
+
+  /* --- 算力授权（需求 14.4、17.5）--- */
+
+  z.object({
+    method: z.literal('compute.grants'),
+    targetId: idSchema.optional(),
+    includeRevoked: z.boolean().default(false),
+  }),
+
+  z.object({ method: z.literal('compute.revokeGrant'), grantId: idSchema }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

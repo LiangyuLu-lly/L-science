@@ -31,7 +31,7 @@ function describeSurfaces(
     (s) => `  host.${s.name}.{${Object.keys(s.methods).sort().join(', ')}} —— ${s.doc}`,
   );
   if (pending.length > 0) {
-    lines.push(`  尚未实现（访问会报错）：${pending.map((p) => `host.${p.name}`).join('、')}`);
+    lines.push(`  当前不可用（访问会报错）：${pending.map((p) => `host.${p.name}`).join('、')}`);
   }
   return lines.join('\n');
 }
@@ -180,7 +180,7 @@ export function createControlReplAdminTool(
               `可用表面：${options.surfaces.map((s) => s.name).join('、')}`,
               options.pending.length === 0
                 ? ''
-                : `尚未实现：${options.pending.map((p) => `${p.name}（${p.reason}）`).join('；')}`,
+                : `当前不可用：${options.pending.map((p) => `${p.name}（${p.reason}）`).join('；')}`,
             ]
               .filter((s) => s !== '')
               .join('\n'),

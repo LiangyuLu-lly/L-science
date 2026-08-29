@@ -207,8 +207,70 @@ CREATE INDEX idx_tool_grants_lookup
   ON tool_grants (connector_id, tool_name, scope) WHERE revoked_at IS NULL;
 `;
 
+/**
+ * 算力目标登记（任务 14.2，需求 14.3、14.6）。
+ *
+ * 初版 `compute_targets` 只有 id / name / family / config / notes / credential / enabled /
+ * last_probe。补的这几列各有具体用途：
+ *
+ * - `created_at` / `updated_at`：需求 14.6 要求「用户中途新增后无需重启即可发现」。
+ *   发现依赖的是「比我上次看到的更新」，没有时间戳就只能每次全量重读并比对配置。
+ * - `last_probe_at` 单独一列而不是从 `last_probe_json` 里解：判断「这份探测结果是不是
+ *   太旧了」是列表页每次都要做的事，为此解析 N 份 JSON 是白花的开销；更要紧的是
+ *   探测**失败**时也要更新这个时间（否则会反复重试一台确定连不上的机器）。
+ * - `host_key_fingerprint`：SSH 目标的主机公钥指纹经用户审批后落在这里。放在
+ *   config_json 里也能存，但它是**安全决定的凭据**，与「分区叫什么」这类偏好混在
+ *   一个 JSON 里，改配置的代码路径就有机会顺手把它覆盖掉。
+ * - `disabled_reason`：与 `enabled=0` 配对。用户主动停用与探测连续失败后自动停用
+ *   是两件事，而「为什么这个目标是灰的」在只有一个布尔时无法回答。
+ */
+const M004 = `
+ALTER TABLE compute_targets ADD COLUMN created_at INTEGER;
+ALTER TABLE compute_targets ADD COLUMN updated_at INTEGER;
+ALTER TABLE compute_targets ADD COLUMN last_probe_at INTEGER;
+ALTER TABLE compute_targets ADD COLUMN host_key_fingerprint TEXT;
+ALTER TABLE compute_targets ADD COLUMN disabled_reason TEXT;
+
+CREATE INDEX idx_compute_targets_live ON compute_targets (enabled, family);
+
+/*
+ * 算力授权（需求 14.4、17.5）。
+ *
+ * 单独一张表，不复用 host_grants 也不复用 tool_grants。
+ *
+ * 不复用 host_grants 的理由是它的语义是「沙箱外的**路径**」：把
+ * \`compute:ct_xxx:command\` 塞进 host_path 列能跑，但设置页里的「已授权路径」列表
+ * 会开始显示一堆不是路径的东西，而用户在那个列表里要判断的是「我给过哪些目录权限」。
+ * 混进来之后这个判断就做不了了。
+ *
+ * 关键是 \`risk\` 这一列——授权按危险度分档：
+ *
+ * - \`read\`：只读命令，可以给到 always。不给的话一次排查要点十几次「同意」，
+ *   而那种疲劳最终换来的是一个用户其实不想给的宽授权。
+ * - \`write\`：最多给到 project。跨项目的「随便写」不该出现在下拉框里。
+ * - \`job\`：提交作业，最多 project。它消耗集群配额，在云上直接是钱。
+ * - 破坏性命令**根本不进这张表**：它每次都要单独问，持久授权对它无效。
+ *   这是「不被 ls 烦到」与「rm -rf 要经过我」能同时成立的唯一办法。
+ */
+CREATE TABLE compute_grants (
+  id         TEXT PRIMARY KEY,
+  target_id  TEXT NOT NULL REFERENCES compute_targets (id) ON DELETE CASCADE,
+  /* read | write | job | credential */
+  risk       TEXT NOT NULL,
+  scope      TEXT NOT NULL,
+  scope_id   TEXT,
+  reason     TEXT,
+  granted_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  revoked_at INTEGER
+);
+CREATE INDEX idx_compute_grants_lookup
+  ON compute_grants (target_id, risk) WHERE revoked_at IS NULL;
+`;
+
 export const APP_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'app-initial', sql: M001 },
   { version: 2, name: 'skill-embeddings', sql: M002 },
   { version: 3, name: 'connector-groups', sql: M003 },
+  { version: 4, name: 'compute-targets', sql: M004 },
 ];

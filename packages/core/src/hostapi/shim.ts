@@ -204,8 +204,12 @@ class _Host(object):
         pending = _PENDING.get(item)
         if pending is not None:
             # 不做空壳：返回空列表会让调用方以为「查了但没有」，
-            # 然后基于一个不存在的事实继续推理
-            raise AttributeError("host.%s 尚未实现：%s" % (item, pending))
+            # 然后基于一个不存在的事实继续推理。
+            #
+            # 措辞是「不可用」而不是「尚未实现」：pending 里的原因分三种——还没做、
+            # 这个部署没启用、这次运行没接上。说成「尚未实现」会让用户去等一个
+            # 已经做完的东西。
+            raise AttributeError("host.%s 不可用：%s" % (item, pending))
 
         raise AttributeError(
             "host 没有 %s。可用：%s" % (item, ", ".join(sorted(_SURFACES)))

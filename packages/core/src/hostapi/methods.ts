@@ -23,6 +23,9 @@ import type { ClaimEvidenceKind, ClaimVerdict } from '../repo/claims.js';
 import type { ClaimLedger } from '../manuscript/ledger.js';
 import type { CitationVerifier } from '../manuscript/verify.js';
 import type { ManuscriptCompiler } from '../manuscript/compile-service.js';
+import type { ComputeService } from '../compute/service.js';
+import { describeTarget } from '../compute/gate.js';
+import { isTerminalJobState, JOB_STATE_LABEL } from '../compute/types.js';
 import { citeLine } from '../refs/csl.js';
 import { describeCitation, parseCitation, parseReferenceList } from '../manuscript/citations.js';
 import { renderVerifyResults } from '../manuscript/verify.js';
@@ -70,6 +73,8 @@ export interface HostMethodDeps {
   citations?: () => CitationVerifier;
   /** 手稿编译器（任务 13.6）。 */
   manuscripts?: () => ManuscriptCompiler;
+  /** 算力服务（任务 14.2）。同样惰性——它要接审批服务与制品库。 */
+  compute?: () => ComputeService;
 }
 
 /* ------------------------------------------------------------------ *
@@ -172,21 +177,26 @@ export interface RegisteredHost {
   pending: readonly ShimPending[];
 }
 
-/** 尚未实现的表面。列在这里，访问时给出明确原因。 */
-const PENDING: readonly ShimPending[] = [
-  { name: 'compute', reason: '远程算力属 M5（任务 14.2），尚未落地' },
-];
+/**
+ * 尚未实现的表面。列在这里，访问时给出明确原因。
+ *
+ * 现在是空的——M4 与 M5 的表面都落地了。这个常量刻意留着而不是删掉：它是「未实现的
+ * 表面必须抛带说明的错误、不能给空壳」这条约定的落点，删掉之后下一个加表面的人
+ * 会先做一个返回空数组的占位。
+ */
+const PENDING: readonly ShimPending[] = [];
 
 /**
- * M4 三层缺席时的说法。
+ * 惰性依赖缺席时的说法。
  *
- * 与「尚未落地」分开：这三层已经做完了，缺席只可能是本次运行没给它们接上依赖
+ * 与「尚未落地」分开：这几层已经做完了，缺席只可能是本次运行没给它们接上依赖
  * （比如一个只跑控制面的测试装置）。说成「尚未落地」会让用户去等一个已经存在的东西。
  */
-const M4_ABSENT: Readonly<Record<'refs' | 'claims' | 'manuscripts', string>> = {
+const ABSENT: Readonly<Record<'refs' | 'claims' | 'manuscripts' | 'compute', string>> = {
   refs: '本次运行没有可用的文献库（项目未完成初始化）',
   claims: '本次运行没有可用的断言台账（项目未完成初始化）',
   manuscripts: '本次运行没有可用的手稿编译器（项目未完成初始化）',
+  compute: '本次运行没有可用的算力服务（项目未完成初始化）',
 };
 
 /**
@@ -1209,6 +1219,218 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
     );
   }
 
+  /* ---------------- 算力（任务 14.2）---------------- */
+
+  /*
+   * 控制面能查、能提交、能取消，**不能登记目标**。
+   *
+   * 与模型面工具同一条理由：登记需要主机名、跳板机配置、远端工作目录与分区名这些
+   * 只有用户知道的事实。控制面代码是模型写的，它填出来的会是看起来合理的值，而
+   * 失败要等到探测时才出现——那时用户看到的是「连不上一个他从没提过的主机」。
+   *
+   * 提交与执行仍然过审批门：控制面是特权面，但特权针对的是**平台自身的管理能力**，
+   * 不包括「把命令发到用户的集群上而不问他」。
+   */
+  if (deps.compute !== undefined) {
+    const computeOf = deps.compute;
+
+    surface(
+      'compute',
+      '算力目标与作业：列出目标、探测、提交作业、查状态、取输出、取消。执行与提交仍要经用户审批。',
+      {
+        /** 列出目标。每次读库，因此用户中途新增的会立刻出现（需求 14.6）。 */
+        targets: (p) =>
+          computeOf()
+            .list({
+              ...(optBool(p, 'includeDisabled') === undefined
+                ? {}
+                : { includeDisabled: optBool(p, 'includeDisabled') }),
+            })
+            .map((target) => ({
+              id: target.id,
+              name: target.name,
+              family: target.family,
+              label: describeTarget(target),
+              enabled: target.enabled,
+              disabledReason: target.disabledReason,
+              config: target.config,
+              // ssh 目标在公钥未确认前不能用。提到平面上，不让调用方去猜
+              needsHostKeyConfirmation:
+                target.family === 'ssh' && target.hostKeyFingerprint === null,
+              lastProbe: target.lastProbe,
+              notesMd: target.notesMd,
+            })),
+
+        /** 目标列表的版本号。轮询「有没有新目标」时用它，比拉全量便宜。 */
+        revision: () => computeOf().revision(),
+
+        /** 探测一个目标。会连接远端，慢。 */
+        probe: async (p) => {
+          const service = computeOf();
+          const target = service.targets.resolve(reqStr(p, 'target'));
+          if (target === null) throw new Error(`找不到算力目标：${String(p.target)}`);
+          return service.probe(target.id);
+        },
+
+        ping: async (p) => {
+          const service = computeOf();
+          const target = service.targets.resolve(reqStr(p, 'target'));
+          if (target === null) throw new Error(`找不到算力目标：${String(p.target)}`);
+          return service.ping(target.id);
+        },
+
+        /**
+         * 执行一条远程命令。**每次都过审批**（需求 14.4）。
+         *
+         * `purpose` 是必填的：它原样出现在用户的审批卡片上，是他判断要不要同意的依据。
+         */
+        runCommand: async (p, ctx) => {
+          const result = await computeOf().runCommand({
+            targetRef: reqStr(p, 'target'),
+            command: reqStr(p, 'command'),
+            purpose: reqStr(p, 'purpose'),
+            conversationId: ctx.conversationId,
+            ...(optIntOpt(p, 'timeoutMs') === undefined
+              ? {}
+              : { timeoutMs: optIntOpt(p, 'timeoutMs') }),
+            modelId: ctx.modelId,
+          });
+          return {
+            ok: result.ok,
+            exitCode: result.exitCode,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            truncated: result.truncated,
+            timedOut: result.timedOut,
+            durationMs: result.durationMs,
+            risk: result.risk.risk,
+            riskReason: result.risk.reason,
+            denied: result.gate.source === 'denied',
+            // 需求 17.3：显式拒绝不可重试，超时与取消可以。合成一个布尔会让
+            // 调用方在用户明确说「不行」之后再问一次
+            retryable: result.gate.retryable,
+            reason: result.reason,
+          };
+        },
+
+        /** 提交作业。**每次都过审批**，卡片上会列出资源请求。 */
+        submitJob: async (p, ctx) => {
+          const env: Record<string, string> = {};
+          if (typeof p.env === 'object' && p.env !== null && !Array.isArray(p.env)) {
+            for (const [key, value] of Object.entries(p.env as Record<string, unknown>)) {
+              env[key] = String(value);
+            }
+          }
+
+          const result = await computeOf().submitJob({
+            targetRef: reqStr(p, 'target'),
+            spec: {
+              name: reqStr(p, 'name'),
+              script: reqStr(p, 'script'),
+              ...(optIntOpt(p, 'cpus') === undefined ? {} : { cpus: optIntOpt(p, 'cpus') }),
+              ...(optIntOpt(p, 'gpus') === undefined ? {} : { gpus: optIntOpt(p, 'gpus') }),
+              ...(optIntOpt(p, 'memoryMb') === undefined
+                ? {}
+                : { memoryMb: optIntOpt(p, 'memoryMb') }),
+              ...(optIntOpt(p, 'minutes') === undefined
+                ? {}
+                : { minutes: optIntOpt(p, 'minutes') }),
+              ...(optStr(p, 'partition') === undefined
+                ? {}
+                : { partition: optStr(p, 'partition') }),
+              ...(optStr(p, 'account') === undefined ? {} : { account: optStr(p, 'account') }),
+              ...(Object.keys(env).length === 0 ? {} : { env }),
+              extraDirectives: strList(p, 'extraDirectives'),
+            },
+            conversationId: ctx.conversationId,
+          });
+
+          if (!result.ok || result.job === null) {
+            throw new Error(
+              `${result.reason ?? '提交失败'}` +
+                (result.gate?.source === 'denied' && !result.gate.retryable
+                  ? '\n（用户明确拒绝，不要重新发起同一请求。）'
+                  : ''),
+            );
+          }
+          return { ...result.job, terminal: isTerminalJobState(result.job.state) };
+        },
+
+        jobs: (p, ctx) => {
+          const service = computeOf();
+          const state = optStr(p, 'state');
+          return service.jobs
+            .list({
+              ...(optStr(p, 'target') === undefined
+                ? {}
+                : {
+                    targetId:
+                      service.targets.resolve(optStr(p, 'target') as string)?.id ??
+                      (optStr(p, 'target') as string),
+                  }),
+              // 默认只看本会话的：全项目的作业列表里模型分不出哪些与当前任务有关
+              conversationId: optStr(p, 'conversationId') ?? ctx.conversationId ?? undefined,
+              state: (state ?? 'all') as never,
+              limit: optInt(p, 'limit', 50),
+            })
+            .map((job) => ({
+              ...job,
+              targetName: service.targets.get(job.targetId)?.name ?? null,
+              stateLabel: JOB_STATE_LABEL[job.state],
+              terminal: isTerminalJobState(job.state),
+            }));
+        },
+
+        /** 单个作业。会主动问一次调度器——调用方想知道的是现在的状态。 */
+        job: async (p) => {
+          const service = computeOf();
+          const jobId = reqStr(p, 'jobId');
+          if (service.jobs.get(jobId) === null) throw new Error(`作业不存在：${jobId}`);
+          await service.pollOnce(jobId);
+          const job = service.jobs.get(jobId);
+          if (job === null) throw new Error(`作业不存在：${jobId}`);
+          return {
+            ...job,
+            stateLabel: JOB_STATE_LABEL[job.state],
+            terminal: isTerminalJobState(job.state),
+            summary: service.renderJob(job),
+          };
+        },
+
+        /** 取输出。落成的制品 id 一并返回，可以用 `host.artifacts.path` 读原文。 */
+        outputs: async (p) => {
+          const service = computeOf();
+          const jobId = reqStr(p, 'jobId');
+          if (service.jobs.get(jobId) === null) throw new Error(`作业不存在：${jobId}`);
+          return service.collectOutputs(jobId, {
+            ...(optIntOpt(p, 'tailLines') === undefined
+              ? {}
+              : { tailLines: optIntOpt(p, 'tailLines') }),
+          });
+        },
+
+        cancelJob: async (p) => {
+          const result = await computeOf().cancelJob(reqStr(p, 'jobId'));
+          if (!result.ok) throw new Error(result.reason ?? '取消失败');
+          return { cancelled: true };
+        },
+
+        /** 远程命令审计（需求 14.4）。被拒绝的那些也在里面。 */
+        commands: (p) =>
+          computeOf().jobs.commands({
+            ...(optStr(p, 'target') === undefined ? {} : { targetId: optStr(p, 'target') }),
+            limit: optInt(p, 'limit', 50),
+          }),
+
+        /** 当前的算力授权。哪些命令被持久放行了，在这里能查。 */
+        grants: (p) =>
+          computeOf().grants.list({
+            ...(optStr(p, 'target') === undefined ? {} : { targetId: optStr(p, 'target') }),
+          }),
+      },
+    );
+  }
+
   /* ---------------- MCP 连接器 ---------------- */
 
   /*
@@ -1355,11 +1577,12 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
       reason: '连接器管理未启用（本次运行没有可用的连接器注册表）',
     });
   }
-  if (deps.refs === undefined) pending.push({ name: 'refs', reason: M4_ABSENT.refs });
-  if (deps.claims === undefined) pending.push({ name: 'claims', reason: M4_ABSENT.claims });
+  if (deps.refs === undefined) pending.push({ name: 'refs', reason: ABSENT.refs });
+  if (deps.claims === undefined) pending.push({ name: 'claims', reason: ABSENT.claims });
   if (deps.manuscripts === undefined) {
-    pending.push({ name: 'manuscripts', reason: M4_ABSENT.manuscripts });
+    pending.push({ name: 'manuscripts', reason: ABSENT.manuscripts });
   }
+  if (deps.compute === undefined) pending.push({ name: 'compute', reason: ABSENT.compute });
 
   return { surfaces, pending };
 }

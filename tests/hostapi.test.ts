@@ -27,6 +27,11 @@ import {
   ArtifactStore,
   ClaimLedger,
   ClaimsRepo,
+  ComputeGate,
+  ComputeGrantsRepo,
+  ComputeJobsRepo,
+  ComputeService,
+  ComputeTargetsRepo,
   ControlRepl,
   FindingsRepo,
   HostRpcServer,
@@ -360,7 +365,7 @@ describe('buildHostShim', () => {
   it('未实现的表面进 pending 并在访问时抛错', () => {
     expect(shim).toContain('"refs": "文献库属 M4"');
     // 关键是抛错而不是返回空：空壳会让模型以为「查了但没有」
-    expect(shim).toContain('尚未实现');
+    expect(shim).toContain('不可用');
     expect(shim).not.toMatch(/def refs/);
   });
 
@@ -1042,26 +1047,28 @@ describe('host 的 M4 表面', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('三层接上后进 surfaces，pending 里只剩没做的', () => {
+  it('三层接上后进 surfaces，缺席的才进 pending', () => {
     const names = registered.surfaces.map((s) => s.name);
     expect(names).toContain('refs');
     expect(names).toContain('claims');
     expect(names).toContain('manuscripts');
 
     const pendingNames = registered.pending.map((p) => p.name);
-    expect(pendingNames).toContain('compute');
     expect(pendingNames).not.toContain('refs');
+    // 这个装置没接算力服务，因此它应该在 pending 里
+    expect(pendingNames).toContain('compute');
   });
 
-  it('三层缺席时给的是「没接上」而不是「尚未落地」', () => {
+  it('缺席时给的是「没接上」而不是「尚未落地」', () => {
     const bare = new HostRpcServer();
     const result = registerHostMethods(bare, minimalDeps());
 
-    const refs = result.pending.find((p) => p.name === 'refs');
-    // 说成「尚未落地」会让用户去等一个已经做完的东西
-    expect(refs?.reason).toContain('没有可用的文献库');
-    expect(refs?.reason).not.toContain('尚未落地');
-    expect(result.pending.find((p) => p.name === 'compute')?.reason).toContain('尚未落地');
+    for (const name of ['refs', 'claims', 'manuscripts', 'compute']) {
+      const entry = result.pending.find((p) => p.name === name);
+      // 说成「尚未落地」会让用户去等一个已经做完的东西
+      expect(entry?.reason).toContain('本次运行');
+      expect(entry?.reason).not.toContain('尚未落地');
+    }
   });
 
   it('refs.list 在空库上返回空表，不因为不能出网就报错', async () => {
@@ -1157,6 +1164,70 @@ describe('host 的 M4 表面', () => {
     expect(body.profiles.length).toBeGreaterThan(5);
     // 显示「摘要上限 150 词」而不说来源，用户会照它删稿
     expect(body.disclaimer).toContain('近似值');
+  });
+
+  it('compute 表面能查目标与作业，但不给登记', async () => {
+    /*
+     * 登记不在控制面上，与模型面工具同一条理由：它需要主机名、跳板机配置、远端工作
+     * 目录与分区名这些只有用户知道的事实，而模型填出来的会是看起来合理的值。
+     */
+    const artifacts = new ArtifactStore(project.db, project.paths.blobs);
+    const targets = new ComputeTargetsRepo(store.db);
+    const grants = new ComputeGrantsRepo(store.db);
+    const jobs = new ComputeJobsRepo(project.db);
+    const compute = new ComputeService({
+      projectId: 'p1',
+      targets,
+      jobs,
+      grants,
+      gate: new ComputeGate({
+        approvals: () =>
+          ({ request: async () => ({ state: 'denied', fromPriorDenial: false }) }) as never,
+        grants,
+        projectId: 'p1',
+      }),
+      artifacts,
+    });
+    targets.add({
+      name: 'this-pc',
+      family: 'local',
+      config: { family: 'local', maxConcurrent: 1, visibleDevices: null, shell: 'bash' },
+    });
+
+    const withCompute = new HostRpcServer();
+    const result = registerHostMethods(withCompute, minimalDeps({ compute: () => compute }));
+    await withCompute.start();
+    try {
+      const surface = result.surfaces.find((s) => s.name === 'compute');
+      expect(surface).not.toBeUndefined();
+      const methods = Object.keys(surface?.methods ?? {});
+      expect(methods).toContain('targets');
+      expect(methods).toContain('submitJob');
+      // 登记要用户在界面上做
+      expect(methods).not.toContain('register');
+      expect(result.pending.map((p) => p.name)).not.toContain('compute');
+
+      const listed = await call(withCompute, 'compute.targets', {}, { conversationId });
+      expect(listed.body.ok).toBe(true);
+      const items = listed.body.result as { name: string; label: string }[];
+      expect(items[0]?.name).toBe('this-pc');
+
+      // 审批被拒时报错而不是静默失败，且要说清不可重试
+      const denied = await call(
+        withCompute,
+        'compute.runCommand',
+        { target: 'this-pc', command: 'rm -rf /tmp/x', purpose: '清理临时目录' },
+        { conversationId, modelId: 'm1' },
+      );
+      expect(denied.body.ok).toBe(true);
+      const outcome = denied.body.result as { denied: boolean; retryable: boolean; risk: string };
+      expect(outcome.denied).toBe(true);
+      expect(outcome.retryable).toBe(false);
+      expect(outcome.risk).toBe('destructive');
+    } finally {
+      compute.close();
+      await withCompute.stop();
+    }
   });
 
   it('manuscripts.compile 的双盲版带需求 13.8 的局限说明', async () => {

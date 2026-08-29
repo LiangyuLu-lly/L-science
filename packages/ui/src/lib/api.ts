@@ -134,7 +134,9 @@ export interface ApprovalRequest {
   kind:
     | 'artifact-delete'
     | 'host-access'
+    | 'compute-target'
     | 'ssh-command'
+    | 'compute-job'
     | 'compute-provider'
     | 'domain-allowlist'
     | 'skill-write';

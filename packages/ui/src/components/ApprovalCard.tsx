@@ -32,7 +32,9 @@ const SCOPE_HINT: Record<GrantScope, string> = {
 const KIND_LABEL: Record<ApprovalRequest['kind'], string> = {
   'artifact-delete': '删除制品',
   'host-access': '访问沙箱外的路径',
+  'compute-target': '登记算力目标',
   'ssh-command': '在远程主机执行命令',
+  'compute-job': '提交算力作业',
   'compute-provider': '使用算力凭据',
   'domain-allowlist': '新增域名白名单',
   'skill-write': '写入技能',

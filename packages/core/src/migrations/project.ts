@@ -585,6 +585,75 @@ CREATE TABLE compile_runs (
 CREATE INDEX idx_compile_runs_manuscript ON compile_runs (manuscript_id, created_at DESC);
 `;
 
+/**
+ * 算力作业跟踪（任务 14.2，需求 14.7）。
+ *
+ * 需求 14.7 要求「跟踪其状态直到终止态，并将结果关联回发起会话」。初版
+ * `compute_jobs` 只有 target/conversation/external_id/state/spec/result/时间，撑不起
+ * 这条要求的两个关键部分：
+ *
+ * 1. **轮询本身要可观测。** `last_polled_at` / `poll_count` / `poll_error` 在的时候，
+ *    「作业卡在 running 两小时了」与「我们两小时没能问到调度器」是两个可以分开的
+ *    结论；不在的时候它们长得一模一样。后者是网络问题，前者是作业问题。
+ * 2. **终止态的来源要记下来。** `terminal_source` 记的是这个终止结论从哪来：
+ *    调度器当前队列、历史记录（sacct/qstat -x）、退出码，还是「问不到了」。
+ *    `state='lost'` 的行必须能回答「为什么判定不明」——否则它与一次网络抖动
+ *    造成的误判无法区分。
+ *
+ * `stdout_artifact_id` / `stderr_artifact_id`：作业输出取回后落成制品而不是塞进
+ * 这张表的 TEXT 列。集群作业的 stdout 动辄几十 MB，放在项目库里会让每次
+ * `SELECT * FROM compute_jobs` 都拖上它。
+ */
+const M010 = `
+ALTER TABLE compute_jobs ADD COLUMN name TEXT;
+ALTER TABLE compute_jobs ADD COLUMN scheduler TEXT;
+ALTER TABLE compute_jobs ADD COLUMN detail TEXT;
+ALTER TABLE compute_jobs ADD COLUMN exit_code INTEGER;
+ALTER TABLE compute_jobs ADD COLUMN remote_workdir TEXT;
+ALTER TABLE compute_jobs ADD COLUMN script_sha256 TEXT;
+ALTER TABLE compute_jobs ADD COLUMN stdout_artifact_id TEXT;
+ALTER TABLE compute_jobs ADD COLUMN stderr_artifact_id TEXT;
+ALTER TABLE compute_jobs ADD COLUMN last_polled_at INTEGER;
+ALTER TABLE compute_jobs ADD COLUMN poll_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE compute_jobs ADD COLUMN poll_error TEXT;
+ALTER TABLE compute_jobs ADD COLUMN terminal_source TEXT;
+ALTER TABLE compute_jobs ADD COLUMN updated_at INTEGER;
+ALTER TABLE compute_jobs ADD COLUMN approval_id TEXT;
+
+CREATE INDEX idx_compute_jobs_live ON compute_jobs (state, submitted_at DESC);
+CREATE INDEX idx_compute_jobs_conversation ON compute_jobs (conversation_id, submitted_at DESC);
+
+/*
+ * 远程命令执行审计（需求 14.4）。
+ *
+ * 与作业分开一张表：一次 \`ls\` 与一个八小时的训练作业在生命周期、状态机与用户
+ * 关心的问题上都不一样。合成一张表的话，「这个目标上跑过哪些作业」这个查询会被
+ * 几百条探测命令淹没。
+ *
+ * 记下 approval_id 是为了让「这条命令当时是谁批的」可查——审批记录本身在
+ * approvals 表里，但反向找不到它对应哪次执行。
+ */
+CREATE TABLE compute_commands (
+  id              TEXT PRIMARY KEY,
+  target_id       TEXT NOT NULL,
+  conversation_id TEXT REFERENCES conversations (id) ON DELETE SET NULL,
+  command         TEXT NOT NULL,
+  /* 破坏性判定的结果，落库以便事后审计「当时判成什么了」 */
+  risk            TEXT NOT NULL,
+  approval_id     TEXT,
+  exit_code       INTEGER,
+  /* 输出只留摘要；完整输出在工具返回值与会话历史里 */
+  stdout_head     TEXT,
+  stderr_head     TEXT,
+  truncated       INTEGER NOT NULL DEFAULT 0,
+  timed_out       INTEGER NOT NULL DEFAULT 0,
+  duration_ms     INTEGER,
+  model_id        TEXT,
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX idx_compute_commands_target ON compute_commands (target_id, created_at DESC);
+`;
+
 export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'project-initial', sql: M001 },
   { version: 2, name: 'blob-eviction', sql: M002 },
@@ -595,4 +664,5 @@ export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 7, name: 'claim-ledger', sql: M007 },
   { version: 8, name: 'citation-checks', sql: M008 },
   { version: 9, name: 'manuscript-compile', sql: M009 },
+  { version: 10, name: 'compute-jobs', sql: M010 },
 ];
