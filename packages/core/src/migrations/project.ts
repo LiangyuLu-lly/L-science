@@ -338,9 +338,57 @@ CREATE INDEX idx_conversations_children ON conversations (parent_conversation_id
   WHERE parent_conversation_id IS NOT NULL;
 `;
 
+/**
+ * 文献库的检索与去重辅助列（任务 13.1，需求 12.1、12.2）。
+ *
+ * 这些字段全部能从 `csl_json` 里算出来，单独立列是为了让去重在 SQL 里可做。
+ * 每次去重都把全部 refs 的 CSL 反序列化再比对，在几千条文献的项目里是一次
+ * 全表 JSON 解析——而去重发生在每一次新增文献时。
+ *
+ * `title_norm` 存的是归一化后的标题（小写、去标点、折叠空白），不是原标题：
+ * 模糊匹配的候选集筛选靠它。原标题仍在 CSL 里，不会因归一化而丢失。
+ *
+ * `source` 记录元数据来自哪个上游。四家对同一 DOI 给出的字段完备度差别很大
+ * （Crossref 有页码与 ISSN，Semantic Scholar 有摘要与被引数），事后判断
+ * 「这条要不要重新解析一次」需要知道当时是谁给的。
+ */
+const M005 = `
+ALTER TABLE refs ADD COLUMN title_norm TEXT;
+ALTER TABLE refs ADD COLUMN source TEXT;
+ALTER TABLE refs ADD COLUMN year INTEGER;
+ALTER TABLE refs ADD COLUMN container TEXT;
+ALTER TABLE refs ADD COLUMN first_author TEXT;
+ALTER TABLE refs ADD COLUMN pmid TEXT;
+ALTER TABLE refs ADD COLUMN pmcid TEXT;
+ALTER TABLE refs ADD COLUMN arxiv_id TEXT;
+ALTER TABLE refs ADD COLUMN updated_at INTEGER;
+
+CREATE INDEX idx_refs_title_norm ON refs (title_norm) WHERE title_norm IS NOT NULL;
+CREATE INDEX idx_refs_year ON refs (year);
+CREATE INDEX idx_refs_pmid ON refs (pmid) WHERE pmid IS NOT NULL;
+CREATE INDEX idx_refs_pmcid ON refs (pmcid) WHERE pmcid IS NOT NULL;
+CREATE INDEX idx_refs_arxiv ON refs (arxiv_id) WHERE arxiv_id IS NOT NULL;
+
+/*
+ * 别名表：同一条文献在不同上游的标识。
+ *
+ * 不把它们塞进 refs 的列里，是因为一条文献可以同时有多个同类标识——preprint 的
+ * DOI 与正式发表的 DOI、OpenAlex 的 work id 与 MAG id。合并两条重复记录时，
+ * 被合并那条的标识必须保留下来，否则下次用旧 DOI 再查一次又会新建一条。
+ */
+CREATE TABLE ref_aliases (
+  ref_id TEXT NOT NULL REFERENCES refs (id) ON DELETE CASCADE,
+  scheme TEXT NOT NULL,
+  value  TEXT NOT NULL,
+  PRIMARY KEY (scheme, value)
+);
+CREATE INDEX idx_ref_aliases_ref ON ref_aliases (ref_id);
+`;
+
 export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'project-initial', sql: M001 },
   { version: 2, name: 'blob-eviction', sql: M002 },
   { version: 3, name: 'skill-load-audit', sql: M003 },
   { version: 4, name: 'subagent-conversations', sql: M004 },
+  { version: 5, name: 'reference-library', sql: M005 },
 ];

@@ -45,6 +45,8 @@ import {
 import { MemoryRepo, type MemoryKind, type MemoryScope } from './repo/memory.js';
 import { ConnectorRepo } from './repo/connectors.js';
 import { BRIDGE_SPECS, McpBridgeServer, McpManager, syncBuiltinConnectors } from './mcp/index.js';
+import { RefLibrary, citeLine, createManageReferencesTool } from './refs/index.js';
+import { RefsRepo } from './repo/refs.js';
 import {
   createGeneratePlanTool,
   createPlanStatusTool,
@@ -307,6 +309,7 @@ async function main(): Promise<void> {
   const memories = new Map<string, MemoryService>();
   const mcpManagers = new Map<string, McpManager>();
   const subAgentRunners = new Map<string, SubAgentRunner>();
+  const refLibraries = new Map<string, RefLibrary>();
 
   /**
    * 每个项目的执行平面资源，退出时要逐个关掉。
@@ -1117,6 +1120,94 @@ async function main(): Promise<void> {
     const memoryToolOptions = { service: () => memory };
     tools.register(createRememberTool(memoryToolOptions));
     tools.register(createRecallMemoryTool(memoryToolOptions));
+
+    /* --- 文献库（任务 13.1，需求 12.1、12.2）--------------------------- */
+
+    /*
+     * 文献库在项目库里：一份参考文献列表属于一篇论文，不该跨项目共享。
+     *
+     * `mailto` 从环境变量取。Crossref 与 NCBI 的礼节说明都要求标明联系方式，
+     * 带上它的请求会被路由到限流更宽松的池子——这不是合规问题而是能不能用的问题。
+     * 没配置时不编一个假地址：假地址比没有更糟，它会让上游把这个 UA 整体拉黑。
+     */
+    const refLibrary = new RefLibrary({
+      repo: new RefsRepo(project.db),
+      artifacts: artifactStore,
+      /*
+       * 域名批准门。
+       *
+       * 出口代理只管执行平面（内核经 HTTP_PROXY 出网），后端进程自己的 fetch
+       * 完全不经过它。因此文献库要自己过一遍同一份白名单，否则会出现「授权列表里
+       * 没有 api.crossref.org，但模型一调文献工具就连上了」——那正是这套两级
+       * 管控要防的半开状态。
+       *
+       * 六家上游合成一张卡片：边发边问会在一次 DOI 解析里弹三张，用户看不出
+       * 自己在批准什么。已被连接器带进白名单的域名不再询问。
+       */
+      authorizeHosts: async (hosts) => {
+        const allowed = hosts.filter((h) => grants.isDomainAllowed({ domain: h, projectId }));
+        const missing = hosts.filter((h) => !allowed.includes(h));
+        if (missing.length === 0) return allowed;
+
+        const result = await approvalFor(projectId).request({
+          kind: 'domain-allowlist',
+          title: `允许文献库访问 ${String(missing.length)} 个学术元数据服务？`,
+          detail:
+            '文献库要解析 DOI 与检索文献，需要访问以下服务：\n' +
+            missing.map((h) => `· ${h}`).join('\n') +
+            '\n\n发出去的内容是 DOI、PMID 或标题检索词。这些服务不接收工作区里的数据。',
+          impact:
+            '批准后文献库可以查询这些服务。它们返回的元数据（标题、作者、摘要）会存进项目库。',
+          reversible: true,
+          undoHint: '在设置的授权列表里撤销这些域名。',
+          scopeOptions: ['once', 'project', 'always'],
+          payload: { hosts: missing },
+        });
+
+        if (result.state !== 'approved') return allowed;
+
+        if (result.scope !== 'once') {
+          for (const host of missing) {
+            try {
+              grants.allowDomain({
+                domain: host,
+                mode: 'rw',
+                scope: result.scope,
+                scopeId: result.scope === 'project' ? projectId : null,
+                reason: `用户为文献库在项目 ${projectId} 内批准`,
+              });
+            } catch (err) {
+              log(`文献库域名授权写入失败：${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        }
+        return [...allowed, ...missing];
+      },
+      http: {
+        ...(process.env.LSCIENCE_CONTACT_EMAIL === undefined
+          ? {}
+          : { mailto: process.env.LSCIENCE_CONTACT_EMAIL }),
+        ...(process.env.NCBI_API_KEY === undefined ? {} : { ncbiApiKey: process.env.NCBI_API_KEY }),
+      },
+      onLog: (line) => {
+        log(`[refs ${projectId}] ${line}`);
+      },
+    });
+    refLibraries.set(projectId, refLibrary);
+
+    tools.register(
+      createManageReferencesTool({
+        library: () => refLibrary,
+        onChanged: (info) => {
+          d.broadcast({
+            kind: 'refs.changed',
+            projectId,
+            action: info.action,
+            refIds: info.refIds,
+          });
+        },
+      }),
+    );
 
     computePlanes.set(projectId, {
       pool,
@@ -2505,6 +2596,163 @@ async function main(): Promise<void> {
       throw notFound(`工具授权不存在或已撤销：${req.grantId}`);
     }
     return { revoked: true };
+  });
+
+  /* --- 文献库（任务 13.1，需求 12.1、12.2）--- */
+
+  /**
+   * 取文献库实例。
+   *
+   * 经 `orchestratorFor` 而不是现建一个：批准门要接到该项目的审批服务与域名授权上，
+   * 现建的实例没有这些依赖，于是「界面上加文献不用批准、模型加文献要批准」——
+   * 同一个动作两套规则。
+   */
+  const refsFor = async (projectId: string): Promise<RefLibrary> => {
+    await orchestratorFor(projectId);
+    const library = refLibraries.get(projectId);
+    if (library === undefined) throw notFound(`项目不可用：${projectId}`);
+    return library;
+  };
+
+  d.register('ref.list', async (req) => {
+    const library = await refsFor(req.projectId);
+    const refs = library.repo.list({
+      ...(req.query === undefined ? {} : { query: req.query }),
+      ...(req.year === undefined ? {} : { year: req.year }),
+      ...(req.type === undefined ? {} : { type: req.type }),
+      ...(req.hasFulltext === undefined ? {} : { hasFulltext: req.hasFulltext }),
+      limit: req.limit,
+      offset: req.offset,
+    });
+
+    return {
+      refs: refs.map((r) => ({
+        id: r.id,
+        doi: r.doi,
+        type: r.type,
+        cite: citeLine(r.csl),
+        title: r.csl.title ?? null,
+        year: r.year,
+        container: r.container,
+        firstAuthor: r.firstAuthor,
+        source: r.source,
+        oaStatus: r.oaStatus,
+        fulltextArtifactId: r.fulltextArtifactId,
+        // 撤稿标记单独提出来：它埋在 csl.extra 里，UI 不该去猜结构
+        retracted: r.csl.extra?.retracted === true,
+        addedAt: r.addedAt,
+      })),
+      stats: library.repo.stats(),
+    };
+  });
+
+  d.register('ref.get', async (req) => {
+    const library = await refsFor(req.projectId);
+    const ref = library.repo.get(req.refId);
+    if (ref === null) throw notFound(`文献不存在：${req.refId}`);
+    return {
+      ref: { ...ref, cite: citeLine(ref.csl) },
+      // BibTeX 顺手生成并缓存：文献详情页一定会显示它
+      bibtex: library.bibtexFor(req.refId),
+    };
+  });
+
+  d.register('ref.resolve', async (req) => {
+    const library = await refsFor(req.projectId);
+    const result = await library.addMany(req.identifiers, { refresh: req.refresh });
+
+    return {
+      created: result.created,
+      duplicates: result.duplicates,
+      failed: result.failed,
+      outcomes: result.outcomes.map((o) => ({
+        input: o.input,
+        ok: o.ok,
+        refId: o.ref?.id ?? null,
+        cite: o.ref === null ? null : citeLine(o.ref.csl),
+        created: o.created,
+        enriched: o.enriched,
+        reason: o.reason,
+        suspects: o.suspects,
+        // 逐源结果原样给出：失败时用户要能区分「这条不存在」与「网络不通」
+        attempts: o.attempts.map((a) => ({
+          source: a.source,
+          ok: a.ok,
+          reason: a.reason,
+        })),
+      })),
+    };
+  });
+
+  d.register('ref.search', async (req) => {
+    const library = await refsFor(req.projectId);
+    const result = await library.search({
+      text: req.query,
+      ...(req.author === undefined ? {} : { author: req.author }),
+      ...(req.year === undefined ? {} : { year: req.year }),
+      rows: req.limit,
+    });
+
+    return {
+      ok: result.ok,
+      reason: result.reason,
+      candidates: result.candidates.map((c) => ({
+        source: c.source,
+        cite: c.cite,
+        title: c.item.title ?? null,
+        doi: c.item.DOI ?? null,
+        year: c.item.issued?.['date-parts']?.[0]?.[0] ?? null,
+        container: c.item['container-title'] ?? null,
+        abstract: c.item.abstract ?? null,
+        retracted: c.item.extra?.retracted === true,
+        inLibraryRefId: c.inLibraryRefId,
+      })),
+      attempts: result.attempts.map((a) => ({
+        source: a.source,
+        ok: a.ok,
+        reason: a.reason,
+        total: a.total,
+      })),
+    };
+  });
+
+  d.register('ref.delete', async (req) => {
+    const library = await refsFor(req.projectId);
+    if (library.repo.get(req.refId) === null) throw notFound(`文献不存在：${req.refId}`);
+    const deleted = library.repo.delete(req.refId);
+    if (deleted) {
+      d.broadcast({
+        kind: 'refs.changed',
+        projectId: req.projectId,
+        action: 'remove',
+        refIds: [req.refId],
+      });
+    }
+    return { deleted };
+  });
+
+  d.register('ref.merge', async (req) => {
+    const library = await refsFor(req.projectId);
+    const result = library.merge(req.keepId, req.dropId);
+    if (!result.ok || result.ref === null) {
+      throw new DispatchError(
+        makeError('conflict', result.reason ?? '合并失败', {
+          remediation: '确认两个 id 都存在且不相同。',
+        }),
+      );
+    }
+    d.broadcast({
+      kind: 'refs.changed',
+      projectId: req.projectId,
+      action: 'merge',
+      refIds: [req.keepId],
+    });
+    return { ref: { ...result.ref, cite: citeLine(result.ref.csl) } };
+  });
+
+  d.register('ref.duplicates', async (req) => {
+    const library = await refsFor(req.projectId);
+    return library.scanDuplicates({ limit: req.limit });
   });
 
   d.register('credential.delete', async (req) => {

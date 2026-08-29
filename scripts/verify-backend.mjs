@@ -765,7 +765,74 @@ try {
     String(byId('sk10').error?.message ?? '').slice(0, 50),
   );
 
-  // --- 13. stdin 关闭后自行退出 ---
+  // --- 13. 文献库（任务 13.1）---
+  //
+  // 这一段刻意**不打真实上游**：CI 与离线机器上必须可重复。因此只验证不需要
+  // 网络的路径——空库列表、去重扫描、不存在的 id 报 not_found、非法标识在发请求
+  // 之前就被挡住。真正的上游解析由 tests/refs.test.ts 用注入的 fetch 桩覆盖。
+
+  send(req('rf1', { method: 'ref.list', projectId: createdProject.id }));
+  await waitFor(() => byId('rf1') !== undefined, 20000, 'ref.list');
+  check(
+    byId('rf1').ok === true &&
+      Array.isArray(byId('rf1').result?.refs) &&
+      byId('rf1').result?.stats?.total === 0,
+    'ref.list 空库        ',
+    explain('rf1'),
+  );
+
+  send(req('rf2', { method: 'ref.get', projectId: createdProject.id, refId: 'rf_missing' }));
+  await waitFor(() => byId('rf2') !== undefined, 8000, 'ref.get 不存在');
+  check(
+    byId('rf2').ok === false && byId('rf2').error?.code === 'not_found',
+    '不存在的文献 not_found',
+    String(byId('rf2').error?.code ?? '?'),
+  );
+
+  send(req('rf3', { method: 'ref.duplicates', projectId: createdProject.id }));
+  await waitFor(() => byId('rf3') !== undefined, 8000, 'ref.duplicates');
+  check(
+    byId('rf3').ok === true &&
+      Array.isArray(byId('rf3').result?.pairs) &&
+      byId('rf3').result?.truncated === false,
+    'ref.duplicates 空库  ',
+    explain('rf3'),
+  );
+
+  // 标题不是标识：必须在任何网络请求之前就被拒绝，否则会把一个没核对过的
+  // 猜测写进文献库
+  send(
+    req('rf4', {
+      method: 'ref.resolve',
+      projectId: createdProject.id,
+      identifiers: ['Sleep spindles review'],
+    }),
+  );
+  await waitFor(() => byId('rf4') !== undefined, 20000, 'ref.resolve 标题');
+  check(
+    byId('rf4').ok === true &&
+      byId('rf4').result?.failed === 1 &&
+      String(byId('rf4').result?.outcomes?.[0]?.reason ?? '').includes('不是标识'),
+    '标题不能直接入库    ',
+    String(byId('rf4').result?.outcomes?.[0]?.reason ?? '').slice(0, 40),
+  );
+
+  send(
+    req('rf5', {
+      method: 'ref.merge',
+      projectId: createdProject.id,
+      keepId: 'rf_a',
+      dropId: 'rf_a',
+    }),
+  );
+  await waitFor(() => byId('rf5') !== undefined, 8000, 'ref.merge 自合并');
+  check(
+    byId('rf5').ok === false && byId('rf5').error?.code === 'conflict',
+    '自我合并被拒绝      ',
+    String(byId('rf5').error?.code ?? '?'),
+  );
+
+  // --- 14. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

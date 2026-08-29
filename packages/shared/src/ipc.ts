@@ -735,6 +735,66 @@ export const requestSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('connector.grants'), includeRevoked: z.boolean().default(false) }),
 
   z.object({ method: z.literal('connector.revokeGrant'), grantId: idSchema }),
+
+  /* --- 文献库（任务 13.1，需求 12.1、12.2）--- */
+
+  /** 库内条目列表与统计。 */
+  z.object({
+    method: z.literal('ref.list'),
+    projectId: idSchema,
+    query: z.string().max(500).optional(),
+    year: z.number().int().min(1000).max(3000).optional(),
+    type: z.string().min(1).max(60).optional(),
+    hasFulltext: z.boolean().optional(),
+    limit: z.number().int().min(1).max(500).default(100),
+    offset: z.number().int().nonnegative().default(0),
+  }),
+
+  z.object({ method: z.literal('ref.get'), projectId: idSchema, refId: idSchema }),
+
+  /**
+   * 按标识解析并入库。
+   *
+   * `identifiers` 是原始字符串而不是「DOI 数组」：用户会直接粘贴链接、PMID、
+   * 甚至混着来的一堆，后端负责嗅探。要求前端先分类等于把同一段逻辑写两遍。
+   */
+  z.object({
+    method: z.literal('ref.resolve'),
+    projectId: idSchema,
+    identifiers: z.array(z.string().min(1).max(500)).min(1).max(200),
+    refresh: z.boolean().default(false),
+  }),
+
+  /** 检索上游。不入库，返回候选。 */
+  z.object({
+    method: z.literal('ref.search'),
+    projectId: idSchema,
+    query: z.string().min(2).max(500),
+    author: z.string().max(200).optional(),
+    year: z.number().int().min(1000).max(3000).optional(),
+    limit: z.number().int().min(1).max(20).default(8),
+  }),
+
+  z.object({ method: z.literal('ref.delete'), projectId: idSchema, refId: idSchema }),
+
+  /**
+   * 合并两条重复记录。
+   *
+   * 方向由用户给：保留 preprint 还是正式版是他的决定，正文里引的可能就是 preprint。
+   */
+  z.object({
+    method: z.literal('ref.merge'),
+    projectId: idSchema,
+    keepId: idSchema,
+    dropId: idSchema,
+  }),
+
+  /** 全库重复扫描。返回 same 与 likely 两类，前者可批量合并，后者要用户拍板。 */
+  z.object({
+    method: z.literal('ref.duplicates'),
+    projectId: idSchema,
+    limit: z.number().int().min(1).max(200).default(50),
+  }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;
