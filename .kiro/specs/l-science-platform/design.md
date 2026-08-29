@@ -573,15 +573,23 @@ stdio 传输**不继承 `process.env`**，只按白名单放行 `PATH` / `System
 
 内置目录 52 个连接器 / 17 组 / 106 个工具，经声明式 REST→MCP 桥提供（见 AD-12）。授权门的顺序是刻意的：已有有效授权 → 服务端声明只读且非破坏性 → 有审批通道则发卡片阻塞等待 → 没有审批通道则**拒绝**。其中 `readOnlyHint` 只用来决定「默认要不要问用户」，不能用来跳过授权检查本身——那个提示由服务端自己填，没有任何强制机制。拒绝以返回值 `denied: true` 表达而不抛异常：需求 17.3 要求拒绝后不得重试同一请求，用异常表达会让调用方 catch 之后继续，那正是审批要防的事。
 
-**Compute**：`local`（本机，含 GPU）、`ssh`（HPC 集群，Slurm/PBS 作业提交，审批门控）、`byoc`（用户自带云算力，`provider.py` + `provider.json` 协议）。`compute_details` 的 per-provider 笔记按 Claude Science 的语义严格区分——只记录关于该算力环境本身的知识（分区、账户、文件系统布局、环境激活方式、调度器坑），不记录项目内容与分析结果。
+**Compute**（`packages/core/src/compute/`，应用库 v4 + 项目库 v10）：`local`（本机含 GPU）、`ssh`（HPC 集群，Slurm/PBS/无调度器）、`byoc`（用户自带云算力）。
+
+SSH 走**系统的 `ssh` 二进制**而不是 JS SSH 库：实验室集群的接入方式几乎从不是「主机名 + 端口 + 私钥」——跳板机、按主机匹配的私钥、ssh-agent、硬件密钥这些用户在 `~/.ssh/config` 里早就配好了，引库等于重新实现一遍而实现不全的表现是「终端里能连上、平台里连不上」。三条不能改的选项：`BatchMode=yes`（不加则需要交互时永久挂住等一个不存在的 TTY）、`StrictHostKeyChecking=yes`、`PasswordAuthentication=no`。用户自定义选项过白名单——一个 `-o StrictHostKeyChecking=no` 就能把最重要的一条撤掉。主机公钥分三步确认（ssh-keyscan 取回 → 审批卡片展示指纹 → 写 known_hosts），因为首次连接自动信任恰好是中间人唯一需要的窗口；指纹变了时平台不覆盖。远程命令一律 base64 传输：ssh 把 argv 交给远端登录 shell 二次解析，而作业脚本里引号、`$`、反引号、换行是常态。
+
+审批分档（需求 14.4）：只读命令在有持久授权时直接放行，写命令问一次，**破坏性命令先不查授权、每次单独问**——查了就会命中那条为了不被 `ls` 烦到而给的 always 授权。判不出来的一律算写。作业状态里 `lost`（结果不明）是独立一档：调度器不再报告而历史记录拿不到时结果不明，并进 completed 会让用户去读一份没写出来的输出。跟踪用轮询而非长连接（合盖/换网会断连接而作业还在跑），间隔按时长退避，进程重启后接上。BYOC 不绑任何一家云的 SDK，改成三条命令模板 + 状态映射——绑 SDK 会把「自带云算力」变成「自带我们支持的那家云」。
+
+**Environments**（`packages/core/src/envs/`，应用库 v5）：托管 conda 环境的增删查、登记用户既有的 venv、包安装与卸载。核心是**conda / pip 混装门**（需求 15.4）：conda 的 numpy 链接环境里那份 BLAS，PyPI 的 wheel 自带一份，两份都在一个进程里时最坏的结果不是报错而是**算出错误的数值**——它的代价不是「程序挂了」，是「结论错了而没人知道」。判定按共享的原生库分组（九组）而不是按包名，因为 `conda scipy + pip numpy` 包名不同但冲突照样成立；权威来源是探测（`conda list --json` 把 pip 装的包标成 `channel: "pypi"`）而不是我们的安装记录。安装器回退只在家族内（`uv > pip`、`micromamba > mamba > conda`）——让 uv 顶替 conda 不是回退而是换了包来源。内核**直接从用户的 venv 启动**（需求 15.2），不复制任何东西，否则 `pip install -e` 与直接改源码都不再生效。
 
 ### 9. Memory Service
 
-三层作用域：`global`（跨项目的用户偏好与工作习惯）、`project`（项目背景、术语约定、数据说明、既定决策）、`provider`（算力环境笔记）。写入需明确理由，UI 可审查与编辑全部记忆条目。
+三层作用域：`global`（跨项目的用户偏好与工作习惯）、`project`（项目背景、术语约定、数据说明、既定决策）、`compute`（算力环境笔记）。写入需明确理由，UI 可审查与编辑全部记忆条目。
+
+算力环境笔记（需求 14.5）复用 compute 作用域而不另开一张表：跨项目共享、条数上限、必须给理由、按目标隔离都已经在这一层。内容限制靠两步判定——先挡永远不会用来描述一台机器的研究内容标记（研究问题/实验设计/干预组/量表/投稿），再要求存在环境信号（路径、分区、调度器命令、环境激活方式、运维安排）。第二步比黑名单强：「这台机器很好用」一个禁用词都没有却同样不该进。刻意不按「提到了被试」就拒——`/scratch/proj 下每个被试一个子目录` 是文件系统布局，是环境知识里最有用的一类。注入只带本会话真的碰过的目标，因为记忆注入有字符预算而无关目标的笔记会把相关内容挤出去。
 
 ## Data Models
 
-SQLite（`better-sqlite3`），WAL 模式，两级分库（见 AD-7）：`config/app.db` 存跨项目内容，`projects/<id>/project.db` 存单个项目内容。两套迁移各自独立编号（应用库当前 v3，项目库 v1）。
+SQLite（`better-sqlite3`），WAL 模式，两级分库（见 AD-7）：`config/app.db` 存跨项目内容，`projects/<id>/project.db` 存单个项目内容。两套迁移各自独立编号（应用库当前 v5，项目库 v10）。
 
 权威定义在代码里：`packages/core/src/migrations/app.ts` 与 `packages/core/src/migrations/project.ts`。下面列出的是结构要点，字段细节以代码为准——本文档不再重复完整 DDL，避免两处漂移。
 
@@ -819,7 +827,7 @@ CREATE TABLE migrations (
 | M2 多模型路由 | Provider Registry + 能力向量 + 路由器 + 降级链 + committee/escalation + 路由决策面板 + 反馈闭环 |
 | M3 科研工作台 | Skill 系统 + `search_skills` + 内置技能目录 + Plan Engine + 委派/子 agent + Reviewer + findings |
 | M4 论文流水线 | Reference Library + 全文抓取 + Claim Ledger + Manuscript Compiler |
-| M5 算力与连接器 | MCP 连接器 + SSH/HPC + BYOC + 环境与包管理 + `wsl2` 沙箱后端 |
+| M5 算力与连接器 | MCP 连接器 + SSH/HPC（系统 ssh，Slurm/PBS）+ BYOC（命令模板）+ 环境与包管理（混装门）+ 审批收口 |
 
 ## 待确认的决策点
 
