@@ -330,14 +330,86 @@ export type TurnEvent =
   | { kind: 'routing.decision'; decision: RoutingDecision }
   | { kind: 'approval.request'; approval: ApprovalRequest }
   | { kind: 'question.request'; question: UserQuestion }
+  // 这两个此前漏在这份副本里，导致 findings 视图想按 kind 匹配时 TS 说它不是合法值
+  | { kind: 'finding.raised'; finding: Finding }
+  | {
+      kind: 'artifact.saved';
+      artifact: { versionId: string; artifactId: string; filename: string };
+    }
   | { kind: 'turn.end'; usage: Usage };
 
-/** 判断一个事件载荷是不是回合事件。事件通道上还有别的东西（审批广播等）。 */
+/**
+ * 后端推来的**广播**事件（`id === null` 的那些）。
+ *
+ * 与 `TurnEvent` 分开是因为它们不属于任何一个回合：计划被创建、审查跑完、
+ * 技能目录变了，都可能发生在没有活跃回合的时候。
+ *
+ * 这份类型在 shared 里不存在——`eventFrameSchema.payload` 是 `z.unknown()`，
+ * 刻意不在传输层重复校验以免两处漂移。因此它的权威来源是 backend 里的
+ * `d.broadcast({...})` 字面量，改那边时要同步改这里。
+ */
+export type BroadcastEvent =
+  | { kind: 'plan.created'; planId: string; conversationId: string; projectId: string }
+  | {
+      kind: 'plan.decided';
+      planId: string;
+      conversationId: string;
+      projectId: string;
+      decision: 'approve' | 'reject';
+      note: string | null;
+    }
+  | { kind: 'finding.raised'; projectId: string; finding: Finding }
+  | {
+      kind: 'reviewer.finished';
+      projectId: string;
+      conversationId: string;
+      runId: string;
+      status: 'done' | 'failed' | 'degraded';
+      summary: string;
+    }
+  /** 技能是全局的，因此这个事件没有 projectId。 */
+  | { kind: 'skill.changed'; slug: string; action: 'created' | 'updated' | 'deleted' }
+  | {
+      kind: 'background.notice';
+      projectId: string;
+      conversationId: string;
+      taskId: string;
+      label: string;
+      state: string;
+      output: unknown;
+      durationMs: number;
+    };
+
+/**
+ * 判断一个事件载荷是不是回合事件。
+ *
+ * **它是宽松判定**：只看有没有字符串 `kind`。事件通道上广播事件也长这样，
+ * 所以它们会一并被交给回合处理器然后落到无匹配分支被忽略——功能上无害，但
+ * 这意味着**不能靠它区分回合事件与广播事件**。要区分请用 `isBroadcastKind`。
+ */
 export function isTurnEvent(payload: unknown): payload is TurnEvent {
   return (
     typeof payload === 'object' &&
     payload !== null &&
     typeof (payload as { kind?: unknown }).kind === 'string'
+  );
+}
+
+const BROADCAST_KINDS: ReadonlySet<string> = new Set([
+  'plan.created',
+  'plan.decided',
+  'finding.raised',
+  'reviewer.finished',
+  'skill.changed',
+  'background.notice',
+]);
+
+/** 精确判定广播事件。新视图按它过滤，避免把回合分片也当成刷新信号。 */
+export function isBroadcastEvent(payload: unknown): payload is BroadcastEvent {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    BROADCAST_KINDS.has(String((payload as { kind?: unknown }).kind))
   );
 }
 
@@ -1067,3 +1139,281 @@ export const listToolGrants = (includeRevoked = false) =>
 
 export const revokeToolGrant = (grantId: string) =>
   invoke<{ revoked: boolean }>({ method: 'connector.revokeGrant', grantId });
+
+/* ------------------------------------------------------------------ *
+ * 计划（任务 12.5、#10，需求 10.1、10.4）
+ * ------------------------------------------------------------------ */
+
+export type PlanStatus = 'draft' | 'approved' | 'executing' | 'done' | 'failed' | 'rejected';
+export type PlanStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+
+export const PLAN_STATUS_LABEL: Readonly<Record<PlanStatus, string>> = {
+  draft: '待批准',
+  approved: '已批准',
+  executing: '执行中',
+  done: '已完成',
+  failed: '失败',
+  rejected: '已拒绝',
+};
+
+export const PLAN_STEP_STATUS_LABEL: Readonly<Record<PlanStepStatus, string>> = {
+  pending: '待执行',
+  running: '执行中',
+  done: '已完成',
+  failed: '失败',
+  skipped: '已跳过',
+};
+
+export interface DelegationSpec {
+  parallel: boolean;
+  blocking: boolean;
+  maxConcurrent?: number;
+}
+
+export interface PlanStepSpec {
+  ref: string;
+  phase: number;
+  title: string;
+  description: string;
+  skillSlug: string | null;
+  tools: string[];
+  /** 步骤间的交接界面。空着说明下一步不知道该拿什么当输入。 */
+  produces: string[];
+  dependsOn: string[];
+  /** 这一步是去查事实/数值。影响「硬编码数值」这类校验的判定。 */
+  retrieval: boolean;
+  delegation: DelegationSpec | null;
+}
+
+export interface PlanSpec {
+  goal: string;
+  phases: Array<{ phase: number; title: string }>;
+  steps: PlanStepSpec[];
+}
+
+export interface PlanStepRecord {
+  id: string;
+  planId: string;
+  ref: string;
+  phase: number;
+  seq: number;
+  title: string | null;
+  description: string | null;
+  skillSlug: string | null;
+  status: PlanStepStatus;
+  delegation: Record<string, unknown> | null;
+  resultRef: string | null;
+}
+
+export interface PlanProgress {
+  total: number;
+  byStatus: Record<PlanStepStatus, number>;
+  /** 最小的「还有未完成步骤」的阶段。全部完成时为 null。 */
+  currentPhase: number | null;
+}
+
+export interface PlanView {
+  id: string;
+  conversationId: string;
+  status: PlanStatus;
+  createdAt: number;
+  spec: PlanSpec;
+  steps: PlanStepRecord[];
+  progress: PlanProgress;
+}
+
+/** 计划校验问题。`level === 'error'` 阻止执行。 */
+export interface PlanIssue {
+  level: 'error' | 'warning';
+  code: string;
+  message: string;
+  ref?: string;
+  suggestion?: string;
+}
+
+export const listPlans = (projectId: string, conversationId: string, limit = 20) =>
+  invoke<{ plans: PlanView[] }>({ method: 'plan.list', projectId, conversationId, limit });
+
+export const loadPlan = (projectId: string, planId: string) =>
+  invoke<{ plan: PlanView }>({ method: 'plan.get', projectId, planId });
+
+export const decidePlan = (
+  projectId: string,
+  planId: string,
+  decision: 'approve' | 'reject',
+  note?: string,
+) =>
+  invoke<{ planId: string; status: 'approved' | 'rejected' }>({
+    method: 'plan.decide',
+    projectId,
+    planId,
+    decision,
+    ...(note === undefined || note === '' ? {} : { note }),
+  });
+
+export const replacePlan = (projectId: string, planId: string, spec: unknown) =>
+  invoke<{ plan: PlanView | null; issues: PlanIssue[] }>({
+    method: 'plan.replace',
+    projectId,
+    planId,
+    spec,
+  });
+
+/* ------------------------------------------------------------------ *
+ * 审查发现（任务 12.8、#10，需求 11）
+ * ------------------------------------------------------------------ */
+
+export type FindingSeverity = 'warn' | 'fail';
+export type FindingCategory =
+  'evidence' | 'statistics' | 'reproducibility' | 'consistency' | 'integrity';
+export type FindingStatus = 'open' | 'claimed-fixed' | 'resolved' | 'dismissed';
+
+export const FINDING_CATEGORY_LABEL: Readonly<Record<FindingCategory, string>> = {
+  evidence: '证据',
+  statistics: '统计',
+  reproducibility: '可复现',
+  consistency: '一致性',
+  integrity: '完整性',
+};
+
+export const FINDING_STATUS_LABEL: Readonly<Record<FindingStatus, string>> = {
+  open: '待处理',
+  'claimed-fixed': '已自报待复核',
+  resolved: '已解决',
+  dismissed: '判为误报',
+};
+
+export interface FindingEvidence {
+  kind: 'artifact-version' | 'message' | 'claim' | 'plan-step';
+  id: string;
+  note?: string;
+}
+
+export interface Finding {
+  id: string;
+  conversationId: string;
+  reviewerRunId: string | null;
+  severity: FindingSeverity;
+  category: FindingCategory;
+  title: string;
+  detail: string | null;
+  /** 必非空——引不到真实对象的发现在写入时就被拒了（需求 11.8）。 */
+  evidence: FindingEvidence[];
+  status: FindingStatus;
+  /** agent 自报的修复说明，或审查者的复核依据。 */
+  addressedNote: string | null;
+  addressedAt: number | null;
+  createdAt: number;
+}
+
+export interface FindingSummary {
+  /** FAIL 级未关闭数。非零时不该宣称任务完成。 */
+  blocking: number;
+  warnings: number;
+  claimedFixed: number;
+  byCategory: Record<string, number>;
+}
+
+export type ReviewerTrigger = 'turn-end' | 'artifact-saved' | 'pre-compile' | 'user-request';
+export type ReviewerRunStatus = 'running' | 'done' | 'failed' | 'degraded';
+
+export const REVIEWER_TRIGGER_LABEL: Readonly<Record<ReviewerTrigger, string>> = {
+  'turn-end': '回合结束',
+  'artifact-saved': '制品保存',
+  'pre-compile': '编译前',
+  'user-request': '用户请求',
+};
+
+export interface ReviewerRun {
+  id: string;
+  conversationId: string;
+  trigger: ReviewerTrigger;
+  /** 执行审查的模型。异厂商约束靠它可核查（需求 11.2）。 */
+  modelId: string;
+  status: ReviewerRunStatus;
+  summary: string | null;
+  startedAt: number | null;
+  endedAt: number | null;
+}
+
+export const listFindings = (
+  projectId: string,
+  conversationId: string,
+  options: { status?: FindingStatus | 'unresolved'; limit?: number } = {},
+) =>
+  invoke<{ findings: Finding[]; summary: FindingSummary }>({
+    method: 'finding.list',
+    projectId,
+    conversationId,
+    ...(options.status === undefined ? {} : { status: options.status }),
+    limit: options.limit ?? 200,
+  });
+
+export const decideFinding = (
+  projectId: string,
+  findingId: string,
+  decision: 'resolve' | 'dismiss' | 'reopen',
+  note?: string,
+) =>
+  invoke<{ finding: Finding | null }>({
+    method: 'finding.decide',
+    projectId,
+    findingId,
+    decision,
+    ...(note === undefined || note === '' ? {} : { note }),
+  });
+
+export const runReviewer = (projectId: string, conversationId: string) =>
+  invoke<{ scheduled: true; merged: boolean }>({
+    method: 'reviewer.run',
+    projectId,
+    conversationId,
+  });
+
+export const listReviewerRuns = (projectId: string, conversationId: string, limit = 20) =>
+  invoke<{ runs: ReviewerRun[] }>({
+    method: 'reviewer.runs',
+    projectId,
+    conversationId,
+    limit,
+  });
+
+/* ------------------------------------------------------------------ *
+ * 子 agent（任务 12.6、#10，需求 10.5-10.7）
+ * ------------------------------------------------------------------ */
+
+export type SubAgentStatus = 'running' | 'done' | 'failed' | 'stopped';
+
+export const SUBAGENT_STATUS_LABEL: Readonly<Record<SubAgentStatus, string>> = {
+  running: '运行中',
+  done: '已完成',
+  failed: '失败',
+  stopped: '已停止',
+};
+
+export interface ChildConversation {
+  id: string;
+  title: string | null;
+  agentId: string | null;
+  status: ConversationStatus;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt: number | null;
+  parentConversationId: string | null;
+  /**
+   * 此刻是否还有活的 runner。
+   *
+   * 已结束的子 agent 只剩库里的会话行，`agentStatus` 与 `blocking` 都是 null——
+   * 句柄清理之后 done 与 failed 的区别就丢了，最终陈述在子会话的消息里。
+   */
+  running: boolean;
+  agentStatus: SubAgentStatus | null;
+  blocking: boolean | null;
+}
+
+export const listChildConversations = (projectId: string, conversationId: string) =>
+  invoke<{ children: ChildConversation[] }>({
+    method: 'conversation.children',
+    projectId,
+    conversationId,
+  });

@@ -12,6 +12,7 @@ import { ApprovalCard } from './components/ApprovalCard.js';
 import { ArtifactsView } from './components/ArtifactsView.js';
 import { ChatView } from './components/ChatView.js';
 import { ConnectorsView } from './components/ConnectorsView.js';
+import { ConversationSidebar } from './components/ConversationSidebar.js';
 import { IsolationBadge } from './components/IsolationBadge.js';
 import { RoutingPanel } from './components/RoutingPanel.js';
 import { SettingsView } from './components/SettingsView.js';
@@ -584,41 +585,54 @@ export function App(): React.JSX.Element {
           ))}
 
           {view === 'chat' && (
-            <>
-              {turn.error !== null && (
-                <p className="view__error" role="alert">
-                  {turn.error}
-                </p>
-              )}
-              <ChatView
-                items={turn.items}
-                toolCalls={turn.toolCalls}
-                decisions={turn.decisions}
-                running={turn.running}
-              />
-              {/*
+            <div className="chat__layout">
+              <div className="chat__stream">
+                {turn.error !== null && (
+                  <p className="view__error" role="alert">
+                    {turn.error}
+                  </p>
+                )}
+                <ChatView
+                  items={turn.items}
+                  toolCalls={turn.toolCalls}
+                  decisions={turn.decisions}
+                  running={turn.running}
+                />
+                {/*
                 有覆盖在生效时必须在输入区旁边说出来。藏在路由面板里的话，
                 用户设完切回会话，会以为路由还是自动的——然后对结果感到莫名
               */}
-              <OverrideBar
-                override={routingOverride}
-                onClear={() => setRoutingOverride({})}
-                onOpenSettings={() => setView('routing')}
+                <OverrideBar
+                  override={routingOverride}
+                  onClear={() => setRoutingOverride({})}
+                  onOpenSettings={() => setView('routing')}
+                />
+                {/* 本轮累计用量常驻在输入区上方（需求 18.4） */}
+                <TurnUsageBar usage={turn.lastUsage} />
+                <Composer
+                  disabled={composerBlockedReason !== null}
+                  disabledReason={composerBlockedReason}
+                  running={turn.running}
+                  onSend={(text, skills) => {
+                    void turn.send(text, routingOverride, skills);
+                    // 覆盖是一次性的，发出去就清掉
+                    if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
+                  }}
+                  onInterrupt={() => void turn.interrupt()}
+                />
+              </div>
+
+              {/*
+                计划、审查、子 agent 挂在聊天区旁边而不是各占一个顶层导航项：
+                它们是会话内的上下文，需要与聊天内容对照着看——一条阻断级发现指的是
+                刚才那段分析。侧栏可折叠，折叠后靠徽章提醒。
+              */}
+              <ConversationSidebar
+                projectId={projectId}
+                conversationId={conversationId}
+                onOpenConversation={(id) => setConversationId(id)}
               />
-              {/* 本轮累计用量常驻在输入区上方（需求 18.4） */}
-              <TurnUsageBar usage={turn.lastUsage} />
-              <Composer
-                disabled={composerBlockedReason !== null}
-                disabledReason={composerBlockedReason}
-                running={turn.running}
-                onSend={(text, skills) => {
-                  void turn.send(text, routingOverride, skills);
-                  // 覆盖是一次性的，发出去就清掉
-                  if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
-                }}
-                onInterrupt={() => void turn.interrupt()}
-              />
-            </>
+            </div>
           )}
 
           {view === 'artifacts' && <ArtifactsView projectId={projectId} />}
