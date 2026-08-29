@@ -19,9 +19,9 @@
 
 import { randomUUID } from 'node:crypto';
 
-import type { ApprovalRequest, GrantScope } from '@l-science/shared';
+import { APPROVAL_EXPIRY_PRESETS, type ApprovalRequest, type GrantScope } from '@l-science/shared';
 
-import type { ApprovalRepo } from '../repo/approvals.js';
+import type { ApprovalRepo, ApprovalRow, ApprovalState } from '../repo/approvals.js';
 import {
   approvalFingerprint,
   type ApprovalDraft,
@@ -32,12 +32,23 @@ import {
 /** 默认等待上限。见 ApprovalDraft.timeoutMs 的说明。 */
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
-/** 各作用域对应的有效期。`always` 无限期，其余由调用方按上下文判断。 */
-const SCOPE_DURATION_MS: Readonly<Record<GrantScope, number | null>> = {
+/**
+ * 各作用域的**默认**有效期（需求 17.5）。
+ *
+ * `session` 与 `project` 是 null 而不是某个时长：它们的生命周期由会话与项目决定，
+ * 用时钟去限制会造出一个奇怪的状态——授权还在作用域内但已经过期，而用户找不到
+ * 任何时间线索来解释它为什么失效了。
+ *
+ * `always` 默认给 90 天而不是永久。「所有项目内都不再询问」是这套机制里最宽的一档，
+ * 而用户按下它时想的通常是「这段时间我都在弄这个」，不是「余生都同意」。给一个
+ * 到期日意味着这条授权会被重新审视一次，而重新审视是这类宽授权唯一的安全阀。
+ * 用户可以在卡片上显式选「不过期」——那是他明确的意思，与默认落到永久不是一回事。
+ */
+const SCOPE_DEFAULT_DURATION_MS: Readonly<Record<GrantScope, number | null>> = {
   once: 0,
-  session: null, // 由会话生命周期决定，不用时钟
+  session: null,
   project: null,
-  always: null,
+  always: 90 * 24 * 60 * 60 * 1000,
 };
 
 interface Waiter {
@@ -117,6 +128,16 @@ export class ApprovalService {
     }
 
     const scopeOptions = draft.scopeOptions ?? [];
+    /*
+     * 有效期档位（需求 17.5）。
+     *
+     * 只在存在**持久**作用域时提供。一次性确认给有效期选择是纯粹的困惑：那次放行
+     * 在操作结束的一刻就结束了，「7 天」对它没有意义。
+     */
+    const expiryOptions =
+      draft.expiryOptions ??
+      (scopeOptions.some((s) => s !== 'once') ? APPROVAL_EXPIRY_PRESETS : []);
+
     const request: ApprovalRequest = {
       id: `ap_${randomUUID()}`,
       kind: draft.kind,
@@ -126,6 +147,7 @@ export class ApprovalService {
       reversible: draft.reversible,
       undoHint: draft.undoHint ?? null,
       scopeOptions,
+      expiryOptions,
       payload: draft.payload,
     };
 
@@ -180,6 +202,14 @@ export class ApprovalService {
     note?: string;
     /** 用户选择的作用域。仅在 approve 且请求提供了 scopeOptions 时有意义。 */
     scope?: GrantScope;
+    /**
+     * 用户选择的有效期（毫秒），`null` 表示不过期（需求 17.5）。
+     *
+     * 省略时用该作用域的默认值。不在 `expiryOptions` 里的值会被拒收并降级到默认——
+     * 与作用域同一条理由：那通常是 UI 与后端版本不一致，此时按更保守的默认处理
+     * 比接受一个我们没打算提供的值更合理。
+     */
+    expiresInMs?: number | null;
   }): boolean {
     const waiter = this.#waiters.get(input.approvalId);
     if (waiter === undefined) return false;
@@ -205,7 +235,7 @@ export class ApprovalService {
     this.#settle(input.approvalId, {
       state: 'approved',
       scope,
-      expiresAt: this.#expiryFor(scope),
+      expiresAt: this.#expiryFor(waiter.request, scope, input.expiresInMs),
       ...(input.note !== undefined ? { note: input.note } : {}),
     });
     return true;
@@ -225,9 +255,27 @@ export class ApprovalService {
     return order.find((s) => request.scopeOptions.includes(s)) ?? 'once';
   }
 
-  #expiryFor(scope: GrantScope): number | null {
-    const duration = SCOPE_DURATION_MS[scope];
-    return duration === null || duration === 0 ? null : this.#now() + duration;
+  /**
+   * 确定到期时刻（需求 17.5）。
+   *
+   * 顺序：用户选的（且在提供的档位内）→ 该作用域的默认值 → 不过期。
+   *
+   * `once` 恒为 null：它不产生持久授权，一个到期时刻对它没有意义，而写上一个会让
+   * 调用方误以为要落库。
+   */
+  #expiryFor(
+    request: ApprovalRequest,
+    scope: GrantScope,
+    requested: number | null | undefined,
+  ): number | null {
+    if (scope === 'once') return null;
+
+    if (requested !== undefined && request.expiryOptions.includes(requested)) {
+      return requested === null ? null : this.#now() + requested;
+    }
+
+    const fallback = SCOPE_DEFAULT_DURATION_MS[scope];
+    return fallback === null || fallback === 0 ? null : this.#now() + fallback;
   }
 
   #settle(id: string, result: ApprovalResult): void {
@@ -295,6 +343,42 @@ export class ApprovalService {
     conversationId: string | null,
   ): void {
     this.#denied.delete(this.#denialKey(conversationId, kind, payload));
+  }
+
+  /**
+   * 按审批 id 撤销拒绝记忆。
+   *
+   * 比 `forgetDenial` 好用的地方是调用方不必重构出当初的 payload——界面上用户看到的是
+   * 一条历史记录，而从那条记录反推 payload 要求 UI 复制一份指纹逻辑。
+   *
+   * 返回是否命中。返回假说明那条记录不是被拒绝的，或者它的载荷已经读不出来了。
+   */
+  forgetDenialById(approvalId: string): boolean {
+    const row = this.#repo.get(approvalId);
+    if (row === null || row.state !== 'denied') return false;
+    this.forgetDenial(row.kind, row.request.payload, row.conversationId);
+    return true;
+  }
+
+  /**
+   * 审批历史（需求 17.1、17.2 的可核查面）。
+   *
+   * 落盘的目的一直是留审计痕迹（见 `ApprovalRepo` 的文件头），但在这之前它没有出口——
+   * 「谁在什么时候批准了删除哪个制品」在库里有答案而界面上问不出来，那等于没有审计。
+   *
+   * 一并给出**当前是否仍在拒绝记忆里**：数据库里的 denied 行是历史，而拒绝记忆是
+   * 进程内的、决定「现在还会不会被自动拒绝」的那份。两者在界面上必须分开——用户看到
+   * 一条三天前的拒绝记录时，他想知道的是「现在还挡着吗」。
+   */
+  history(
+    options: { conversationId?: string; state?: ApprovalState; limit?: number } = {},
+  ): readonly (ApprovalRow & { stillDenied: boolean })[] {
+    return this.#repo.list(options).map((row) => ({
+      ...row,
+      stillDenied:
+        row.state === 'denied' &&
+        this.#denied.has(this.#denialKey(row.conversationId, row.kind, row.request.payload)),
+    }));
   }
 
   /** 取消某个等待中的审批。用于会话被中止等场景。 */

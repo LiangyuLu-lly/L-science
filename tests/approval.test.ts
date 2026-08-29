@@ -367,6 +367,143 @@ describe('授权作用域（需求 17.5）', () => {
   });
 });
 
+describe('授权有效期（需求 17.5）', () => {
+  it('有持久作用域时自动提供有效期档位', () => {
+    void service.request(draft({ scopeOptions: ['once', 'project'] }));
+    expect(published[0]?.expiryOptions.length).toBeGreaterThan(0);
+    // 档位里必须有「不过期」这一项——用户明确要长期授权时得有这个选择
+    expect(published[0]?.expiryOptions).toContain(null);
+  });
+
+  it('一次性确认不提供有效期选择', () => {
+    // 那次放行在操作结束的一刻就结束了，「7 天」对它没有意义
+    void service.request(draft());
+    expect(published[0]?.expiryOptions).toEqual([]);
+  });
+
+  it('用户选的有效期被换算成到期时刻', async () => {
+    const pending = service.request(
+      draft({ scopeOptions: ['project'], expiryOptions: [3_600_000, null] }),
+    );
+    service.decide({
+      approvalId: published[0]?.id ?? '',
+      decision: 'approve',
+      scope: 'project',
+      expiresInMs: 3_600_000,
+    });
+    const result = await pending;
+    expect(result.state).toBe('approved');
+    if (result.state !== 'approved') return;
+    expect(result.expiresAt).not.toBeNull();
+    expect((result.expiresAt ?? 0) - Date.now()).toBeGreaterThan(3_500_000);
+  });
+
+  it('选「不过期」时 expiresAt 为 null', async () => {
+    const pending = service.request(
+      draft({ scopeOptions: ['project'], expiryOptions: [3_600_000, null] }),
+    );
+    service.decide({
+      approvalId: published[0]?.id ?? '',
+      decision: 'approve',
+      scope: 'project',
+      expiresInMs: null,
+    });
+    expect(await pending).toMatchObject({ expiresAt: null });
+  });
+
+  it('不在档位里的有效期不被采纳，落到该作用域的默认值', async () => {
+    const pending = service.request(
+      draft({ scopeOptions: ['project'], expiryOptions: [3_600_000, null] }),
+    );
+    service.decide({
+      approvalId: published[0]?.id ?? '',
+      decision: 'approve',
+      scope: 'project',
+      // 1 分钟不在提供的档位里：通常是 UI 与后端版本不一致
+      expiresInMs: 60_000,
+    });
+    // project 作用域的默认是「跟随项目生命周期」，因此 null
+    expect(await pending).toMatchObject({ expiresAt: null });
+  });
+
+  it('always 默认给一个到期日而不是永久', async () => {
+    /*
+     * 「所有项目内都不再询问」是最宽的一档，而用户按下它时想的通常是
+     * 「这段时间我都在弄这个」，不是「余生都同意」。给一个到期日意味着这条授权会被
+     * 重新审视一次，而重新审视是这类宽授权唯一的安全阀。
+     */
+    const pending = service.request(draft({ scopeOptions: ['always'] }));
+    service.decide({ approvalId: published[0]?.id ?? '', decision: 'approve', scope: 'always' });
+    const result = await pending;
+    if (result.state !== 'approved') throw new Error('应当获批');
+    expect(result.expiresAt).not.toBeNull();
+  });
+
+  it('once 恒无到期时刻', async () => {
+    const pending = service.request(draft({ scopeOptions: ['once', 'project'] }));
+    service.decide({ approvalId: published[0]?.id ?? '', decision: 'approve', scope: 'once' });
+    // 它不产生持久授权，写上一个到期时刻会让调用方误以为要落库
+    expect(await pending).toMatchObject({ scope: 'once', expiresAt: null });
+  });
+});
+
+describe('审批历史与拒绝记忆的撤销（需求 17.1、17.5）', () => {
+  it('history 带上当时给用户看的内容', async () => {
+    const pending = service.request(
+      draft({ title: '删除 3 个制品？', impact: '磁盘上的文件会被移除' }),
+    );
+    service.decide({ approvalId: published[0]?.id ?? '', decision: 'approve' });
+    await pending;
+
+    const rows = service.history();
+    expect(rows).toHaveLength(1);
+    // 只记 kind 与 state 的话，事后无法判断那次同意是基于一份完整说明还是一句含糊提示
+    expect(rows[0]?.request.title).toBe('删除 3 个制品？');
+    expect(rows[0]?.request.impact).toBe('磁盘上的文件会被移除');
+    expect(rows[0]?.state).toBe('approved');
+  });
+
+  it('history 区分「历史上被拒过」与「现在还在拦截」', async () => {
+    const pending = service.request(draft({ payload: { path: 'D:/x' } }));
+    service.decide({ approvalId: published[0]?.id ?? '', decision: 'deny', note: '不行' });
+    await pending;
+
+    const denied = service.history({ state: 'denied' });
+    expect(denied).toHaveLength(1);
+    // 用户看到一条三天前的拒绝记录时，他想知道的是「现在还挡着吗」
+    expect(denied[0]?.stillDenied).toBe(true);
+  });
+
+  it('按 id 撤销拒绝记忆之后同一请求会重新询问', async () => {
+    const first = service.request(draft({ payload: { path: 'D:/x' } }));
+    const id = published[0]?.id ?? '';
+    service.decide({ approvalId: id, decision: 'deny' });
+    await first;
+
+    // 撤销之前：同一请求被自动拒绝，不再打扰用户
+    const auto = await service.request(draft({ payload: { path: 'D:/x' } }));
+    expect(auto).toMatchObject({ state: 'denied', fromPriorDenial: true });
+
+    expect(service.forgetDenialById(id)).toBe(true);
+    expect(service.history({ state: 'denied' })[0]?.stillDenied).toBe(false);
+
+    // 撤销之后：重新发起会真的挂起等用户决定
+    const reopened = service.request(draft({ payload: { path: 'D:/x' } }));
+    expect(service.pending()).toHaveLength(1);
+    service.decide({ approvalId: service.pending()[0]?.request.id ?? '', decision: 'approve' });
+    expect(await reopened).toMatchObject({ state: 'approved' });
+  });
+
+  it('撤销一条不是被拒绝的记录返回假', async () => {
+    const pending = service.request(draft());
+    const id = published[0]?.id ?? '';
+    service.decide({ approvalId: id, decision: 'approve' });
+    await pending;
+    expect(service.forgetDenialById(id)).toBe(false);
+    expect(service.forgetDenialById('ap_不存在')).toBe(false);
+  });
+});
+
 describe('取消与关闭', () => {
   it('取消返回 cancelled', async () => {
     const pending = service.request(draft());

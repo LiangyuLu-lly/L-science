@@ -34,6 +34,7 @@ import {
   groupsOf,
   installCommand,
   isNativeSensitive,
+  MemoryEnvGrantStore,
   needsRestart,
   normalizePackageName,
   parseCondaList,
@@ -837,6 +838,189 @@ describe('环境仓储与服务', () => {
 
   it('没有环境时提示去 sync', () => {
     expect(service.render()).toContain('sync');
+  });
+
+  /* ---------------- 装包审批（任务 14.5，需求 17.1）---------------- */
+
+  /** 假审批服务：记下卡片，按给定结果作答。 */
+  const fakeApprovals = (
+    decide: (draft: Record<string, unknown>) => Record<string, unknown>,
+  ): {
+    request: (d: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    cards: Record<string, unknown>[];
+  } => {
+    const cards: Record<string, unknown>[] = [];
+    return {
+      cards,
+      request: async (d) => {
+        cards.push(d);
+        return decide(d);
+      },
+    };
+  };
+
+  /**
+   * 假后台执行器：只登记不执行。
+   *
+   * 接上它是必要的——不接的话 `install` 会同步跑真命令，而真命令跑完会重新探测环境，
+   * 于是假路径被标成 missing，下一次 plan 就在「目录不在了」那一档提前返回。那时看到的
+   * 失败与审批无关，但看起来像审批坏了。
+   */
+  const fakeBackground = (): { submit: (input: { label: string }) => string; labels: string[] } => {
+    const labels: string[] = [];
+    return {
+      labels,
+      submit: (input) => {
+        labels.push(input.label);
+        return `bg_${String(labels.length)}`;
+      },
+    };
+  };
+
+  const withApprovals = (
+    approvals: ReturnType<typeof fakeApprovals>,
+    grants?: MemoryEnvGrantStore,
+  ): EnvService =>
+    new EnvService({
+      repo,
+      projectId: 'p1',
+      approvals: () => approvals as never,
+      background: () => fakeBackground() as never,
+      ...(grants === undefined ? {} : { grants: () => grants }),
+    });
+
+  it('装包要过审批，卡片说清命令与「这是任意代码执行」', async () => {
+    const env = add({ name: 'gate', path: join(root, 'gate') });
+    const approvals = fakeApprovals(() => ({ state: 'denied', fromPriorDenial: false }));
+    const service2 = withApprovals(approvals);
+
+    const result = await service2.install({
+      envId: env.id,
+      request: { specs: ['tqdm'] },
+      conversationId: 'c1',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.approval.source).toBe('denied');
+    // 显式拒绝不可重试（需求 17.3）
+    expect(result.approval.retryable).toBe(false);
+
+    const card = approvals.cards[0];
+    expect(card?.kind).toBe('package-install');
+    // 用户能判断的是命令，而不是「安装 1 个包」这种概述
+    expect(String(card?.detail)).toContain('tqdm');
+    // pip install 会跑包自带的构建脚本，很多人不知道这一点
+    expect(String(card?.impact)).toContain('任意代码执行');
+    expect(String(card?.impact)).toContain('所有会话');
+    // 构建脚本已经跑过了，那一步不可逆
+    expect(card?.reversible).toBe(false);
+    // 跨项目的「随便往环境里装东西」不该出现在下拉框里
+    expect(card?.scopeOptions).not.toContain('always');
+  });
+
+  it('超时可以重试，显式拒绝不行', async () => {
+    const env = add({ name: 'gate2', path: join(root, 'gate2') });
+    const timeout = fakeApprovals(() => ({ state: 'timeout', waitedMs: 1000 }));
+    const result = await withApprovals(timeout).install({
+      envId: env.id,
+      request: { specs: ['tqdm'] },
+      conversationId: 'c1',
+    });
+    expect(result.approval.retryable).toBe(true);
+  });
+
+  it('批准并选持久作用域后同一环境不再问', async () => {
+    const env = add({ name: 'gate3', path: join(root, 'gate3') });
+    const grants = new MemoryEnvGrantStore();
+    const approvals = fakeApprovals(() => ({
+      state: 'approved',
+      scope: 'project',
+      expiresAt: null,
+    }));
+    const service2 = withApprovals(approvals, grants);
+
+    const first = await service2.install({
+      envId: env.id,
+      request: { specs: ['tqdm'] },
+      conversationId: 'c1',
+    });
+    expect(first.ok).toBe(true);
+    expect(first.approval.source).toBe('approved');
+
+    const second = await service2.install({
+      envId: env.id,
+      request: { specs: ['click'] },
+      conversationId: 'c1',
+    });
+    expect(second.approval.source).toBe('existing-grant');
+    // 第二次不该再弹卡片
+    expect(approvals.cards).toHaveLength(1);
+  });
+
+  it('审批门排在混装检查之后：注定被拒的请求不该先问用户', async () => {
+    const env = add({ name: 'gate4', path: join(root, 'gate4') });
+    repo.replacePackages(env.id, [pkg('numpy', 'conda')]);
+    const approvals = fakeApprovals(() => ({ state: 'approved', scope: 'once', expiresAt: null }));
+
+    const result = await withApprovals(approvals).install({
+      envId: env.id,
+      request: { specs: ['numpy'], family: 'pypi' },
+      conversationId: 'c1',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.plan.conflicts).toHaveLength(1);
+    // 顺序反过来的话，他批准之后才看到「这会造成混装」
+    expect(approvals.cards).toHaveLength(0);
+  });
+
+  it('force 继续时卡片上要标出混装风险', async () => {
+    const env = add({ name: 'gate5', path: join(root, 'gate5') });
+    repo.replacePackages(env.id, [pkg('numpy', 'conda')]);
+    const approvals = fakeApprovals(() => ({ state: 'denied', fromPriorDenial: false }));
+
+    await withApprovals(approvals).install({
+      envId: env.id,
+      request: { specs: ['numpy'], family: 'pypi' },
+      conversationId: 'c1',
+      force: true,
+    });
+    expect(approvals.cards).toHaveLength(1);
+    expect(String(approvals.cards[0]?.detail)).toContain('强行继续');
+    expect(String(approvals.cards[0]?.detail)).toContain('BLAS');
+  });
+
+  it('不接审批服务时不审批——测试与控制面脚本走这条路', async () => {
+    const env = add({ name: 'gate6', path: join(root, 'gate6') });
+    const result = await service.install({
+      envId: env.id,
+      request: { specs: ['tqdm'] },
+      conversationId: 'c1',
+    });
+    expect(result.approval.source).toBe('skipped');
+  });
+
+  it('装包授权按作用域生效，过期后失效', () => {
+    const grants = new MemoryEnvGrantStore();
+    grants.grant({ envId: 'env_a', scope: 'project', scopeId: 'p1', expiresAt: null });
+    expect(grants.check({ envId: 'env_a', projectId: 'p1', conversationId: null })).toBe(true);
+    expect(grants.check({ envId: 'env_a', projectId: 'p2', conversationId: null })).toBe(false);
+    expect(grants.check({ envId: 'env_b', projectId: 'p1', conversationId: null })).toBe(false);
+
+    grants.grant({ envId: 'env_c', scope: 'project', scopeId: 'p1', expiresAt: Date.now() - 1000 });
+    // 用户选了「1 小时」就该 1 小时后失效，即使进程还没重启
+    expect(grants.check({ envId: 'env_c', projectId: 'p1', conversationId: null })).toBe(false);
+
+    // once 不入库：入库了说明写入方用错了作用域
+    grants.grant({ envId: 'env_d', scope: 'once', scopeId: null, expiresAt: null });
+    expect(grants.check({ envId: 'env_d', projectId: 'p1', conversationId: null })).toBe(false);
+  });
+
+  it('装包授权可撤销（需求 17.5）', () => {
+    const grants = new MemoryEnvGrantStore();
+    grants.grant({ envId: 'env_a', scope: 'project', scopeId: 'p1', expiresAt: null });
+    grants.grant({ envId: 'env_a', scope: 'session', scopeId: 'c1', expiresAt: null });
+    expect(grants.revoke('env_a')).toBe(2);
+    expect(grants.check({ envId: 'env_a', projectId: 'p1', conversationId: 'c1' })).toBe(false);
   });
 
   it('创建环境时拒绝非法名字与保留名', async () => {

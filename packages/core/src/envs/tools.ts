@@ -421,15 +421,31 @@ export function createManageEnvironmentsTool(
             ...(input.action === 'uninstall' ? { uninstall: true } : {}),
             conversationId: ctx.conversationId,
             ...(input.force === undefined ? {} : { force: input.force }),
+            // 发起者进审批卡片：用户要知道是哪个模型想装这个包
+            ...(ctx.modelId === undefined ? {} : { modelId: ctx.modelId }),
           });
 
           if (!result.ok) {
             /*
-             * 混装被挡住时用一个专门的错误名。
+             * 三种失败用三个不同的错误名。
              *
-             * 模型看到 `PackageConflict` 而不是笼统的失败，才有机会走对下一步——
-             * 而对的下一步是问用户（换来源、还是新建环境），不是加 force 重试。
+             * 模型看到具体的名字才有机会走对下一步，而三者对的下一步完全不同：
+             * 混装要问用户选哪种解决办法；审批被拒要换做法或问用户；参数错要改参数。
+             * 笼统的「失败」会让它统一走「加个 force 再试」。
              */
+            if (result.approval.source === 'denied') {
+              return {
+                ok: false,
+                output: errorOutput(
+                  'PackageInstallDenied',
+                  `${result.reason ?? '未获批准'}\n` +
+                    (result.approval.retryable
+                      ? '（超时或取消导致，可以稍后重新发起）'
+                      : '（用户明确拒绝，不要重新发起同一请求。' +
+                        '需要这个包的话说明它是做什么用的，让用户决定。）'),
+                ),
+              };
+            }
             const ename = result.plan.conflicts.length > 0 ? 'PackageConflict' : 'InstallRejected';
             return {
               ok: false,
@@ -448,6 +464,7 @@ export function createManageEnvironmentsTool(
             `已提交后台任务：${input.action === 'uninstall' ? '卸载' : '安装'} ${input.specs.join('、')}`,
             `环境：${resolved.name}　安装器：${result.plan.installer?.id ?? '?'}`,
             `命令：${result.plan.command ?? ''}`,
+            result.approval.source === 'existing-grant' ? '（放行依据：此前已批准的持久授权）' : '',
             '',
             restartNotice({
               required: result.plan.restartRequired,
@@ -457,7 +474,7 @@ export function createManageEnvironmentsTool(
             }),
             '',
             '完成后结果会自动回到对话里，不需要反复查。',
-          ];
+          ].filter((line, index, all) => !(line === '' && all[index - 1] === ''));
           return {
             ok: true,
             output: textOutput(lines.join('\n')),

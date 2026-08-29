@@ -104,6 +104,7 @@ import {
   commonVenvLocations,
   condaAvailable,
   listCondaEnvironments,
+  MemoryEnvGrantStore,
   resetInstallerCache,
   restartNotice,
   type EnvLanguage,
@@ -473,6 +474,15 @@ async function main(): Promise<void> {
    * 而内核池在每个项目的初始化路径上。
    */
   const envsRepo = new EnvsRepo(store.db);
+
+  /*
+   * 装包授权（需求 17.5）。
+   *
+   * 内存实现，全局一份。不落库的理由见 `MemoryEnvGrantStore` 的注释：装包授权最宽只到
+   * project，而一条跨重启的「这个环境随便装」授权会在半年后仍然生效，那时用户早就
+   * 不记得自己给过。
+   */
+  const envGrants = new MemoryEnvGrantStore();
 
   /**
    * 用户选定的默认 Python 环境。null 表示用探测到的托管环境。
@@ -1652,6 +1662,16 @@ async function main(): Promise<void> {
      */
     const envService = new EnvService({
       repo: envsRepo,
+      projectId,
+      /*
+       * 装包过审批（任务 14.5，需求 17.1）。
+       *
+       * `pip install` 会执行包自带的构建脚本——那是任意代码执行，在用户自己的机器上、
+       * 用他的权限。这与「远程命令执行」在性质上没有区别，只是它长得像一次无害的
+       * 依赖管理。而且装进去的东西被此后所有会话的内核共用。
+       */
+      approvals: () => approvalFor(projectId),
+      grants: () => envGrants,
       // 需求 15.6：创建环境与装包是耗时操作，走后台任务。它不受会话中断影响——
       // 否则用户随口打断一句就把装了三分钟的环境毁了一半
       background: () => background,
@@ -4723,7 +4743,25 @@ async function main(): Promise<void> {
       uninstall: req.uninstall,
       conversationId: req.conversationId,
       force: req.force,
+      // 界面发起的记成 user:manual，与模型发起的在审批卡片上区分开
+      modelId: 'user:manual',
     });
+
+    /*
+     * 审批被拒与参数错误分开报（需求 17.3）。
+     *
+     * 混在一起会让前端把「用户拒绝了」也显示成「参数有问题」，于是他看到一条建议他
+     * 改参数的提示——而他刚刚做的正是拒绝。
+     */
+    if (!result.ok && result.approval.source === 'denied') {
+      throw new DispatchError(
+        makeError('policy_denied', result.reason ?? '未获批准', {
+          remediation: result.approval.retryable
+            ? '超时或取消导致，可以稍后重新发起。'
+            : '这是明确的拒绝，不要重发同一请求。改主意可以在审批历史里撤销这条拒绝记忆。',
+        }),
+      );
+    }
 
     if (!result.ok) {
       throw new DispatchError(
@@ -4871,6 +4909,7 @@ async function main(): Promise<void> {
           decision: req.decision,
           ...(req.note === undefined ? {} : { note: req.note }),
           ...(req.scope === undefined ? {} : { scope: req.scope }),
+          ...(req.expiresInMs === undefined ? {} : { expiresInMs: req.expiresInMs }),
         })
       ) {
         return { settled: true };
@@ -4880,6 +4919,77 @@ async function main(): Promise<void> {
     throw notFound(
       `审批不存在或已决议：${req.approvalId}`,
       '该审批可能已超时、已被取消，或后端在此期间重启过。',
+    );
+  });
+
+  /**
+   * 待决议的审批（需求 17.1）。
+   *
+   * 不限项目时汇总全部：审批卡片是全局的用户交互，而「这条审批属于哪个项目」对
+   * 「现在要不要点同意」没有影响。给了 projectId 就只看那一个——设置页按项目查审计时用。
+   */
+  d.register('approval.pending', async (req) => {
+    const services =
+      req.projectId === undefined
+        ? [...approvalsByProject.entries()]
+        : [[req.projectId, approvalFor(req.projectId)] as const];
+
+    return {
+      pending: services.flatMap(([projectId, service]) =>
+        service.pending().map((entry) => ({ ...entry, projectId })),
+      ),
+    };
+  });
+
+  d.register('approval.history', async (req) => {
+    const service = approvalFor(req.projectId);
+    const rows = service.history({
+      ...(req.conversationId === undefined ? {} : { conversationId: req.conversationId }),
+      ...(req.state === undefined ? {} : { state: req.state }),
+      limit: req.limit,
+    });
+
+    return {
+      approvals: rows.map((row) => ({
+        id: row.id,
+        conversationId: row.conversationId,
+        kind: row.kind,
+        state: row.state,
+        note: row.note,
+        requestedAt: row.requestedAt,
+        decidedAt: row.decidedAt,
+        /*
+         * 把当时给用户看的内容原样带出来。
+         *
+         * 审计的价值在于「当时他看到的是什么」——只记 kind 与 state 的话，事后无法判断
+         * 那次同意是基于一份完整的说明还是一句含糊的提示。
+         */
+        title: row.request.title,
+        detail: row.request.detail,
+        impact: row.request.impact,
+        reversible: row.request.reversible,
+        payload: row.request.payload,
+        /*
+         * 数据库里的 denied 行是历史，拒绝记忆是进程内的、决定「现在还会不会被自动
+         * 拒绝」的那份。两者在界面上必须分开——用户看到一条三天前的拒绝记录时，
+         * 他想知道的是「现在还挡着吗」。
+         */
+        stillDenied: row.stillDenied,
+      })),
+      note:
+        '「仍在拦截」表示这条拒绝还在本次运行的拒绝记忆里，同一请求会被自动拒绝而不再询问。' +
+        '拒绝记忆不跨进程重启保留——它要解决的是「agent 在一个循环里反复问同一件事」，' +
+        '而那个问题只存在于进程生命周期内。',
+    };
+  });
+
+  d.register('approval.forgetDenial', async (req) => {
+    for (const service of approvalsByProject.values()) {
+      if (service.forgetDenialById(req.approvalId)) return { forgotten: true };
+    }
+    throw notFound(
+      `没有找到可撤销的拒绝记录：${req.approvalId}`,
+      '这条记录可能不是被拒绝的，或者它的拒绝记忆已经因为后端重启而消失（那种情况下同一请求已经可以重新发起）。',
     );
   });
 

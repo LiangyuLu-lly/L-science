@@ -75,12 +75,13 @@ export {
 
 export type {
   CreateResult as EnvCreateResult,
+  EnvGrantStore,
   EnvServiceDeps,
   // 技能那边也有一个 `InstallResult`（安装内置技能）。改名而不是让两者撞在一起：
   // 撞了之后 `export *` 会静默丢掉一个，而丢掉的那个的调用点报的是「找不到类型」
   InstallResult as PackageInstallResult,
 } from './service.js';
-export { EnvService } from './service.js';
+export { EnvService, MemoryEnvGrantStore } from './service.js';
 
 export type { EnvAction, EnvToolInput, EnvToolOptions } from './tools.js';
 export { createManageEnvironmentsTool } from './tools.js';

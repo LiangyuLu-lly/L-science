@@ -222,7 +222,45 @@ export const requestSchema = z.discriminatedUnion('method', [
     note: z.string().max(2000).optional(),
     // 用户选择的授权作用域（需求 17.5）。省略时后端取最保守的可选项
     scope: z.enum(['once', 'session', 'project', 'always']).optional(),
+    /**
+     * 用户选择的有效期（毫秒），null 表示不过期（需求 17.5）。
+     *
+     * 与作用域分成两个字段：作用域回答「在哪些上下文里生效」，有效期回答「生效多久」。
+     * 合成一个下拉框会让选项数量变成两者的乘积，而多数组合没人会选。
+     */
+    expiresInMs: z.number().int().min(60_000).nullable().optional(),
   }),
+
+  /**
+   * 待决议的审批（需求 17.1、17.2）。
+   *
+   * 用于重新打开窗口后恢复显示。不做这个方法的话，一次刷新就会让用户看不到正在等他
+   * 决定的卡片，而后端那边仍在挂着——他会以为 agent 卡住了。
+   */
+  z.object({ method: z.literal('approval.pending'), projectId: idSchema.optional() }),
+
+  /**
+   * 审批历史（审计面）。
+   *
+   * 记录一直在落盘（`ApprovalRepo` 的存在意义就是审计），但在这之前它没有出口——
+   * 「谁在什么时候批准了删除哪个制品」在库里有答案而界面上问不出来，那等于没有审计。
+   */
+  z.object({
+    method: z.literal('approval.history'),
+    projectId: idSchema,
+    conversationId: idSchema.optional(),
+    state: z.enum(['pending', 'approved', 'denied', 'timeout', 'abandoned']).optional(),
+    limit: z.number().int().min(1).max(500).default(100),
+  }),
+
+  /**
+   * 撤销一条拒绝记忆（需求 17.5 的「随时撤销」的对偶）。
+   *
+   * 需求 17.3 要求拒绝之后不得重试同一请求，而这条规则在用户改主意时会挡住他自己：
+   * 他明确说「现在可以了」，而系统仍然直接拒绝且不给任何被询问的机会。没有这个出口
+   * 的话唯一的办法是重启后端。
+   */
+  z.object({ method: z.literal('approval.forgetDenial'), approvalId: idSchema }),
 
   z.object({
     method: z.literal('question.answer'),

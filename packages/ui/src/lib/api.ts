@@ -139,13 +139,21 @@ export interface ApprovalRequest {
     | 'compute-job'
     | 'compute-provider'
     | 'domain-allowlist'
-    | 'skill-write';
+    | 'skill-write'
+    | 'package-install';
   title: string;
   detail: string;
   impact: string;
   reversible: boolean;
   undoHint: string | null;
   scopeOptions: GrantScope[];
+  /**
+   * 可选的有效期档位（毫秒），null 表示「不过期」（需求 17.5）。
+   *
+   * 可选属性而不是必填：后端可能是旧版本，那时缺这个字段应当退化成「不显示有效期
+   * 选择」，而不是让整张卡片渲染失败——审批卡片是阻塞交互，渲染失败等于用户卡住了。
+   */
+  expiryOptions?: (number | null)[];
   payload: unknown;
 }
 
@@ -160,7 +168,7 @@ export interface UserQuestion {
 export const decideApproval = (
   approvalId: string,
   decision: 'approve' | 'deny',
-  options: { note?: string; scope?: GrantScope } = {},
+  options: { note?: string; scope?: GrantScope; expiresInMs?: number | null } = {},
 ) =>
   invoke<{ settled: boolean }>({
     method: 'approval.decide',
@@ -168,7 +176,57 @@ export const decideApproval = (
     decision,
     ...(options.note === undefined ? {} : { note: options.note }),
     ...(options.scope === undefined ? {} : { scope: options.scope }),
+    // null 是有意义的取值（「不过期」），因此只在 undefined 时省略
+    ...(options.expiresInMs === undefined ? {} : { expiresInMs: options.expiresInMs }),
   });
+
+/* --- 审批审计（需求 17.1、17.5）--- */
+
+export interface ApprovalHistoryEntry {
+  id: string;
+  conversationId: string | null;
+  kind: ApprovalRequest['kind'];
+  state: 'pending' | 'approved' | 'denied' | 'timeout' | 'abandoned';
+  note: string | null;
+  requestedAt: number;
+  decidedAt: number | null;
+  title: string;
+  detail: string;
+  impact: string;
+  reversible: boolean;
+  payload: unknown;
+  /** 这条拒绝是否仍在本次运行的拒绝记忆里，即同一请求还会被自动拒绝。 */
+  stillDenied: boolean;
+}
+
+export const listPendingApprovals = (projectId?: string) =>
+  invoke<{
+    pending: { request: ApprovalRequest; conversationId: string | null; projectId: string }[];
+  }>({
+    method: 'approval.pending',
+    ...(projectId === undefined ? {} : { projectId }),
+  });
+
+export const listApprovalHistory = (
+  projectId: string,
+  options: { conversationId?: string; state?: ApprovalHistoryEntry['state']; limit?: number } = {},
+) =>
+  invoke<{ approvals: ApprovalHistoryEntry[]; note: string }>({
+    method: 'approval.history',
+    projectId,
+    ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
+    ...(options.state === undefined ? {} : { state: options.state }),
+    ...(options.limit === undefined ? {} : { limit: options.limit }),
+  });
+
+/**
+ * 撤销一条拒绝记忆（需求 17.5）。
+ *
+ * 需求 17.3 要求拒绝后不得重试同一请求，而这条规则在用户改主意时会挡住他自己——
+ * 他明确说「现在可以了」，系统仍然直接拒绝且不给被询问的机会。
+ */
+export const forgetApprovalDenial = (approvalId: string) =>
+  invoke<{ forgotten: boolean }>({ method: 'approval.forgetDenial', approvalId });
 
 export const answerQuestion = (questionId: string, answer: string) =>
   invoke<{ answered: boolean }>({ method: 'question.answer', questionId, answer });

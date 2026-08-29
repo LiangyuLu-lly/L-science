@@ -1775,7 +1775,67 @@ try {
     '',
   );
 
-  // --- 19. stdin 关闭后自行退出 ---
+  // --- 19. 审批收口（任务 14.5，需求 17.1、17.5）---
+  process.stdout.write('\n--- 19. 审批收口 ---\n');
+
+  send(req('ap1', { method: 'approval.pending' }));
+  await waitFor(() => byId('ap1') !== undefined, 10000, 'approval.pending');
+  check(
+    byId('ap1').ok === true && Array.isArray(byId('ap1').result?.pending),
+    'approval.pending 可用 ',
+    `${String((byId('ap1').result?.pending ?? []).length)} 条待决议`,
+  );
+
+  send(req('ap2', { method: 'approval.history', projectId: createdProject.id }));
+  await waitFor(() => byId('ap2') !== undefined, 10000, 'approval.history');
+  const approvals = byId('ap2').result?.approvals ?? [];
+  check(
+    byId('ap2').ok === true &&
+      Array.isArray(approvals) &&
+      String(byId('ap2').result?.note ?? '').includes('拒绝记忆'),
+    'approval.history 可用 ',
+    `${String(approvals.length)} 条历史`,
+  );
+  /*
+   * 历史必须带上「当时给用户看的是什么」。
+   *
+   * 只记 kind 与 state 的话，事后无法判断那次同意是基于一份完整说明还是一句含糊提示。
+   * 这一组里前面几步产生过审批（域名白名单、算力目标），因此这里应该有记录。
+   */
+  check(
+    approvals.length === 0 ||
+      (typeof approvals[0]?.title === 'string' &&
+        typeof approvals[0]?.impact === 'string' &&
+        typeof approvals[0]?.stillDenied === 'boolean'),
+    '历史带卡片原文与拦截状态',
+    approvals.length === 0 ? '（本次运行没产生审批记录）' : String(approvals[0]?.kind ?? ''),
+  );
+
+  send(req('ap3', { method: 'approval.forgetDenial', approvalId: 'ap_不存在' }));
+  await waitFor(() => byId('ap3') !== undefined, 10000, 'approval.forgetDenial');
+  check(
+    byId('ap3').ok === false && byId('ap3').error?.code === 'not_found',
+    '撤销不存在的拒绝记录被拒',
+    '',
+  );
+
+  send(
+    req('ap4', {
+      method: 'approval.decide',
+      approvalId: 'ap_不存在',
+      decision: 'approve',
+      scope: 'project',
+      expiresInMs: 3600000,
+    }),
+  );
+  await waitFor(() => byId('ap4') !== undefined, 10000, 'approval.decide expiresInMs');
+  check(
+    byId('ap4').ok === false && byId('ap4').error?.code === 'not_found',
+    'decide 接受 expiresInMs  ',
+    '（schema 通过，id 不存在因此报 not_found）',
+  );
+
+  // --- 20. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

@@ -284,7 +284,18 @@ export type ApprovalKind =
   | 'compute-job'
   | 'compute-provider'
   | 'domain-allowlist'
-  | 'skill-write';
+  | 'skill-write'
+  /**
+   * 装包（任务 14.5，需求 15.3-15.5、17.1）。
+   *
+   * 需求 17.1 没点名它，但它属于同一类：`pip install` 会执行包自带的构建脚本，
+   * 也就是**任意代码执行**——而且执行在用户自己的机器上、用他的权限。这一点与
+   * 「远程命令执行」在性质上没有区别，只是它长得像一次无害的依赖管理。
+   *
+   * 第二个理由是影响范围：装包改动的是环境，而环境被此后**所有**会话的内核共用。
+   * 一次装错版本的 numpy 会让之后每一次分析都跑在它上面。
+   */
+  | 'package-install';
 
 /**
  * 授权的作用域（需求 17.5）。
@@ -322,7 +333,36 @@ export interface ApprovalRequest {
    * 允许用户选择的授权作用域。空数组表示这是一次性确认，不产生持久授权。
    */
   scopeOptions: readonly GrantScope[];
+  /**
+   * 可选的有效期（毫秒），供用户挑（需求 17.5）。
+   *
+   * `null` 表示「不设过期」。空数组表示这个请求不提供有效期选择——一次性确认
+   * （`scopeOptions` 为空）显然不需要，而「删除这个制品」也不需要。
+   *
+   * 有效期与作用域是两件事，因此分成两个字段：作用域回答「在哪些上下文里生效」，
+   * 有效期回答「生效多久」。合成一个下拉框（「本项目 7 天」这类组合项）会让选项
+   * 数量变成两者的乘积，而多数组合是没人会选的。
+   */
+  expiryOptions: readonly (number | null)[];
   payload: unknown;
+}
+
+/** 常用的有效期档位（毫秒）。UI 用它渲染下拉框。 */
+export const APPROVAL_EXPIRY_PRESETS: readonly (number | null)[] = [
+  60 * 60 * 1000,
+  24 * 60 * 60 * 1000,
+  7 * 24 * 60 * 60 * 1000,
+  30 * 24 * 60 * 60 * 1000,
+  null,
+];
+
+/** 有效期档位的中文标签。 */
+export function describeExpiry(ms: number | null): string {
+  if (ms === null) return '不过期';
+  const hours = ms / (60 * 60 * 1000);
+  if (hours < 24) return `${String(Math.round(hours))} 小时`;
+  const days = hours / 24;
+  return `${String(Math.round(days))} 天`;
 }
 
 /**

@@ -467,7 +467,7 @@ export function App(): React.JSX.Element {
   const onDecide = async (
     approvalId: string,
     decision: 'approve' | 'deny',
-    options: { note?: string; scope?: GrantScope },
+    options: { note?: string; scope?: GrantScope; expiresInMs?: number | null },
   ): Promise<void> => {
     await decideApproval(approvalId, decision, options);
     turn.dismissApproval(approvalId);

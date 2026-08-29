@@ -38,13 +38,22 @@ const KIND_LABEL: Record<ApprovalRequest['kind'], string> = {
   'compute-provider': '使用算力凭据',
   'domain-allowlist': '新增域名白名单',
   'skill-write': '写入技能',
+  'package-install': '安装或卸载依赖包',
 };
+
+/** 有效期档位的标签（需求 17.5）。 */
+function expiryLabel(ms: number | null): string {
+  if (ms === null) return '不过期';
+  const hours = ms / (60 * 60 * 1000);
+  if (hours < 24) return `${String(Math.round(hours))} 小时`;
+  return `${String(Math.round(hours / 24))} 天`;
+}
 
 export interface ApprovalCardProps {
   approval: ApprovalRequest;
   onDecide: (
     decision: 'approve' | 'deny',
-    options: { note?: string; scope?: GrantScope },
+    options: { note?: string; scope?: GrantScope; expiresInMs?: number | null },
   ) => Promise<void>;
 }
 
@@ -52,6 +61,7 @@ export function ApprovalCard({ approval, onDecide }: ApprovalCardProps): React.J
   const titleId = useId();
   const confirmId = useId();
   const noteId = useId();
+  const expiryId = useId();
 
   const hasScopes = approval.scopeOptions.length > 0;
   // 默认取最保守的可选项。默认到 always 会让惯性点击建立一个用户没想给的长期授权
@@ -60,6 +70,20 @@ export function ApprovalCard({ approval, onDecide }: ApprovalCardProps): React.J
       approval.scopeOptions.includes(s),
     ) ?? 'once',
   );
+
+  /*
+   * 有效期只在选了持久作用域时才有意义（需求 17.5）。
+   *
+   * 默认取**最短**的档位而不是「不过期」：与作用域同一条理由——惯性点击不该建立一个
+   * 用户没想给的长期授权。想要长期的人会去改这个下拉框，而想要短期的人不会想到去检查
+   * 一个默认成永久的选项。
+   */
+  const expiryOptions = approval.expiryOptions ?? [];
+  const [expiresInMs, setExpiresInMs] = useState<number | null>(
+    expiryOptions.find((v): v is number => v !== null) ?? null,
+  );
+  const showExpiry = expiryOptions.length > 0 && scope !== 'once';
+
   const [note, setNote] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -75,6 +99,7 @@ export function ApprovalCard({ approval, onDecide }: ApprovalCardProps): React.J
       await onDecide(decision, {
         ...(note.trim() === '' ? {} : { note: note.trim() }),
         ...(hasScopes && decision === 'approve' ? { scope } : {}),
+        ...(showExpiry && decision === 'approve' ? { expiresInMs } : {}),
       });
     } finally {
       setBusy(false);
@@ -135,6 +160,38 @@ export function ApprovalCard({ approval, onDecide }: ApprovalCardProps): React.J
             </label>
           ))}
         </fieldset>
+      )}
+
+      {showExpiry && (
+        <>
+          <label className="approval__expiry-label" htmlFor={expiryId}>
+            有效期
+          </label>
+          <select
+            id={expiryId}
+            className="approval__expiry"
+            value={expiresInMs === null ? 'never' : String(expiresInMs)}
+            onChange={(e) =>
+              setExpiresInMs(e.target.value === 'never' ? null : Number(e.target.value))
+            }
+          >
+            {expiryOptions.map((option) => (
+              <option
+                key={option === null ? 'never' : option}
+                value={option === null ? 'never' : String(option)}
+              >
+                {expiryLabel(option)}
+              </option>
+            ))}
+          </select>
+          <p className="approval__expiry-hint">
+            {/*
+              到期之后会重新询问，而不是静默失效——授权到期而没人告诉你，表现是
+              agent 突然做不了一件它昨天能做的事。
+            */}
+            到期后同一操作会重新询问你。可随时在设置的授权列表里提前撤销。
+          </p>
+        </>
       )}
 
       <label className="approval__note-label" htmlFor={noteId}>

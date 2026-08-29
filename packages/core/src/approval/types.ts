@@ -28,6 +28,14 @@ export interface ApprovalDraft {
   undoHint?: string | null;
   /** 可选的授权作用域。省略时视为一次性确认。 */
   scopeOptions?: readonly GrantScope[];
+  /**
+   * 可选的有效期档位（需求 17.5）。
+   *
+   * 省略时按 `scopeOptions` 推：给了持久作用域就提供默认档位，一次性确认不提供。
+   * 推断而不是要求每个调用点都填，是因为「这个请求该不该有有效期」的答案几乎总是
+   * 「有持久授权就该有」——让每处自己写一遍只会让某几处忘掉。
+   */
+  expiryOptions?: readonly (number | null)[];
   payload: unknown;
   /** 所属会话。用于把拒绝记忆限定在会话内，也用于持久化关联。 */
   conversationId?: string | null;

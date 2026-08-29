@@ -20,6 +20,9 @@ import { basename } from 'node:path';
 import { MANAGED_PYTHON_ENV, MANAGED_R_ENV, resolveCondaExe } from '@l-science/kernel';
 import type { ToolOutput } from '@l-science/shared';
 
+import type { GrantScope } from '@l-science/shared';
+
+import type { ApprovalService } from '../approval/service.js';
 import type { BackgroundRunner } from '../tools/background.js';
 import type { EnvRecord, EnvsRepo } from '../repo/envs.js';
 import { runLocalShell } from '../compute/probe.js';
@@ -76,6 +79,19 @@ export interface EnvServiceDeps {
   /** 后台执行器（需求 15.6）。缺省时耗时操作同步跑。 */
   background?: () => BackgroundRunner;
   /**
+   * 审批服务（任务 14.5，需求 17.1）。
+   *
+   * 装包要过审批。需求 17.1 没点名它，但它属于同一类：`pip install` 会执行包自带的
+   * 构建脚本，也就是**任意代码执行**，而且执行在用户自己的机器上、用他的权限。
+   * 这与「远程命令执行」在性质上没有区别，只是它长得像一次无害的依赖管理。
+   *
+   * 缺省时不审批——测试与控制面脚本走这条路。生产接线必须给上它。
+   */
+  approvals?: () => ApprovalService;
+  /** 审批的作用域落成持久授权。缺省时每次都问。 */
+  grants?: () => EnvGrantStore;
+  projectId?: string;
+  /**
    * 这个环境当前有没有活着的内核，以及影响到哪些会话（需求 15.5）。
    *
    * 由 backend 从内核池取。不给时按「没有」处理——那会让重启告知偏乐观，因此调用方
@@ -101,6 +117,29 @@ export interface InstallResult {
   plan: InstallPlan;
   taskId: string | null;
   reason: string | null;
+  /** 审批结论。`denied` 时 `reason` 说明为什么，`retryable` 说明能不能重来。 */
+  approval: { source: 'existing-grant' | 'approved' | 'denied' | 'skipped'; retryable: boolean };
+}
+
+/**
+ * 装包授权的存储。
+ *
+ * 抽成接口而不是直接依赖 `GrantRepo`：装包授权按**环境**划分，而 `host_grants` 的
+ * 语义是路径。把 `env:xxx` 塞进 host_path 列能跑，但设置页里的「已授权路径」列表会
+ * 开始显示一堆不是路径的东西，而用户在那个列表里要判断的是「我给过哪些目录权限」。
+ *
+ * 目前由 backend 用一个内存实现接上——装包授权最宽只到 `project`，而项目级授权在
+ * 一次运行内有效就够用了；落库要等它真的需要跨重启保留时再说，而那件事没有证据说明
+ * 是需要的（用户一天里装几次包，不是几百次）。
+ */
+export interface EnvGrantStore {
+  check(input: { envId: string; projectId: string | null; conversationId: string | null }): boolean;
+  grant(input: {
+    envId: string;
+    scope: GrantScope;
+    scopeId: string | null;
+    expiresAt: number | null;
+  }): void;
 }
 
 export class EnvService {
@@ -823,7 +862,10 @@ export class EnvService {
     conversationId: string;
     /** 明知有混装风险仍要继续。调用方必须已经把风险展示给用户。 */
     force?: boolean;
+    /** 谁发起的，进审批卡片。 */
+    modelId?: string | null;
   }): Promise<InstallResult> {
+    const skipped = { source: 'skipped' as const, retryable: false };
     const plan = await this.plan({
       envId: input.envId,
       request: input.request,
@@ -831,15 +873,40 @@ export class EnvService {
     });
 
     if (plan.command === null || plan.installer === null) {
-      return { ok: false, plan, taskId: null, reason: plan.reason };
+      return { ok: false, plan, taskId: null, reason: plan.reason, approval: skipped };
     }
     if (!plan.ok && input.force !== true) {
-      return { ok: false, plan, taskId: null, reason: plan.reason };
+      return { ok: false, plan, taskId: null, reason: plan.reason, approval: skipped };
     }
 
     const env = this.#deps.repo.get(input.envId);
     if (env === null) {
-      return { ok: false, plan, taskId: null, reason: '环境不存在' };
+      return { ok: false, plan, taskId: null, reason: '环境不存在', approval: skipped };
+    }
+
+    /*
+     * 审批门（任务 14.5，需求 17.1）。
+     *
+     * 排在混装检查**之后**：混装是更硬的阻断，而让用户为一个注定要被拒的请求点一次
+     * 同意是纯粹的骚扰。顺序反过来的话，他批准之后才看到「这会造成混装」。
+     */
+    const approval = await this.#authorizeInstall({
+      env,
+      plan,
+      request: input.request,
+      uninstall: input.uninstall === true,
+      conversationId: input.conversationId,
+      force: input.force === true,
+      modelId: input.modelId ?? null,
+    });
+    if (!approval.ok) {
+      return {
+        ok: false,
+        plan,
+        taskId: null,
+        reason: approval.reason,
+        approval: { source: 'denied', retryable: approval.retryable },
+      };
     }
 
     const verb = input.uninstall === true ? '卸载' : '安装';
@@ -900,6 +967,7 @@ export class EnvService {
         plan,
         taskId: null,
         reason: output.kind === 'error' ? output.evalue : null,
+        approval: { source: approval.source, retryable: false },
       };
     }
 
@@ -909,7 +977,128 @@ export class EnvService {
       run: async () => run(),
     });
 
-    return { ok: true, plan, taskId, reason: null };
+    return {
+      ok: true,
+      plan,
+      taskId,
+      reason: null,
+      approval: { source: approval.source, retryable: false },
+    };
+  }
+
+  /**
+   * 装包的审批门（需求 17.1）。
+   *
+   * 卡片要说清三件事，因为它们各自决定用户会不会同意：
+   *
+   * 1. **要跑的命令原文**。用户能判断的是命令，而不是「安装 3 个包」这种概述。
+   * 2. **这是任意代码执行**。`pip install` 会跑包自带的构建脚本，很多人不知道这一点。
+   * 3. **影响范围超出本次会话**。环境被此后所有会话的内核共用。
+   */
+  async #authorizeInstall(input: {
+    env: EnvRecord;
+    plan: InstallPlan;
+    request: PackageRequest;
+    uninstall: boolean;
+    conversationId: string;
+    force: boolean;
+    modelId: string | null;
+  }): Promise<{
+    ok: boolean;
+    reason: string | null;
+    retryable: boolean;
+    source: InstallResult['approval']['source'];
+  }> {
+    const approvals = this.#deps.approvals;
+    if (approvals === undefined) {
+      return { ok: true, reason: null, retryable: false, source: 'skipped' };
+    }
+
+    const grants = this.#deps.grants;
+    const projectId = this.#deps.projectId ?? null;
+    if (
+      grants !== undefined &&
+      grants().check({
+        envId: input.env.id,
+        projectId,
+        conversationId: input.conversationId,
+      })
+    ) {
+      return { ok: true, reason: null, retryable: false, source: 'existing-grant' };
+    }
+
+    const verb = input.uninstall ? '卸载' : '安装';
+    const names = input.request.specs.join('、');
+    const live = this.#deps.liveKernels?.(input.env) ?? [];
+
+    const detail = [
+      `环境：${input.env.name}（${input.env.kind}，${input.env.path}）`,
+      `安装器：${input.plan.installerReason}`,
+      '',
+      '要执行的命令：',
+      input.plan.command ?? '（未构造出）',
+    ];
+    if (input.force && input.plan.conflicts.length > 0) {
+      detail.push('');
+      detail.push('⚠ 这次是**强行继续**：已经检测到 conda / pip 混装风险。');
+      detail.push(renderConflicts(input.plan.conflicts));
+    }
+    if (live.length > 0) {
+      detail.push('');
+      detail.push(`当前有 ${String(live.length)} 个内核跑在这个环境上，装完需要重启它们。`);
+    }
+    if (input.modelId !== null) {
+      detail.push('');
+      detail.push(`发起者：${input.modelId}`);
+    }
+
+    const result = await approvals().request({
+      kind: 'package-install',
+      title: `在「${input.env.name}」里${verb} ${names}？`,
+      detail: detail.join('\n'),
+      impact: input.uninstall
+        ? '卸载会改动这个环境。环境被此后所有会话的内核共用，' +
+          '因此别的分析可能因为少了这个包而跑不起来。'
+        : '安装会执行包自带的构建脚本——那是**任意代码执行**，在你的机器上、用你的权限。' +
+          '装进去的内容还会被此后所有会话的内核共用。',
+      // 装错的包可以卸掉，但构建脚本已经跑过了——那一步不可逆
+      reversible: false,
+      undoHint: null,
+      /*
+       * 最宽到 project。
+       *
+       * 不给 always：跨项目的「随便往环境里装东西」不该出现在下拉框里。而且装包影响的
+       * 是环境，环境是全局资源——一条 always 授权等于把所有项目的环境都交出去了。
+       */
+      scopeOptions: ['once', 'session', 'project'],
+      // payload 决定指纹：带上环境与包名，这样拒绝一次安装不会顺带拒绝这个环境里的所有安装
+      payload: { envId: input.env.id, specs: input.request.specs, uninstall: input.uninstall },
+      conversationId: input.conversationId,
+    });
+
+    if (result.state !== 'approved') {
+      const reason =
+        result.state === 'denied'
+          ? result.fromPriorDenial
+            ? `此前已拒绝过同一个${verb}请求，不再重复询问。`
+            : `用户拒绝了这次${verb}。${result.note ?? ''}`.trim()
+          : result.state === 'timeout'
+            ? `审批超时，${verb}未获批准。`
+            : `审批被取消：${result.reason}`;
+      // 只有超时与取消值得重试。显式拒绝不可重试（需求 17.3）
+      return { ok: false, reason, retryable: result.state !== 'denied', source: 'denied' };
+    }
+
+    if (result.scope !== 'once' && grants !== undefined) {
+      grants().grant({
+        envId: input.env.id,
+        scope: result.scope,
+        scopeId: result.scope === 'session' ? input.conversationId : projectId,
+        expiresAt: result.expiresAt,
+      });
+    }
+
+    return { ok: true, reason: null, retryable: false, source: 'approved' };
   }
 
   /**
@@ -1018,6 +1207,86 @@ export class EnvService {
       }
     }
     return lines.join('\n');
+  }
+}
+
+/**
+ * 装包授权的内存实现（需求 17.5）。
+ *
+ * 不落库是刻意的：装包授权最宽只到 `project`，而项目级授权在一次运行内有效就够用。
+ * 落库要等它真的需要跨重启保留时再说，而没有证据说明那是需要的——用户一天里装几次包，
+ * 不是几百次。反过来，一条跨重启的「这个环境随便装」授权会在半年后仍然生效，
+ * 而那时他早就不记得自己给过。
+ *
+ * 过期仍然按 `expiresAt` 判：用户在卡片上选了「1 小时」就该 1 小时后失效，即使进程
+ * 还没重启。
+ */
+export class MemoryEnvGrantStore implements EnvGrantStore {
+  readonly #grants: {
+    envId: string;
+    scope: GrantScope;
+    scopeId: string | null;
+    expiresAt: number | null;
+  }[] = [];
+  readonly #now: () => number;
+
+  constructor(options: { now?: () => number } = {}) {
+    this.#now = options.now ?? Date.now;
+  }
+
+  check(input: {
+    envId: string;
+    projectId: string | null;
+    conversationId: string | null;
+  }): boolean {
+    const now = this.#now();
+    return this.#grants.some((grant) => {
+      if (grant.envId !== input.envId) return false;
+      if (grant.expiresAt !== null && grant.expiresAt <= now) return false;
+      switch (grant.scope) {
+        case 'always':
+          return true;
+        case 'project':
+          return grant.scopeId !== null && grant.scopeId === input.projectId;
+        case 'session':
+          return grant.scopeId !== null && grant.scopeId === input.conversationId;
+        case 'once':
+          // 一次性授权不入库。入库了说明写入方用错了作用域，此时按不生效处理
+          return false;
+      }
+    });
+  }
+
+  grant(input: {
+    envId: string;
+    scope: GrantScope;
+    scopeId: string | null;
+    expiresAt: number | null;
+  }): void {
+    if (input.scope === 'once') return;
+    this.#grants.push({ ...input });
+  }
+
+  /** 供设置页展示与撤销。 */
+  list(): readonly {
+    envId: string;
+    scope: GrantScope;
+    scopeId: string | null;
+    expiresAt: number | null;
+  }[] {
+    return [...this.#grants];
+  }
+
+  /** 撤销某个环境上的全部装包授权（需求 17.5 的「随时撤销」）。 */
+  revoke(envId: string): number {
+    let removed = 0;
+    for (let i = this.#grants.length - 1; i >= 0; i -= 1) {
+      if (this.#grants[i]?.envId === envId) {
+        this.#grants.splice(i, 1);
+        removed += 1;
+      }
+    }
+    return removed;
   }
 }
 
