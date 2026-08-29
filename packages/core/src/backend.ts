@@ -10,7 +10,7 @@
 
 import { makeError } from '@l-science/shared';
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join as joinPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -100,6 +100,17 @@ import {
   probeRPackages,
   SkillManager,
   type Embedder,
+  /* 技能创建与导入（任务 12.15） */
+  auditSkillContent,
+  createCreateSkillTool,
+  distillSkill,
+  importSkillsFromArchive,
+  importSkillsFromDirectory,
+  importSkillsFromGitHub,
+  readSkillOrigin,
+  removeUserSkill,
+  validateSkillFiles,
+  writeUserSkill,
 } from './skills/index.js';
 import { createAskUserTool } from './tools/ask-user.js';
 import { BackgroundRunner } from './tools/background.js';
@@ -797,6 +808,23 @@ async function main(): Promise<void> {
 
     tools.register(createSearchSkillsTool({ manager: skills, audit: auditSkillLoad }));
     tools.register(createLoadSkillReferenceTool({ manager: skills, audit: auditSkillLoad }));
+
+    /*
+     * 对话中创建技能（任务 12.15，路径 1）。
+     *
+     * 过审批。理由与其他工具不同：技能不是一次性动作，它会被注入到此后每一次
+     * 相关对话里，因此「以后都按这个做」的决定权不能交给模型。
+     */
+    tools.register(
+      createCreateSkillTool({
+        manager: skills,
+        userDir: store.paths.skillsUser,
+        approvals: approvalFor(projectId),
+        onCreated: ({ slug, replaced }) => {
+          d.broadcast({ kind: 'skill.changed', slug, action: replaced ? 'updated' : 'created' });
+        },
+      }),
+    );
 
     /* --- 计划（任务 12.5）------------------------------------------- */
 
@@ -1746,6 +1774,275 @@ async function main(): Promise<void> {
     return {
       events: audit.byConversation(req.conversationId, req.limit),
       summary: audit.summary(),
+    };
+  });
+
+  /* --- 技能创建与导入（任务 12.15，需求 9.6）--- */
+
+  /** 写入或导入之后统一做的三件事：重扫、通知界面、返回结果摘要。 */
+  const afterSkillChange = (slug: string, action: 'created' | 'updated' | 'deleted'): void => {
+    skills.reload();
+    d.broadcast({ kind: 'skill.changed', slug, action });
+    /*
+     * 向量层在后台补。
+     *
+     * 不 await 是刻意的：它要向本机推理服务发一次请求，可能触发模型加载。让保存
+     * 一个技能卡住几秒，用户会以为保存失败又点一次。词法检索在这之前已经能命中它。
+     */
+    void skills.buildVectors().catch(() => undefined);
+  };
+
+  /** 内置技能的 slug 集合，用于提示「这次写入会遮蔽某个内置技能」。 */
+  const builtinSlugsNow = (): ReadonlySet<string> =>
+    new Set(
+      skills
+        .records()
+        .filter((r) => r.scope === 'builtin')
+        .map((r) => r.slug),
+    );
+
+  d.register('skill.source', async (req) => {
+    const loaded = skills.get(req.slug);
+    if (loaded === null) throw notFound(`技能不存在或未加载：${req.slug}`);
+
+    const manifestPath = joinPath(loaded.path, 'skill.json');
+    const skillMdPath = joinPath(loaded.path, 'SKILL.md');
+
+    return {
+      slug: req.slug,
+      scope: loaded.scope,
+      path: loaded.path,
+      /** 原始文本而不是解析后的对象：编辑器编辑的就是文本。 */
+      manifest: readFileSync(manifestPath, 'utf8'),
+      skillMd: readFileSync(skillMdPath, 'utf8'),
+      /*
+       * 参考材料只给清单不给内容：一个技能可能带几百 KB 的参数表，打开设置页
+       * 就全传一遍是浪费，而编辑器是按文件打开的。内容用 skill.reference 取。
+       */
+      references: loaded.references,
+      scripts: loaded.scripts,
+      provider: loaded.provider,
+      hasProviderScript: loaded.providerScript !== null,
+      warnings: loaded.warnings,
+      origin: readSkillOrigin(loaded.path),
+      /** 内置技能不能原地改：改动会在下次启动被同步覆盖。界面据此提示「另存为用户技能」。 */
+      editable: loaded.scope === 'user',
+    };
+  });
+
+  d.register('skill.reference', async (req) => {
+    const result = skills.readReference(req.slug, req.name);
+    if (!result.ok) throw notFound(result.reason);
+    return { slug: req.slug, name: req.name, content: result.content };
+  });
+
+  d.register('skill.validate', async (req) => {
+    const result = validateSkillFiles({
+      'skill.json': req.manifest,
+      'SKILL.md': req.instructions === '' ? '（正文待写）' : req.instructions,
+    });
+    return {
+      ok: result.ok,
+      errors: result.errors,
+      warnings: [...result.warnings, ...auditSkillContent(req.instructions)],
+      slug: result.manifest?.slug ?? null,
+      /** 已存在同名技能时界面要先问「是否覆盖」而不是直接保存。 */
+      conflictsWith:
+        result.manifest === null
+          ? null
+          : (skills.records().find((r) => r.slug === result.manifest?.slug) ?? null),
+    };
+  });
+
+  d.register('skill.write', async (req) => {
+    const files: Record<string, string> = {
+      'skill.json': req.manifest,
+      'SKILL.md': req.instructions,
+    };
+    for (const [name, content] of Object.entries(req.references)) {
+      files[`references/${name}`] = content;
+    }
+    if (req.providerJson !== null) files['provider.json'] = req.providerJson;
+    if (req.providerScript !== null) files['provider.py'] = req.providerScript;
+
+    const result = writeUserSkill({
+      userDir: store.paths.skillsUser,
+      files,
+      origin: { kind: 'authored', source: null, detail: '在设置页里编写' },
+      overwrite: req.overwrite,
+      builtinSlugs: builtinSlugsNow(),
+    });
+
+    if (result.ok && result.slug !== null) {
+      afterSkillChange(result.slug, result.replaced ? 'updated' : 'created');
+    }
+    return result;
+  });
+
+  d.register('skill.delete', async (req) => {
+    const record = skills.records().find((r) => r.slug === req.slug);
+    if (record === undefined) throw notFound(`技能不在注册表中：${req.slug}`);
+    if (record.scope !== 'user') {
+      // 内置技能删掉下次启动会被同步回来，只会让状态看起来不一致
+      throw new DispatchError(
+        makeError('bad_request', `${req.slug} 是内置技能，不能删除。`, {
+          remediation: '内置技能由平台维护，删掉会在下次启动时被同步回来。要停用它请改用禁用。',
+        }),
+      );
+    }
+
+    const result = removeUserSkill(store.paths.skillsUser, req.slug);
+    if (!result.ok) throw notFound(result.reason ?? '删除失败');
+    afterSkillChange(req.slug, 'deleted');
+    return { slug: req.slug, deleted: true };
+  });
+
+  d.register('skill.importArchive', async (req) => {
+    let data: Buffer;
+    try {
+      data = Buffer.from(req.contentBase64, 'base64');
+    } catch {
+      throw new DispatchError(makeError('bad_request', '内容不是合法的 base64'));
+    }
+    if (data.byteLength === 0) {
+      throw new DispatchError(makeError('bad_request', '内容为空——base64 解码后没有字节'));
+    }
+
+    const outcome = importSkillsFromArchive({
+      userDir: store.paths.skillsUser,
+      data,
+      fileName: req.fileName,
+      overwrite: req.overwrite,
+      builtinSlugs: builtinSlugsNow(),
+    });
+
+    for (const skill of outcome.skills) {
+      if (skill.ok && skill.slug !== null) {
+        afterSkillChange(skill.slug, skill.replaced ? 'updated' : 'created');
+      }
+    }
+    return outcome;
+  });
+
+  d.register('skill.importDirectory', async (req) => {
+    const outcome = importSkillsFromDirectory({
+      userDir: store.paths.skillsUser,
+      sourceDir: req.directory,
+      overwrite: req.overwrite,
+      builtinSlugs: builtinSlugsNow(),
+    });
+
+    for (const skill of outcome.skills) {
+      if (skill.ok && skill.slug !== null) {
+        afterSkillChange(skill.slug, skill.replaced ? 'updated' : 'created');
+      }
+    }
+    return outcome;
+  });
+
+  d.register('skill.importGithub', async (req) => {
+    /*
+     * 令牌从凭据库取，用完即弃。
+     *
+     * 请求载荷里传的是引用名——密钥不进请求体是本文件（ipc.ts）里写明的不变量，
+     * 有测试守着。
+     */
+    let token: string | null = null;
+    if (req.credentialRef !== null && req.credentialRef !== '') {
+      if (!vault.available || !vault.exists) {
+        throw new DispatchError(
+          makeError('bad_request', '这台机器上凭据库不可用，无法取出令牌。', {
+            remediation: '公开仓库可以不填令牌直接导入。',
+          }),
+        );
+      }
+      token = vault.get(req.credentialRef);
+      if (token === null) {
+        throw notFound(`凭据不存在：${req.credentialRef}`, '先在设置里保存 GitHub 访问令牌。');
+      }
+    }
+
+    const outcome = await importSkillsFromGitHub({
+      userDir: store.paths.skillsUser,
+      spec: req.spec,
+      token,
+      /*
+       * 这条 IPC 只能由界面发起（模型没有 IPC 通道），因此**用户点下导入本身就是授权**，
+       * 再弹一张审批卡片等于让他确认自己刚点的事。
+       *
+       * 它也刻意不往域名白名单里加 `api.github.com`：那份白名单管的是执行平面
+       * （内核里的代码），因为用户导入过一个技能就给内核开通 GitHub 访问，
+       * 是把两件不同的事混在一起。`authorizeHost` 这个钩子保留着，是为了将来若出现
+       * agent 发起的导入路径，它必须显式给出一套策略而不是默认放行。
+       */
+      authorizeHost: async () => true,
+      overwrite: req.overwrite,
+      builtinSlugs: builtinSlugsNow(),
+    });
+
+    for (const skill of outcome.skills) {
+      if (skill.ok && skill.slug !== null) {
+        afterSkillChange(skill.slug, skill.replaced ? 'updated' : 'created');
+      }
+    }
+    return outcome;
+  });
+
+  d.register('skill.distill', async (req) => {
+    // 用量仓储随编排器懒加载；蒸馏要把这次调用记进成本
+    await orchestratorFor(req.projectId);
+    const project = openProject(store, req.projectId);
+    const usageRepo = usageRepos.get(req.projectId);
+    const routingRepo = routingRepos.get(req.projectId);
+    const registry = toolRegistries.get(req.projectId);
+
+    const result = await distillSkill(
+      {
+        messages: project.messages,
+        toolCalls: project.toolCalls,
+        adapters,
+        adapterContext: adapterContextFor,
+        routerView: routerViewNow,
+        ...(routingRepo === undefined ? {} : { experience: () => routingRepo.experience() }),
+        ...(usageRepo === undefined ? {} : { usage: usageRepo }),
+        existingSlugs: () => skills.records().map((r) => r.slug),
+        // 用编排器实际持有的注册表：另建一个会让技能声明的工具与真实可用的分歧
+        availableTools: () =>
+          registry === undefined ? [] : registry.toolSchemas().map((s) => s.name),
+      },
+      {
+        conversationId: req.conversationId,
+        focus: req.focus,
+        modelId: req.modelId,
+      },
+    );
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        reason: result.reason,
+        insufficient: result.insufficient ?? false,
+      };
+    }
+
+    /*
+     * 只返回草稿。
+     *
+     * 蒸馏的输入是一次具体分析，它天然倾向于把一次性细节写成通用规则
+     * （某台机器的路径、某次运行的数值）。那类错误的表现是「照着技能做但结果对不上」，
+     * 比报错难查得多，因此必须让用户看过 contentWarnings 再决定存不存。
+     * 确认后由界面调 skill.write 落盘。
+     */
+    return {
+      ok: true,
+      modelId: result.modelId,
+      context: result.context,
+      slug: result.draft.slug,
+      manifest: String(result.draft.files['skill.json'] ?? ''),
+      instructions: String(result.draft.files['SKILL.md'] ?? ''),
+      contentWarnings: result.draft.contentWarnings,
+      manifestWarnings: result.draft.manifestWarnings,
+      conflictsWith: skills.records().find((r) => r.slug === result.draft.slug) ?? null,
     };
   });
 

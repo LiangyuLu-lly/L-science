@@ -148,9 +148,7 @@ export function loadSkill(dir: string, scope: SkillScope): LoadedSkill {
        * 几个字段（可能含凭据）之后调用才失败，而那时的报错来自 Python 侧的
        * ImportError，与「声明写错了」这个真实原因完全对不上。
        */
-      warnings.push(
-        'provider.json 声明了供应商但目录里没有 provider.py，启用后调用必然失败',
-      );
+      warnings.push('provider.json 声明了供应商但目录里没有 provider.py，启用后调用必然失败');
     }
   } else if (hasProviderPy) {
     // 反过来也要报：光有实现没有声明的话平台无从知道该调哪个函数、要用户填什么

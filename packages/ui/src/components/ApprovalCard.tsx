@@ -35,6 +35,7 @@ const KIND_LABEL: Record<ApprovalRequest['kind'], string> = {
   'ssh-command': '在远程主机执行命令',
   'compute-provider': '使用算力凭据',
   'domain-allowlist': '新增域名白名单',
+  'skill-write': '写入技能',
 };
 
 export interface ApprovalCardProps {

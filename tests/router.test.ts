@@ -84,10 +84,19 @@ const profileOf = (
  * ------------------------------------------------------------------ */
 
 describe('权重预设（需求 7.2）', () => {
-  it('覆盖全部十三种任务类型', () => {
-    expect(Object.keys(TASK_WEIGHTS)).toHaveLength(13);
-    expect(Object.keys(TASK_REQUIREMENTS)).toHaveLength(13);
-    expect(Object.keys(TASK_SENSITIVITY)).toHaveLength(13);
+  it('三张表覆盖同一组任务类型', () => {
+    /*
+     * 断言「三张表的键集合完全一致」而不是「都有 N 条」。
+     *
+     * 写死条数的版本在加一个任务类型时会红，但它红的原因是数字过期，不是真出了问题——
+     * 那种失败只会让人把 13 改成 14 然后继续，而真正要防的「加了类型但漏了某张表」
+     * 反而被这次修改掩盖过去。`TASK_WEIGHTS` 的类型是 Record<TaskType, ...>，
+     * 漏一张表编译期就会报，这里守的是运行期键集合的一致性。
+     */
+    const weights = Object.keys(TASK_WEIGHTS).sort();
+    expect(Object.keys(TASK_REQUIREMENTS).sort()).toEqual(weights);
+    expect(Object.keys(TASK_SENSITIVITY).sort()).toEqual(weights);
+    expect(weights.length).toBeGreaterThanOrEqual(13);
   });
 
   it('每种任务类型都在三张表里都有条目', () => {

@@ -336,7 +336,11 @@ export function parseSkillProvider(raw: unknown, path: string): SkillProvider {
   }
 
   const rawEntrypoints = obj.entrypoints;
-  if (typeof rawEntrypoints !== 'object' || rawEntrypoints === null || Array.isArray(rawEntrypoints)) {
+  if (
+    typeof rawEntrypoints !== 'object' ||
+    rawEntrypoints === null ||
+    Array.isArray(rawEntrypoints)
+  ) {
     throw new SkillManifestError(path, 'entrypoints 必须是对象（角色名 → Python 函数名）');
   }
   const entrypoints: Record<string, string> = {};

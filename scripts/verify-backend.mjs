@@ -453,6 +453,7 @@ try {
     'ask_user',
     'check_findings',
     'control_repl',
+    'create_skill',
     'delegate',
     'edit_file',
     'generate_plan',
@@ -561,7 +562,210 @@ try {
     '',
   );
 
-  // --- 12. stdin 关闭后自行退出 ---
+  /*
+   * --- 12. 技能创建与导入（任务 12.15，需求 9.6）---
+   *
+   * 走真实进程验的是整条链：ipc schema → dispatcher → 处理器 → 文件系统 →
+   * `skills.reload()`。最后一步是关键——写进磁盘但没重扫的话，技能存在却搜不到，
+   * 而那种状态单元测试看不见（它们直接调 writeUserSkill）。
+   */
+
+  const skillManifest = JSON.stringify(
+    {
+      slug: 'verify-authoring',
+      name: '端到端校验技能',
+      version: '1.0.0',
+      domain: '测试',
+      description: '由 verify-backend 写入，用于验证技能创建链路是否接通',
+      triggers: ['验证技能创建', '端到端写入技能', '检查 skill.write'],
+      tools: [],
+    },
+    null,
+    2,
+  );
+
+  send(
+    req('sk1', {
+      method: 'skill.validate',
+      manifest: skillManifest,
+      instructions: '# 端到端校验\n\n这是正文。\n',
+    }),
+  );
+  await waitFor(() => byId('sk1') !== undefined, 8000, 'skill.validate');
+  check(
+    byId('sk1').ok === true &&
+      byId('sk1').result?.ok === true &&
+      byId('sk1').result?.slug === 'verify-authoring',
+    'skill.validate 通过  ',
+    explain('sk1'),
+  );
+
+  // 一次性细节要在保存前就被指出来，而不是等技能在别的机器上失效
+  send(
+    req('sk2', {
+      method: 'skill.validate',
+      manifest: skillManifest,
+      instructions: '# x\n\n读取 D:/data/s01.edf，按刚才的参数跑\n',
+    }),
+  );
+  await waitFor(() => byId('sk2') !== undefined, 8000, 'skill.validate 内容审查');
+  const auditWarnings = (byId('sk2').result?.warnings ?? []).join('；');
+  check(
+    auditWarnings.includes('绝对路径') && auditWarnings.includes('会话指代'),
+    '一次性细节被指出    ',
+    auditWarnings.slice(0, 80),
+  );
+
+  send(
+    req('sk3', {
+      method: 'skill.write',
+      manifest: skillManifest,
+      instructions: '# 端到端校验\n\n这是正文，用于确认写入链路接通。\n',
+      references: { 'notes.md': '参考材料内容' },
+    }),
+  );
+  await waitFor(() => byId('sk3') !== undefined, 15000, 'skill.write');
+  check(
+    byId('sk3').ok === true && byId('sk3').result?.ok === true,
+    'skill.write 写入成功 ',
+    explain('sk3'),
+  );
+
+  // 写完必须能被检索到——这一步验的是处理器有没有做 reload
+  send(req('sk4', { method: 'skill.search', query: '验证技能创建', limit: 5 }));
+  await waitFor(() => byId('sk4') !== undefined, 20000, 'skill.search 命中新技能');
+  check(
+    (byId('sk4').result?.hits ?? []).some((h) => h.slug === 'verify-authoring'),
+    '新技能立刻可检索    ',
+    (byId('sk4').result?.hits ?? []).map((h) => h.slug).join(', '),
+  );
+
+  send(req('sk5', { method: 'skill.source', slug: 'verify-authoring' }));
+  await waitFor(() => byId('sk5') !== undefined, 8000, 'skill.source');
+  check(
+    byId('sk5').result?.scope === 'user' &&
+      byId('sk5').result?.editable === true &&
+      byId('sk5').result?.origin?.kind === 'authored' &&
+      (byId('sk5').result?.references ?? []).includes('notes.md'),
+    'skill.source 带来源  ',
+    explain('sk5'),
+  );
+
+  // 同名再写一次必须被拒：静默覆盖会让用户改过的版本无声消失
+  send(
+    req('sk6', {
+      method: 'skill.write',
+      manifest: skillManifest,
+      instructions: '# 覆盖尝试\n\n不该生效。\n',
+    }),
+  );
+  await waitFor(() => byId('sk6') !== undefined, 8000, 'skill.write 同名');
+  check(
+    byId('sk6').result?.ok === false,
+    '同名写入默认被拒    ',
+    (byId('sk6').result?.errors ?? []).join('；').slice(0, 60),
+  );
+
+  // 导入一个 zip（用 core 自己的能力造，格式兼容由 verify:skills 单独验）
+  const zipBase64 = await (async () => {
+    const { deflateRawSync } = await import('node:zlib');
+    const files = [
+      {
+        path: 'imported-skill/skill.json',
+        content: JSON.stringify({
+          slug: 'imported-skill',
+          name: '导入的技能',
+          version: '1.0.0',
+          domain: '测试',
+          description: '由 verify-backend 通过 zip 导入，用于验证导入链路',
+          triggers: ['验证 zip 导入', '导入技能包', '检查 importArchive'],
+          tools: [],
+        }),
+      },
+      { path: 'imported-skill/SKILL.md', content: '# 导入的技能\n\n正文。\n' },
+    ];
+    const locals = [];
+    const centrals = [];
+    let offset = 0;
+    for (const f of files) {
+      const nameBuf = Buffer.from(f.path, 'utf8');
+      const raw = Buffer.from(f.content, 'utf8');
+      const data = deflateRawSync(raw);
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(20, 4);
+      local.writeUInt16LE(0x0800, 6);
+      local.writeUInt16LE(8, 8);
+      local.writeUInt32LE(data.length, 18);
+      local.writeUInt32LE(raw.length, 22);
+      local.writeUInt16LE(nameBuf.length, 26);
+      locals.push(local, nameBuf, data);
+      const central = Buffer.alloc(46);
+      central.writeUInt32LE(0x02014b50, 0);
+      central.writeUInt16LE(20, 4);
+      central.writeUInt16LE(20, 6);
+      central.writeUInt16LE(0x0800, 8);
+      central.writeUInt16LE(8, 10);
+      central.writeUInt32LE(data.length, 20);
+      central.writeUInt32LE(raw.length, 24);
+      central.writeUInt16LE(nameBuf.length, 28);
+      central.writeUInt32LE(offset, 42);
+      centrals.push(central, nameBuf);
+      offset += local.length + nameBuf.length + data.length;
+    }
+    const localBlock = Buffer.concat(locals);
+    const centralBlock = Buffer.concat(centrals);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(files.length, 8);
+    eocd.writeUInt16LE(files.length, 10);
+    eocd.writeUInt32LE(centralBlock.length, 12);
+    eocd.writeUInt32LE(localBlock.length, 16);
+    return Buffer.concat([localBlock, centralBlock, eocd]).toString('base64');
+  })();
+
+  send(
+    req('sk7', {
+      method: 'skill.importArchive',
+      fileName: 'probe.zip',
+      contentBase64: zipBase64,
+    }),
+  );
+  await waitFor(() => byId('sk7') !== undefined, 15000, 'skill.importArchive');
+  check(
+    byId('sk7').result?.ok === true && byId('sk7').result?.skills?.[0]?.slug === 'imported-skill',
+    'zip 导入成功        ',
+    explain('sk7'),
+  );
+
+  // GitHub 标识写错时要在下载之前就被挡住，而不是等一个 404
+  send(req('sk8', { method: 'skill.importGithub', spec: 'not-a-repo' }));
+  await waitFor(() => byId('sk8') !== undefined, 15000, 'skill.importGithub 非法标识');
+  check(
+    byId('sk8').result?.ok === false &&
+      (byId('sk8').result?.errors ?? []).join('').includes('owner/repo'),
+    '非法仓库标识被挡住  ',
+    (byId('sk8').result?.errors ?? []).join('；').slice(0, 60),
+  );
+
+  send(req('sk9', { method: 'skill.delete', slug: 'imported-skill' }));
+  await waitFor(() => byId('sk9') !== undefined, 15000, 'skill.delete');
+  check(
+    byId('sk9').ok === true && byId('sk9').result?.deleted === true,
+    'skill.delete 成功    ',
+    explain('sk9'),
+  );
+
+  // 内置技能不可删，只能禁用——删了下次启动会被同步回来
+  send(req('sk10', { method: 'skill.delete', slug: 'literature-search' }));
+  await waitFor(() => byId('sk10') !== undefined, 8000, 'skill.delete 内置');
+  check(
+    byId('sk10').ok === false && String(byId('sk10').error?.message ?? '').includes('内置'),
+    '内置技能拒绝删除    ',
+    String(byId('sk10').error?.message ?? '').slice(0, 50),
+  );
+
+  // --- 13. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

@@ -130,6 +130,21 @@ export const TASK_WEIGHTS: Readonly<Record<TaskType, WeightPreset>> = {
     citationFidelity: 30,
     instructionFollowing: 15,
   },
+  /*
+   * 从一次具体的分析里提炼出可复用的方法学。
+   *
+   * 长上下文与指令跟随是主项：输入是整段会话（几万字符），输出必须是能直接落盘的
+   * 结构化清单。`citationFidelity` 给得不低，因为这里最容易犯的错是**把一次运行的
+   * 具体结果写成通用结论**——那类错误与「编造引文」是同一种毛病。
+   */
+  'skill.distill': {
+    longContextRecall: 35,
+    instructionFollowing: 30,
+    reasoning: 25,
+    citationFidelity: 20,
+    writingZh: 15,
+    structuredOutput: 15,
+  },
 };
 
 /**
@@ -155,6 +170,8 @@ export const TASK_REQUIREMENTS: Readonly<
   'review.simulate': { needToolUse: false, needStructuredOutput: false },
   'citation.verify': { needToolUse: true, needStructuredOutput: true },
   'reviewer.audit': { needToolUse: false, needStructuredOutput: true },
+  // 输出要能直接写成 skill.json + SKILL.md，因此必须是结构化的
+  'skill.distill': { needToolUse: false, needStructuredOutput: true },
 };
 
 /**
@@ -179,6 +196,8 @@ export const TASK_SENSITIVITY: Readonly<Record<TaskType, { cost: number; latency
   // 核引文错一次的代价远高于省下的钱
   'citation.verify': { cost: 0.1, latency: 0.1 },
   'reviewer.audit': { cost: 0.15, latency: 0.1 },
+  // 一次性动作，由用户显式触发，产物会被长期复用——省这笔钱不值得
+  'skill.distill': { cost: 0.2, latency: 0.05 },
 };
 
 /**

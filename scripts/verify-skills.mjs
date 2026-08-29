@@ -233,5 +233,149 @@ for (const s of skills) {
 }
 check(badTools.length === 0, 'tools 取值都是真实存在的工具', badTools.join(', '));
 
+/* ---------------- 7. 归档解析对真实打包工具的兼容（任务 12.15）---------------- */
+
+/*
+ * 单元测试里的归档是手写构造的——那是为了造出「含 ../ 的条目」这类正常工具不会
+ * 产出的东西。但反过来的风险也真实存在：**真实工具产出的归档我们读不读得了**。
+ * zip 的实现细节（数据描述符、UTF-8 标志位、额外字段）各家不同，只用自造的归档
+ * 验证等于只验了自己那一种写法。
+ *
+ * 这里用 PowerShell 的 Compress-Archive（Windows 用户手里最常见的打包方式）与
+ * 系统自带的 tar 各造一个，再用我们的解析器读回来。
+ */
+
+process.stdout.write('\n--- 7. 归档兼容 ---\n');
+
+const {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readFileSync: readBin,
+} = await import('node:fs');
+const { tmpdir } = await import('node:os');
+const { spawnSync } = await import('node:child_process');
+const { readArchive, findArchivedSkills, importSkillsFromArchive } =
+  await import('../packages/core/dist/index.js');
+
+const archRoot = mkdtempSync(join(tmpdir(), 'lsci-arch-'));
+try {
+  // 造一个真实的技能目录
+  const srcSkill = join(archRoot, 'src', 'archive-probe');
+  mkdirSync(join(srcSkill, 'references'), { recursive: true });
+  writeFileSync(
+    join(srcSkill, 'skill.json'),
+    JSON.stringify(
+      {
+        slug: 'archive-probe',
+        name: '归档探针',
+        version: '1.0.0',
+        domain: '测试',
+        description: '用于验证归档解析对真实打包工具的兼容性',
+        triggers: ['归档兼容性检查', '解析 zip', '解析 tar'],
+        tools: [],
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+  writeFileSync(join(srcSkill, 'SKILL.md'), '# 归档探针\n\n这是正文，用于验证解析结果。\n', 'utf8');
+  // 中文文件名：UTF-8 标志位没处理对时这一条会失败
+  writeFileSync(join(srcSkill, 'references', 'canshu-biao.md'), '参数表内容\n', 'utf8');
+
+  /* --- PowerShell Compress-Archive --- */
+
+  const zipPath = join(archRoot, 'probe.zip');
+  const ps = spawnSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Compress-Archive -Path '${srcSkill}' -DestinationPath '${zipPath}' -Force`,
+    ],
+    { encoding: 'utf8', timeout: 60_000, windowsHide: true },
+  );
+
+  if (ps.status !== 0 || !existsSync(zipPath)) {
+    check(
+      false,
+      'Compress-Archive 产出的 zip 能读',
+      `打包失败：${(ps.stderr ?? '').slice(0, 120)}`,
+    );
+  } else {
+    const zip = readArchive(readBin(zipPath));
+    const found = findArchivedSkills(zip.entries);
+    check(
+      zip.format === 'zip' && found.length === 1,
+      'Compress-Archive 产出的 zip 能读',
+      `${zip.entries.length} 个条目，认出 ${found.length} 个技能`,
+    );
+    check(
+      Object.keys(found[0]?.files ?? {}).includes('references/canshu-biao.md'),
+      'zip 里的子目录条目路径正确',
+      Object.keys(found[0]?.files ?? {}).join(' '),
+    );
+    check(
+      String(found[0]?.files['SKILL.md'] ?? '').includes('这是正文'),
+      'zip 里的 UTF-8 内容未被改坏',
+      '',
+    );
+
+    // 走完整导入路径：能不能真的落成一个可加载的技能
+    const importDir = join(archRoot, 'user');
+    mkdirSync(importDir, { recursive: true });
+    const outcome = importSkillsFromArchive({
+      userDir: importDir,
+      data: readBin(zipPath),
+      fileName: 'probe.zip',
+    });
+    check(
+      outcome.ok && outcome.skills[0]?.ok === true,
+      'zip 导入后技能可加载',
+      outcome.ok ? (outcome.skills[0]?.path ?? '') : outcome.errors.join('；'),
+    );
+  }
+
+  /* --- 系统 tar（bsdtar），也是 GitHub tarball 的格式 --- */
+
+  const tgzPath = join(archRoot, 'probe.tar.gz');
+  const tarResult = spawnSync(
+    'tar',
+    ['-czf', tgzPath, '-C', join(archRoot, 'src'), 'archive-probe'],
+    {
+      encoding: 'utf8',
+      timeout: 60_000,
+      windowsHide: true,
+    },
+  );
+
+  if (tarResult.status !== 0 || !existsSync(tgzPath)) {
+    check(
+      false,
+      'tar -czf 产出的 tar.gz 能读',
+      `打包失败：${(tarResult.stderr ?? tarResult.error?.message ?? '').slice(0, 120)}`,
+    );
+  } else {
+    const tgz = readArchive(readBin(tgzPath));
+    const found = findArchivedSkills(tgz.entries);
+    check(
+      tgz.format === 'tar.gz' && found.length === 1,
+      'tar -czf 产出的 tar.gz 能读',
+      `${tgz.entries.length} 个条目，认出 ${found.length} 个技能`,
+    );
+    check(
+      String(found[0]?.files['references/canshu-biao.md'] ?? '').includes('参数表'),
+      'tar.gz 里的参考材料内容正确',
+      '',
+    );
+  }
+} finally {
+  rmSync(archRoot, { recursive: true, force: true });
+}
+
 process.stdout.write(`\n通过 ${passed}，失败 ${failed}\n`);
 process.exit(failed === 0 ? 0 : 1);

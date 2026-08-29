@@ -60,7 +60,8 @@ export type TaskType =
   | 'manuscript.translate'
   | 'review.simulate'
   | 'citation.verify'
-  | 'reviewer.audit';
+  | 'reviewer.audit'
+  | 'skill.distill';
 
 export type Modality = 'text' | 'image' | 'pdf' | 'audio';
 
@@ -249,9 +250,20 @@ export interface ArtifactVersionRef {
   versionNo: number;
 }
 
-/** 需求 17.1 列出的五类需审批操作。 */
+/**
+ * 需审批操作的类别（需求 17.1 列出五类，`skill-write` 是第六类）。
+ *
+ * `skill-write`：模型在对话里创建或改写一个技能。它需要审批的理由与其他几类不同——
+ * 技能不是一次性动作，而是**会被注入到以后每一次相关对话里**的指令。一份方法学写错的
+ * 技能，影响的是此后所有命中它的分析，而那种影响不会以报错的形式出现。
+ */
 export type ApprovalKind =
-  'artifact-delete' | 'host-access' | 'ssh-command' | 'compute-provider' | 'domain-allowlist';
+  | 'artifact-delete'
+  | 'host-access'
+  | 'ssh-command'
+  | 'compute-provider'
+  | 'domain-allowlist'
+  | 'skill-write';
 
 /**
  * 授权的作用域（需求 17.5）。

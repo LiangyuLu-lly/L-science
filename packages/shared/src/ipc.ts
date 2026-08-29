@@ -474,6 +474,100 @@ export const requestSchema = z.discriminatedUnion('method', [
     limit: z.number().int().min(1).max(500).default(200),
   }),
 
+  /* --- 技能创建与导入（任务 12.15，需求 9.6）--- */
+
+  /**
+   * 读一个技能的源文件，供编辑界面用。
+   *
+   * 参考材料只给文件名与大小而不给内容：一个技能可能带几百 KB 的参数表，
+   * 打开设置页就把它们全传一遍是浪费，而编辑器是按文件打开的。
+   */
+  z.object({ method: z.literal('skill.source'), slug: idSchema }),
+
+  /** 读一份参考材料的内容。编辑界面按需取。 */
+  z.object({
+    method: z.literal('skill.reference'),
+    slug: idSchema,
+    name: z.string().min(1).max(200),
+  }),
+
+  /**
+   * 从零写或改一个技能（路径 2）。
+   *
+   * `manifest` 是 skill.json 的文本而不是对象：编辑器里用户编辑的就是文本，
+   * 传对象会把「JSON 语法错误」这个最常见的问题在传输层就丢掉，而那时用户
+   * 得到的是一条 zod 校验消息而不是「第 7 行少了个逗号」。
+   */
+  z.object({
+    method: z.literal('skill.write'),
+    manifest: z.string().min(2).max(64_000),
+    instructions: z.string().min(1).max(512_000),
+    references: z.record(z.string().max(200), z.string().max(512_000)).default({}),
+    /** provider.json 与 provider.py，成对提供。 */
+    providerJson: z.string().max(64_000).nullable().default(null),
+    providerScript: z.string().max(512_000).nullable().default(null),
+    overwrite: z.boolean().default(false),
+  }),
+
+  /** 只校验不写入。编辑器保存前用它给即时反馈。 */
+  z.object({
+    method: z.literal('skill.validate'),
+    manifest: z.string().min(1).max(64_000),
+    instructions: z.string().max(512_000).default(''),
+  }),
+
+  /** 删除一个用户技能。内置技能不可删，只能禁用。 */
+  z.object({ method: z.literal('skill.delete'), slug: idSchema }),
+
+  /**
+   * 导入压缩包（路径 3）。
+   *
+   * 内容用 base64 传：IPC 是 JSON 通道，二进制没法直接放。
+   * 上限与 `ARCHIVE_LIMITS.maxArchiveBytes` 对齐（base64 膨胀约 4/3）。
+   */
+  z.object({
+    method: z.literal('skill.importArchive'),
+    fileName: z.string().min(1).max(400),
+    contentBase64: z.string().min(4).max(46_000_000),
+    overwrite: z.boolean().default(false),
+  }),
+
+  /** 导入本机目录（路径 3 的另一种形态：用户已经把技能放在磁盘上）。 */
+  z.object({
+    method: z.literal('skill.importDirectory'),
+    directory: z.string().min(1).max(4096),
+    overwrite: z.boolean().default(false),
+  }),
+
+  /**
+   * 从 GitHub 导入（路径 4）。
+   *
+   * 私库令牌传的是**凭据引用名**而不是令牌本身：请求载荷不得含密钥
+   * （见本文件对凭据的约定）。令牌先用 `credential.set` 存进 vault。
+   */
+  z.object({
+    method: z.literal('skill.importGithub'),
+    /** `owner/repo`、`owner/repo@ref`，或直接粘贴仓库网址。 */
+    spec: z.string().min(3).max(500),
+    credentialRef: z.string().max(200).nullable().default(null),
+    overwrite: z.boolean().default(false),
+  }),
+
+  /**
+   * 从历史会话蒸馏（路径 5）。
+   *
+   * 只返回草稿，不落盘——蒸馏的输入是一次具体分析，它天然倾向于把一次性细节
+   * 写成通用规则，必须让用户看过再存。确认后走 `skill.write`。
+   */
+  z.object({
+    method: z.literal('skill.distill'),
+    projectId: idSchema,
+    conversationId: idSchema,
+    /** 指定要提炼什么。留空则由模型判断。 */
+    focus: z.string().max(2000).nullable().default(null),
+    modelId: z.string().max(200).nullable().default(null),
+  }),
+
   /* --- 计划（任务 12.5，需求 10.1、10.4）--- */
 
   /** 某个会话的计划及各步实时状态。 */

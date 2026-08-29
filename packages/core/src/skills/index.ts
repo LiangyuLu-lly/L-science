@@ -59,3 +59,66 @@ export type { SkillInjection, SkillManagerOptions, SkillSearchResult } from './m
 
 export { createLoadSkillReferenceTool, createSearchSkillsTool } from './tools.js';
 export type { LoadSkillReferenceInput, SearchSkillsInput, SkillToolOptions } from './tools.js';
+
+/* ---------------- 创建与导入（任务 12.15）---------------- */
+
+export {
+  auditSkillContent,
+  findSkillRoots,
+  readSkillOrigin,
+  readSkillTree,
+  removeUserSkill,
+  skillFingerprint,
+  SKILL_LIMITS,
+  validateSkillFiles,
+  writeUserSkill,
+} from './authoring.js';
+export type {
+  ReadTreeResult,
+  SkillFileMap,
+  SkillOrigin,
+  SkillOriginKind,
+  ValidateResult,
+  WriteSkillInput,
+  WriteSkillResult,
+} from './authoring.js';
+
+export { ARCHIVE_LIMITS, ArchiveError, findArchivedSkills, readArchive } from './archive.js';
+export type { ArchivedSkill, ArchiveEntry, ArchiveResult } from './archive.js';
+
+export {
+  importSkillsFromArchive,
+  importSkillsFromDirectory,
+  importSkillsFromGitHub,
+  parseGitHubSpec,
+  skillSourceRef,
+  userSkillExists,
+} from './import.js';
+export type {
+  GitHubRepoSpec,
+  ImportArchiveInput,
+  ImportDirectoryInput,
+  ImportedSkill,
+  ImportGitHubInput,
+  ImportOutcome,
+} from './import.js';
+
+export {
+  buildDistillContext,
+  collectToolUsage,
+  distillSkill,
+  distillSystemPrompt,
+  distillUserPrompt,
+  parseDistilledSkill,
+} from './distill.js';
+export type {
+  DistilledDraft,
+  DistillContext,
+  DistillDeps,
+  DistillParseResult,
+  DistillRequest,
+  DistillResult,
+} from './distill.js';
+
+export { createCreateSkillTool } from './authoring-tools.js';
+export type { CreateSkillInput, CreateSkillToolOptions } from './authoring-tools.js';
