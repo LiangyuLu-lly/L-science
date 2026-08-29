@@ -127,15 +127,23 @@ export interface REnv {
   pathDirs: string[];
 }
 
-export function resolveREnv(envs: readonly string[] = listCondaEnvs()): REnv | null {
-  const prefix = findEnvPrefix(envs, MANAGED_R_ENV);
-  if (prefix === null) return null;
-
+/**
+ * 按给定的环境目录构造 R 启动信息。
+ *
+ * 单独导出是为了让「用户登记的 R 环境」也能走同一段路径（任务 14.4，需求 15.2）。
+ * 这段路径推断在 Windows 上有几个非显然的地方（真正的 Rscript 在 `lib/R/bin/x64` 下，
+ * DLL 目录必须预置进 PATH），复制一份到别处迟早分叉，而分叉的表现是 R 内核以
+ * `0xC0000135` 退出且 stdout/stderr 全空。
+ */
+export function rEnvAt(prefix: string): REnv | null {
   const rHome = join(prefix, 'lib', 'R');
   const isWin = process.platform === 'win32';
   // Windows 上真正的可执行文件在 bin/x64 下；bin/R.exe 与 Scripts/R.exe 都起不来。
-  const rscript = isWin ? join(rHome, 'bin', 'x64', 'Rscript.exe') : join(prefix, 'bin', 'Rscript');
-  if (!existsSync(rscript)) return null;
+  const candidates = isWin
+    ? [join(rHome, 'bin', 'x64', 'Rscript.exe'), join(rHome, 'bin', 'Rscript.exe')]
+    : [join(prefix, 'bin', 'Rscript'), join(rHome, 'bin', 'Rscript')];
+  const rscript = candidates.find((p) => existsSync(p));
+  if (rscript === undefined) return null;
 
   const pathDirs = [
     prefix,
@@ -147,6 +155,11 @@ export function resolveREnv(envs: readonly string[] = listCondaEnvs()): REnv | n
   ].filter((p) => existsSync(p));
 
   return { prefix, rHome, rscript, pathDirs };
+}
+
+export function resolveREnv(envs: readonly string[] = listCondaEnvs()): REnv | null {
+  const prefix = findEnvPrefix(envs, MANAGED_R_ENV);
+  return prefix === null ? null : rEnvAt(prefix);
 }
 
 /* ------------------------------------------------------------------ *

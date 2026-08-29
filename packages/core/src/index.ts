@@ -79,6 +79,11 @@ export * from './manuscript/index.js';
 
 export * from './compute/index.js';
 
+export * from './envs/index.js';
+
+export { EnvsRepo } from './repo/envs.js';
+export type { EnvRecord } from './repo/envs.js';
+
 export {
   ComputeGrantsRepo,
   ComputeJobsRepo,

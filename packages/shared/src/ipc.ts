@@ -1234,6 +1234,132 @@ export const requestSchema = z.discriminatedUnion('method', [
   }),
 
   z.object({ method: z.literal('compute.revokeGrant'), grantId: idSchema }),
+
+  /* --- 环境与包管理（任务 14.4，需求 15.1-15.7）--- */
+
+  /**
+   * 列出已登记的环境。
+   *
+   * 一并返回安装器状态与「R/Python 是否分处独立环境」的检查结果：这两件事都是
+   * 环境页要显示的，分成三次请求只会让页面出现三段不同时刻的状态。
+   */
+  z.object({
+    method: z.literal('env.list'),
+    projectId: idSchema,
+    language: z.enum(['python', 'r']).optional(),
+  }),
+
+  z.object({ method: z.literal('env.get'), projectId: idSchema, envId: idSchema }),
+
+  /** 把本机的 conda 环境同步进登记表（需求 15.1）。 */
+  z.object({ method: z.literal('env.sync'), projectId: idSchema }),
+
+  z.object({ method: z.literal('env.probe'), projectId: idSchema, envId: idSchema }),
+
+  /**
+   * 创建托管 conda 环境（需求 15.1）。后台跑（需求 15.6）。
+   */
+  z.object({
+    method: z.literal('env.create'),
+    projectId: idSchema,
+    conversationId: idSchema,
+    name: z.string().min(1).max(64),
+    language: z.enum(['python', 'r']).default('python'),
+    pythonVersion: z.string().max(20).optional(),
+    rVersion: z.string().max(20).optional(),
+    packages: z.array(z.string().min(1).max(200)).max(100).optional(),
+    channel: z.string().min(1).max(100).optional(),
+    notes: z.string().max(4000).optional(),
+  }),
+
+  /**
+   * 登记用户既有的环境（需求 15.2）。
+   *
+   * `path` 可以是环境根目录也可以是解释器本身——用户从终端 `where python` 拿到的是
+   * 后者，而向导里提示的是前者。只认一种会让另一种输入得到完全误导的报错。
+   */
+  z.object({
+    method: z.literal('env.register'),
+    projectId: idSchema,
+    name: z.string().max(64).default(''),
+    path: z.string().min(1).max(1000),
+    language: z.enum(['python', 'r']).optional(),
+    notes: z.string().max(4000).optional(),
+    setDefault: z.boolean().default(false),
+  }),
+
+  /**
+   * 删除或取消登记。
+   *
+   * `deleteFiles` 只对平台托管的环境有效。用户自己的环境平台只删登记记录——那个目录
+   * 里可能有他花了一天装好的依赖。
+   */
+  z.object({
+    method: z.literal('env.remove'),
+    projectId: idSchema,
+    envId: idSchema,
+    deleteFiles: z.boolean().default(true),
+  }),
+
+  /** 设为默认（新内核用它，需求 15.2）。 */
+  z.object({ method: z.literal('env.setDefault'), projectId: idSchema, envId: idSchema }),
+
+  z.object({
+    method: z.literal('env.clearDefault'),
+    projectId: idSchema,
+    language: z.enum(['python', 'r']),
+  }),
+
+  /** 包清单。按来源筛选用于回答「哪些包是 pip 装的」。 */
+  z.object({
+    method: z.literal('env.packages'),
+    projectId: idSchema,
+    envId: idSchema,
+    source: z.enum(['conda', 'pypi', 'cran', 'unknown']).optional(),
+    query: z.string().max(200).optional(),
+    limit: z.number().int().min(1).max(2000).default(500),
+  }),
+
+  /**
+   * 算安装计划但不执行。
+   *
+   * UI 用它在按下「安装」之前把「用哪个安装器、要不要重启、有没有混装冲突」显示出来。
+   * 反过来（装了再解释）在这里行不通：装一半再发现混装冲突时环境已经坏了。
+   */
+  z.object({
+    method: z.literal('env.plan'),
+    projectId: idSchema,
+    envId: idSchema,
+    specs: z.array(z.string().min(1).max(200)).min(1).max(100),
+    family: z.enum(['pypi', 'conda', 'cran']).optional(),
+    channel: z.string().min(1).max(100).optional(),
+    uninstall: z.boolean().default(false),
+  }),
+
+  z.object({
+    method: z.literal('env.install'),
+    projectId: idSchema,
+    conversationId: idSchema,
+    envId: idSchema,
+    specs: z.array(z.string().min(1).max(200)).min(1).max(100),
+    family: z.enum(['pypi', 'conda', 'cran']).optional(),
+    channel: z.string().min(1).max(100).optional(),
+    uninstall: z.boolean().default(false),
+    /** 明知有混装风险仍要继续。UI 必须先把风险原文显示给用户。 */
+    force: z.boolean().default(false),
+  }),
+
+  /** 重启某个环境上的内核（需求 15.5）。 */
+  z.object({ method: z.literal('env.restartKernels'), projectId: idSchema, envId: idSchema }),
+
+  /** 这个环境里**已经存在**的 conda/pip 混装（需求 15.4 的排查面）。 */
+  z.object({ method: z.literal('env.mixups'), projectId: idSchema, envId: idSchema }),
+
+  /** 安装器状态。重新探测（用户刚装了 uv 之后）。 */
+  z.object({ method: z.literal('env.installers'), refresh: z.boolean().default(false) }),
+
+  /** 登记向导的提示信息：本机有哪些 conda 环境、常见的 venv 位置在哪。 */
+  z.object({ method: z.literal('env.discover'), projectId: idSchema.optional() }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

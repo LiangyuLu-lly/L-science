@@ -15,8 +15,14 @@ import { dirname, join as joinPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createDefaultRegistry } from '@l-science/adapters';
-import { KernelPool, detectKernels } from '@l-science/kernel';
-import type { JupyterKernel, KernelLanguage, KernelOutput } from '@l-science/kernel';
+import { KernelPool, detectKernels, rEnvAt } from '@l-science/kernel';
+import type {
+  JupyterKernel,
+  KernelLanguage,
+  KernelOutput,
+  PythonEnv,
+  REnv,
+} from '@l-science/kernel';
 import type { TurnEvent } from '@l-science/shared';
 
 import { ApprovalService } from './approval/service.js';
@@ -90,6 +96,20 @@ import {
   ComputeTargetsRepo,
   grantScopeOptions,
 } from './repo/compute.js';
+import { EnvsRepo, type EnvRecord } from './repo/envs.js';
+import {
+  EnvService,
+  createManageEnvironmentsTool,
+  detectInstallers,
+  commonVenvLocations,
+  condaAvailable,
+  listCondaEnvironments,
+  resetInstallerCache,
+  restartNotice,
+  type EnvLanguage,
+  type InstallerFamily,
+  type PackageSource,
+} from './envs/index.js';
 import {
   createGeneratePlanTool,
   createPlanStatusTool,
@@ -357,6 +377,20 @@ async function main(): Promise<void> {
   const citationVerifiers = new Map<string, CitationVerifier>();
   const manuscriptCompilers = new Map<string, ManuscriptCompiler>();
   const computeServices = new Map<string, ComputeService>();
+  const envServices = new Map<string, EnvService>();
+
+  /**
+   * 路径比较的归一化。
+   *
+   * Windows 上同一个目录会以不同写法出现（大小写、正反斜杠、末尾斜杠），而内核记下的
+   * 路径来自 conda 的输出、登记表里的来自用户输入。不归一化的话「这个内核跑在这个
+   * 环境上吗」在同一台机器上都会答错。
+   */
+  const normalizePath = (path: string): string =>
+    path
+      .replace(/[\\/]+$/u, '')
+      .replace(/\\/gu, '/')
+      .toLowerCase();
 
   /**
    * 每个项目的执行平面资源，退出时要逐个关掉。
@@ -427,6 +461,40 @@ async function main(): Promise<void> {
    */
   const computeTargets = new ComputeTargetsRepo(store.db);
   const computeGrants = new ComputeGrantsRepo(store.db);
+
+  /* --- 环境与包（任务 14.4，需求 15.1-15.7）------------------------- */
+
+  /*
+   * 环境登记表在**应用库**：一个 conda 环境或一个 venv 是这台机器上的资源，不属于
+   * 某个项目。放进项目库会让「新建项目后要把环境重新登记一遍」，而登记一个 venv
+   * 需要用户自己去找路径。
+   *
+   * 声明位置提到这里是因为内核池要用 `defaultKernelEnv`（需求 15.2 的内核直启），
+   * 而内核池在每个项目的初始化路径上。
+   */
+  const envsRepo = new EnvsRepo(store.db);
+
+  /**
+   * 用户选定的默认 Python 环境。null 表示用探测到的托管环境。
+   *
+   * 状态不是 `ready` 的环境**不返回**：一个缺 ipykernel 或目录已被删掉的环境会让
+   * 内核起不来，而那时用户看到的是「内核启动失败」而不是「你选的环境有问题」。
+   * 退回托管环境至少让他还能干活，而环境本身的问题在环境页上是可见的。
+   */
+  const defaultPythonEnv = (): PythonEnv | null => {
+    const env = envsRepo.defaultFor('python');
+    if (env === null || env.status !== 'ready' || env.interpreter === null) return null;
+    return { prefix: env.path, executable: env.interpreter };
+  };
+
+  /** 用户选定的默认 R 环境（需求 15.7 的独立 R 环境仍然可以被换掉）。 */
+  const defaultREnv = (): REnv | null => {
+    const env = envsRepo.defaultFor('r');
+    if (env === null || env.status !== 'ready') return null;
+    // 走 kernel 包里那段路径推断，不在这里复制一份：它在 Windows 上有几个非显然的
+    // 地方，分叉的表现是 R 内核以 0xC0000135 退出且 stdout/stderr 全空
+    return rEnvAt(env.path);
+  };
 
   /*
    * REST→MCP 桥。
@@ -800,6 +868,14 @@ async function main(): Promise<void> {
       // 退化成重启并说明状态已丢失
       interrupterFactory: () => InterruptEvent.create(),
       extraEnv: () => proxy.env(),
+      /*
+       * 用户选定的默认环境优先于探测（任务 14.4，需求 15.2）。
+       *
+       * 每次启动现读：用户可以在运行中把默认环境切到另一个 venv，缓存下来的那个会让
+       * 新内核仍然起在旧环境上，而两者的区别只在 `sys.executable` 里看得出来。
+       */
+      pythonEnv: defaultPythonEnv,
+      rEnv: defaultREnv,
     });
 
     /*
@@ -1064,6 +1140,11 @@ async function main(): Promise<void> {
       compute: () => {
         const service = computeServices.get(projectId);
         if (service === undefined) throw new Error(`项目 ${projectId} 的算力服务尚未就绪`);
+        return service;
+      },
+      envs: () => {
+        const service = envServices.get(projectId);
+        if (service === undefined) throw new Error(`项目 ${projectId} 的环境管理服务尚未就绪`);
         return service;
       },
     });
@@ -1559,6 +1640,65 @@ async function main(): Promise<void> {
               trigger: 'artifact-saved',
             });
           }
+        },
+      }),
+    );
+
+    /* --- 环境与包管理（任务 14.4，需求 15.1-15.7）-------------------- */
+
+    /*
+     * 登记表在应用库（全局一份），而后台执行器与内核池按项目。因此服务本体按项目建，
+     * 共用同一个 repo。
+     */
+    const envService = new EnvService({
+      repo: envsRepo,
+      // 需求 15.6：创建环境与装包是耗时操作，走后台任务。它不受会话中断影响——
+      // 否则用户随口打断一句就把装了三分钟的环境毁了一半
+      background: () => background,
+      /*
+       * 哪些会话的内核跑在这个环境上（需求 15.5）。
+       *
+       * 按内核**启动时**记下的环境目录比对，不按「当前默认环境」推断：用户切换默认
+       * 之后已经跑着的内核仍在旧环境上，按当前默认推断会把它们算到新环境头上，
+       * 于是「装包要不要重启」的答案是错的——而错的方向是清掉一批本来不受影响的内存状态。
+       */
+      liveKernels: (env: EnvRecord) =>
+        pool
+          .list()
+          .filter(
+            (entry) =>
+              entry.language === env.language &&
+              normalizePath(entry.envPrefix) === normalizePath(env.path),
+          )
+          .map((entry) => entry.conversationId),
+      restartKernels: async (env: EnvRecord) => {
+        const targets = pool
+          .list()
+          .filter(
+            (entry) =>
+              entry.language === env.language &&
+              normalizePath(entry.envPrefix) === normalizePath(env.path),
+          );
+        let restarted = 0;
+        for (const entry of targets) {
+          if (await pool.restart(entry.conversationId, entry.language)) restarted += 1;
+        }
+        return restarted;
+      },
+      onChanged: (info) => {
+        d.broadcast({ kind: 'env.changed', projectId, action: info.action, envId: info.envId });
+      },
+      onLog: (line) => {
+        log(`[env ${projectId}] ${line}`);
+      },
+    });
+    envServices.set(projectId, envService);
+
+    tools.register(
+      createManageEnvironmentsTool({
+        service: () => envService,
+        onChanged: (info) => {
+          d.broadcast({ kind: 'env.changed', projectId, action: info.action, envId: info.envId });
         },
       }),
     );
@@ -4364,6 +4504,299 @@ async function main(): Promise<void> {
       throw notFound(`算力授权不存在或已撤销：${req.grantId}`);
     }
     return { revoked: true };
+  });
+
+  /* --- 环境与包管理（任务 14.4，需求 15.1-15.7）--- */
+
+  const envsFor = async (projectId: string): Promise<EnvService> => {
+    await orchestratorFor(projectId);
+    const service = envServices.get(projectId);
+    if (service === undefined) throw notFound(`项目不可用：${projectId}`);
+    return service;
+  };
+
+  /** 环境的 IPC 视图。把包统计与「跑着几个内核」提到平面上。 */
+  const envView = (service: EnvService, env: EnvRecord): Record<string, unknown> => ({
+    ...env,
+    packageStats: envsRepo.packageStats(env.id),
+    /*
+     * 「能不能删目录」由后端算，不让 UI 按 mode 自己推。
+     *
+     * 推错的方向很具体：把用户自己的环境显示成可删，他点了「删除」，以为删的是一条
+     * 登记记录。
+     */
+    canDeleteFiles: env.mode === 'managed',
+    isManagedByPlatform: env.mode === 'managed',
+    // 「这个环境有几个内核在跑」是删除与切换默认之前必须看到的信息
+    liveKernels: service.liveKernels(env.id),
+  });
+
+  d.register('env.list', async (req) => {
+    const service = await envsFor(req.projectId);
+    const [installers] = await Promise.all([service.installers()]);
+    return {
+      envs: service
+        .list(req.language === undefined ? {} : { language: req.language as EnvLanguage })
+        .map((env) => envView(service, env)),
+      installers,
+      // 需求 15.7 做成可查而不是只在文档里声明：这条约束一旦被破坏不会以报错的形式出现
+      separation: service.separationCheck(),
+      condaAvailable: condaAvailable(),
+      rendered: service.render(),
+    };
+  });
+
+  d.register('env.get', async (req) => {
+    const service = await envsFor(req.projectId);
+    const env = service.repo.get(req.envId);
+    if (env === null) throw notFound(`环境不存在：${req.envId}`);
+    return {
+      env: envView(service, env),
+      mixups: service.mixups(req.envId),
+      packages: service.packages(req.envId, { limit: 200 }),
+    };
+  });
+
+  d.register('env.sync', async (req) => {
+    const service = await envsFor(req.projectId);
+    const result = await service.sync();
+    return { ...result, envs: service.list().map((env) => envView(service, env)) };
+  });
+
+  d.register('env.probe', async (req) => {
+    const service = await envsFor(req.projectId);
+    const env = await service.probe(req.envId);
+    if (env === null) throw notFound(`环境不存在：${req.envId}`);
+    return { env: envView(service, env) };
+  });
+
+  d.register('env.create', async (req) => {
+    const service = await envsFor(req.projectId);
+    const result = await service.create({
+      name: req.name,
+      language: req.language as EnvLanguage,
+      ...(req.pythonVersion === undefined ? {} : { pythonVersion: req.pythonVersion }),
+      ...(req.rVersion === undefined ? {} : { rVersion: req.rVersion }),
+      ...(req.packages === undefined ? {} : { packages: req.packages }),
+      ...(req.channel === undefined ? {} : { channel: req.channel }),
+      ...(req.notes === undefined ? {} : { notes: req.notes }),
+      conversationId: req.conversationId,
+    });
+
+    if (!result.ok || result.env === null) {
+      throw new DispatchError(
+        makeError('bad_request', result.reason ?? '创建失败', {
+          remediation: '按上面的说明改参数后重试。',
+        }),
+      );
+    }
+    return {
+      env: envView(service, result.env),
+      // 需求 15.6：创建是后台任务，结果会通过后台通知回到会话里
+      taskId: result.taskId,
+      note:
+        '创建带编译依赖的环境要几分钟。这是后台任务，不受会话中断影响；' +
+        '完成后会有一条通知，届时环境状态会变成「可用」。',
+    };
+  });
+
+  d.register('env.register', async (req) => {
+    const service = await envsFor(req.projectId);
+    const result = await service.register({
+      name: req.name,
+      path: req.path,
+      ...(req.language === undefined ? {} : { language: req.language as EnvLanguage }),
+      ...(req.notes === undefined ? {} : { notes: req.notes }),
+      setDefault: req.setDefault,
+    });
+    if (!result.ok || result.env === null) {
+      throw new DispatchError(makeError('bad_request', result.reason ?? '登记失败'));
+    }
+    return {
+      env: envView(service, result.env),
+      note:
+        '内核会**直接从这个环境启动**（需求 15.2），因此 pip install -e 装的可编辑包与' +
+        '你直接改的源码都会立刻生效。平台不会复制这个环境的任何内容。' +
+        (result.env.status === 'ready'
+          ? ''
+          : '\n注意：这个环境当前缺 ipykernel，起不了内核。' +
+            '登记已完成，装上 ipykernel 之后重新探测即可。'),
+    };
+  });
+
+  d.register('env.remove', async (req) => {
+    const service = await envsFor(req.projectId);
+    const result = await service.remove(req.envId, { deleteFiles: req.deleteFiles });
+    if (!result.ok) {
+      throw new DispatchError(
+        makeError('conflict', result.reason ?? '删除失败', {
+          remediation:
+            '用户自己的环境只能取消登记（deleteFiles=false）；' +
+            '还有内核在跑的环境要先关掉那些会话的内核。',
+        }),
+      );
+    }
+    return { deleted: true, deletedFiles: result.deletedFiles };
+  });
+
+  d.register('env.setDefault', async (req) => {
+    const service = await envsFor(req.projectId);
+    const result = service.setDefault(req.envId);
+    if (!result.ok) {
+      throw new DispatchError(makeError('conflict', result.reason ?? '设置失败'));
+    }
+    return {
+      ok: true,
+      env: envView(service, service.repo.get(req.envId) as EnvRecord),
+      /*
+       * 切换默认**不会**动已有内核，这一点必须说出来。
+       *
+       * 不说的话用户会以为切换立刻全局生效，然后在一个仍然跑在旧环境上的内核里
+       * 找不到刚装的包——而那看起来像是安装失败。
+       */
+      note:
+        '新起的内核会用这个环境。**已经在跑的内核不受影响**——它们仍在原来的环境上，' +
+        '因为强行重启会清掉你的变量。' +
+        (result.liveOnOthers.length === 0
+          ? ''
+          : `\n当前有 ${String(result.liveOnOthers.length)} 个内核跑在其它环境上。` +
+            '需要它们也切过来的话，用 env.restartKernels 或在会话里重启内核。'),
+      liveOnOthers: result.liveOnOthers,
+    };
+  });
+
+  d.register('env.clearDefault', async (req) => {
+    const service = await envsFor(req.projectId);
+    return {
+      cleared: service.repo.clearDefault(req.language as EnvLanguage),
+      note: '新内核会回到平台探测到的托管环境。',
+    };
+  });
+
+  d.register('env.packages', async (req) => {
+    const service = await envsFor(req.projectId);
+    if (service.repo.get(req.envId) === null) throw notFound(`环境不存在：${req.envId}`);
+    return service.packages(req.envId, {
+      ...(req.source === undefined ? {} : { source: req.source as PackageSource }),
+      ...(req.query === undefined ? {} : { query: req.query }),
+      limit: req.limit,
+    });
+  });
+
+  d.register('env.plan', async (req) => {
+    const service = await envsFor(req.projectId);
+    const plan = await service.plan({
+      envId: req.envId,
+      request: {
+        specs: req.specs,
+        ...(req.family === undefined ? {} : { family: req.family as InstallerFamily }),
+        ...(req.channel === undefined ? {} : { channel: req.channel }),
+      },
+      uninstall: req.uninstall,
+    });
+    /*
+     * 计划**不抛错**，哪怕它不 ok。
+     *
+     * 这个方法的全部意义是让 UI 在动手之前看到问题，而抛错会让「有冲突」与「参数写错」
+     * 在前端走同一条 catch 分支，于是冲突详情显示不出来。
+     */
+    return {
+      plan,
+      restartNotice: restartNotice({
+        required: plan.restartRequired,
+        why: plan.restartRequired
+          ? '装完之后内核里的模块缓存不会自动失效。'
+          : '这个环境当前没有活着的内核。',
+      }),
+    };
+  });
+
+  d.register('env.install', async (req) => {
+    const service = await envsFor(req.projectId);
+    const result = await service.install({
+      envId: req.envId,
+      request: {
+        specs: req.specs,
+        ...(req.family === undefined ? {} : { family: req.family as InstallerFamily }),
+        ...(req.channel === undefined ? {} : { channel: req.channel }),
+      },
+      uninstall: req.uninstall,
+      conversationId: req.conversationId,
+      force: req.force,
+    });
+
+    if (!result.ok) {
+      throw new DispatchError(
+        makeError(
+          result.plan.conflicts.length > 0 ? 'conflict' : 'bad_request',
+          result.reason ?? '失败',
+          {
+            ...(result.plan.conflicts.length === 0
+              ? {}
+              : {
+                  detail: JSON.stringify(result.plan.conflicts),
+                  remediation:
+                    '三种办法：改用已装的那个来源、把整组换成同一来源、或者新建一个干净的环境。' +
+                    '强行继续（force）会造出一个「能导入但数值可能是错的」环境，而那种问题不报错。',
+                }),
+          },
+        ),
+      );
+    }
+
+    return {
+      taskId: result.taskId,
+      plan: result.plan,
+      note: restartNotice({
+        required: result.plan.restartRequired,
+        why: result.plan.restartRequired
+          ? '装完之后内核里的模块缓存不会自动失效。'
+          : '这个环境当前没有活着的内核。',
+      }),
+    };
+  });
+
+  d.register('env.restartKernels', async (req) => {
+    const service = await envsFor(req.projectId);
+    const result = await service.restart(req.envId);
+    if (!result.ok) {
+      throw new DispatchError(makeError('conflict', result.reason ?? '重启失败'));
+    }
+    return {
+      restarted: result.restarted,
+      note: '内存里的变量与已导入的模块已经清掉；工作区文件与已保存的制品不受影响。',
+    };
+  });
+
+  d.register('env.mixups', async (req) => {
+    const service = await envsFor(req.projectId);
+    if (service.repo.get(req.envId) === null) throw notFound(`环境不存在：${req.envId}`);
+    return service.mixups(req.envId);
+  });
+
+  d.register('env.installers', async (req) => {
+    if (req.refresh) resetInstallerCache();
+    const all = await detectInstallers();
+    const service = envServices.values().next().value;
+    return {
+      installers: all,
+      chosen: service === undefined ? null : (await service.installers()).chosen,
+    };
+  });
+
+  d.register('env.discover', async () => {
+    const [conda] = await Promise.all([listCondaEnvironments()]);
+    return {
+      conda: conda.map((info) => ({
+        ...info,
+        registered: envsRepo.getByPath(info.prefix) !== null,
+      })),
+      venvHints: commonVenvLocations(),
+      condaAvailable: condaAvailable(),
+      note:
+        '登记你自己的 venv 时，给环境根目录（含 pyvenv.cfg 的那一层）或者解释器本身都可以。' +
+        '平台不会复制它的内容——内核直接从那里启动，因此可编辑安装与源码改动都立刻生效。',
+    };
   });
 
   d.register('credential.delete', async (req) => {

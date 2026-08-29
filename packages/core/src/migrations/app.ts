@@ -268,9 +268,69 @@ CREATE INDEX idx_compute_grants_lookup
   ON compute_grants (target_id, risk) WHERE revoked_at IS NULL;
 `;
 
+/**
+ * 环境与包管理（任务 14.4，需求 15.1-15.7）。
+ *
+ * 初版 `environments` 只有 id / name / kind / mode / path / python_version / r_version /
+ * packages_json / status。补的这几列各有具体用途：
+ *
+ * - `language`：一条记录到底是 Python 环境还是 R 环境。原来靠 python_version 与
+ *   r_version 哪个非空来推断，而一个 conda 环境完全可以两个都装——那时推断出来的
+ *   答案取决于代码里 if 的顺序。需求 15.7 要求 R 与 Python 分处独立环境，这条约束
+ *   要能被检查，就得先能说清每条记录是哪一边的。
+ * - `interpreter`：解释器的绝对路径。需求 15.2 要求内核**直接从用户的 venv 启动**，
+ *   而 venv 的 python 位置在 Windows（Scripts\python.exe）与 POSIX（bin/python）下不同。
+ *   每次启动现推一遍意味着这段推断散在多处，而它错一次的表现是内核起不来但不说为什么。
+ * - `is_default`：新内核用哪个环境。做成列而不是一条设置项，是为了让「同一语言只能有
+ *   一个默认」可以用部分唯一索引强制，而不是靠调用方记得先清掉旧的。
+ * - `last_probe_json` / `last_probe_at`：探测结果。venv 会被用户删掉或移动，而那时
+ *   界面上它看起来还在。
+ * - `created_at` / `updated_at`：与 compute_targets 同理，列表要能按新旧排序。
+ *
+ * `env_packages` 单独一张表而不是继续用 `packages_json`：需求 15.4 要挡住「同一个
+ * 科学计算依赖被 conda 与 pip 各装一份」，而那需要按包名查「它是从哪装的」。JSON 里
+ * 存着的话每次检查都要把整份解出来遍历，更要紧的是**没法查反向问题**——「这个环境里
+ * 有哪些包是 pip 装的」在排查导入错误时是第一个要问的。
+ */
+const M005 = `
+ALTER TABLE environments ADD COLUMN language TEXT;
+ALTER TABLE environments ADD COLUMN interpreter TEXT;
+ALTER TABLE environments ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE environments ADD COLUMN notes TEXT;
+ALTER TABLE environments ADD COLUMN last_probe_json TEXT;
+ALTER TABLE environments ADD COLUMN last_probe_at INTEGER;
+ALTER TABLE environments ADD COLUMN created_at INTEGER;
+ALTER TABLE environments ADD COLUMN updated_at INTEGER;
+
+/* 同一语言只能有一个默认环境。靠索引强制而不是靠调用方记得先清掉旧的 */
+CREATE UNIQUE INDEX idx_environments_default
+  ON environments (language) WHERE is_default = 1;
+
+CREATE TABLE env_packages (
+  env_id       TEXT NOT NULL REFERENCES environments (id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  version      TEXT,
+  /*
+   * 从哪装的。'conda' / 'pypi' / 'cran' / 'unknown'。
+   *
+   * 这一列是需求 15.4 的判据。取值刻意与 \`conda list --json\` 的 channel 字段对齐
+   * （它把 pip 装的包标成 "pypi"），因为**权威来源是探测而不是我们的记录**：用户可以
+   * 在环境里自己跑 pip，那时我们的记录会漏，而 conda 自己的元数据不会。
+   */
+  source       TEXT NOT NULL,
+  channel      TEXT,
+  /* 是不是平台装的。用户自己装的也要记，否则冲突检查只看得见一半 */
+  installed_by TEXT,
+  installed_at INTEGER NOT NULL,
+  PRIMARY KEY (env_id, name)
+);
+CREATE INDEX idx_env_packages_source ON env_packages (env_id, source);
+`;
+
 export const APP_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'app-initial', sql: M001 },
   { version: 2, name: 'skill-embeddings', sql: M002 },
   { version: 3, name: 'connector-groups', sql: M003 },
   { version: 4, name: 'compute-targets', sql: M004 },
+  { version: 5, name: 'environments', sql: M005 },
 ];

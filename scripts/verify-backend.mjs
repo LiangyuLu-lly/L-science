@@ -1565,8 +1565,217 @@ try {
     '三个算力工具已注册  ',
     '',
   );
+  check(computeTools.includes('manage_environments'), 'manage_environments 已注册', '');
 
-  // --- 18. stdin 关闭后自行退出 ---
+  // --- 18. 环境与包管理（任务 14.4，需求 15.1-15.7）---
+  process.stdout.write('\n--- 18. 环境与包管理 ---\n');
+
+  send(req('ev1', { method: 'env.discover' }));
+  await waitFor(() => byId('ev1') !== undefined, 60000, 'env.discover');
+  check(
+    byId('ev1').ok === true &&
+      Array.isArray(byId('ev1').result?.conda) &&
+      typeof byId('ev1').result?.condaAvailable === 'boolean',
+    'env.discover 可用   ',
+    `conda 环境 ${String((byId('ev1').result?.conda ?? []).length)} 个`,
+  );
+
+  send(req('ev2', { method: 'env.installers', refresh: true }));
+  await waitFor(() => byId('ev2') !== undefined, 60000, 'env.installers');
+  const installers = byId('ev2').result?.installers ?? [];
+  check(
+    byId('ev2').ok === true && installers.length >= 5,
+    'env.installers 探测  ',
+    installers
+      .filter((i) => i.available)
+      .map((i) => i.id)
+      .join('、') || '（一个都没有）',
+  );
+
+  send(req('ev3', { method: 'env.sync', projectId: createdProject.id }));
+  await waitFor(() => byId('ev3') !== undefined, 180000, 'env.sync');
+  const syncedEnvs = byId('ev3').result?.envs ?? [];
+  check(
+    byId('ev3').ok === true && typeof byId('ev3').result?.added === 'number',
+    'env.sync 同步 conda 环境',
+    `新增 ${String(byId('ev3').result?.added ?? '?')}，共 ${String(syncedEnvs.length)} 个`,
+  );
+
+  send(req('ev4', { method: 'env.list', projectId: createdProject.id }));
+  await waitFor(() => byId('ev4') !== undefined, 60000, 'env.list');
+  const envList = byId('ev4').result?.envs ?? [];
+  check(
+    byId('ev4').ok === true &&
+      byId('ev4').result?.separation !== undefined &&
+      byId('ev4').result?.installers?.chosen !== undefined,
+    'env.list 带分离检查与安装器',
+    `separation.ok=${String(byId('ev4').result?.separation?.ok)}`,
+  );
+
+  // 托管的 lsci 环境应当被同步进来并标成 managed
+  const lsci = envList.find((e) => e.name === 'lsci');
+  check(
+    lsci !== undefined && lsci.mode === 'managed' && lsci.isManagedByPlatform === true,
+    '托管环境标成 managed  ',
+    lsci === undefined
+      ? '没找到 lsci'
+      : `${lsci.status} ${String(lsci.packageStats?.total ?? 0)} 包`,
+  );
+  // 用户自己的 conda 环境不能被标成可删——判错的方向是他点了「删除」以为删的是一条记录
+  const userEnv = envList.find((e) => e.mode === 'registered');
+  check(
+    userEnv === undefined || userEnv.canDeleteFiles === false,
+    '用户环境不可删目录  ',
+    userEnv === undefined ? '（本机没有其它 conda 环境）' : userEnv.name,
+  );
+
+  if (lsci !== undefined) {
+    send(
+      req('ev5', {
+        method: 'env.packages',
+        projectId: createdProject.id,
+        envId: lsci.id,
+        limit: 5,
+      }),
+    );
+    await waitFor(() => byId('ev5') !== undefined, 30000, 'env.packages');
+    check(
+      byId('ev5').ok === true && typeof byId('ev5').result?.stats?.total === 'number',
+      'env.packages 带来源统计',
+      `total=${String(byId('ev5').result?.stats?.total ?? '?')} bySource=${JSON.stringify(
+        byId('ev5').result?.stats?.bySource ?? {},
+      )}`,
+    );
+
+    // 计划：不执行，只算。混装冲突要能在动手之前看到
+    send(
+      req('ev6', {
+        method: 'env.plan',
+        projectId: createdProject.id,
+        envId: lsci.id,
+        specs: ['numpy'],
+      }),
+    );
+    await waitFor(() => byId('ev6') !== undefined, 60000, 'env.plan');
+    check(
+      byId('ev6').ok === true && byId('ev6').result?.plan?.family === 'conda',
+      '敏感包默认走 conda 家族',
+      `family=${String(byId('ev6').result?.plan?.family)} installer=${String(
+        byId('ev6').result?.plan?.installer?.id,
+      )}`,
+    );
+    check(String(byId('ev6').result?.restartNotice ?? '').length > 0, '计划带重启告知      ', '');
+
+    // 纯 Python 包走 PyPI，而且回退说明要在
+    send(
+      req('ev7', {
+        method: 'env.plan',
+        projectId: createdProject.id,
+        envId: lsci.id,
+        specs: ['tqdm'],
+      }),
+    );
+    await waitFor(() => byId('ev7') !== undefined, 60000, 'env.plan pypi');
+    check(
+      byId('ev7').result?.plan?.family === 'pypi' &&
+        String(byId('ev7').result?.plan?.installerReason ?? '').length > 0,
+      '纯 Python 包走 PyPI  ',
+      String(byId('ev7').result?.plan?.installerReason ?? ''),
+    );
+
+    // 选项注入必须被挡住
+    send(
+      req('ev8', {
+        method: 'env.plan',
+        projectId: createdProject.id,
+        envId: lsci.id,
+        specs: ['--index-url=http://evil.example/'],
+      }),
+    );
+    await waitFor(() => byId('ev8') !== undefined, 30000, 'env.plan 选项注入');
+    check(
+      byId('ev8').ok === true &&
+        byId('ev8').result?.plan?.ok === false &&
+        String(byId('ev8').result?.plan?.reason ?? '').includes('index-url'),
+      '安装器选项注入被拒  ',
+      '',
+    );
+
+    send(req('ev9', { method: 'env.mixups', projectId: createdProject.id, envId: lsci.id }));
+    await waitFor(() => byId('ev9') !== undefined, 30000, 'env.mixups');
+    check(
+      byId('ev9').ok === true && typeof byId('ev9').result?.rendered === 'string',
+      'env.mixups 可查      ',
+      String(byId('ev9').result?.rendered ?? '').split('\n')[0],
+    );
+
+    // 设为默认：要说清「已有内核不受影响」
+    send(req('ev10', { method: 'env.setDefault', projectId: createdProject.id, envId: lsci.id }));
+    await waitFor(() => byId('ev10') !== undefined, 30000, 'env.setDefault');
+    check(
+      byId('ev10').ok === true && String(byId('ev10').result?.note ?? '').includes('不受影响'),
+      '设默认说清已有内核  ',
+      '',
+    );
+
+    send(
+      req('ev11', {
+        method: 'env.clearDefault',
+        projectId: createdProject.id,
+        language: 'python',
+      }),
+    );
+    await waitFor(() => byId('ev11') !== undefined, 30000, 'env.clearDefault');
+    check(
+      byId('ev11').ok === true && byId('ev11').result?.cleared === true,
+      'env.clearDefault  ',
+      '',
+    );
+
+    // 托管环境不许删
+    send(req('ev12', { method: 'env.remove', projectId: createdProject.id, envId: lsci.id }));
+    await waitFor(() => byId('ev12') !== undefined, 30000, 'env.remove 托管');
+    check(
+      byId('ev12').ok === false && String(byId('ev12').error?.message ?? '').includes('内核'),
+      '托管环境 lsci 不许删 ',
+      String(byId('ev12').error?.message ?? '').split('\n')[0],
+    );
+  }
+
+  // 登记一个不存在的路径要给出「该给哪一层」的说明
+  send(
+    req('ev13', {
+      method: 'env.register',
+      projectId: createdProject.id,
+      name: 'nope',
+      path: 'C:/definitely/not/here',
+    }),
+  );
+  await waitFor(() => byId('ev13') !== undefined, 30000, 'env.register 不存在');
+  check(
+    byId('ev13').ok === false && String(byId('ev13').error?.message ?? '').includes('pyvenv.cfg'),
+    '登记不存在路径的说明',
+    '',
+  );
+
+  // 创建环境：保留名要被拒
+  send(
+    req('ev14', {
+      method: 'env.create',
+      projectId: createdProject.id,
+      conversationId: conversation.id,
+      name: 'lsci',
+      language: 'python',
+    }),
+  );
+  await waitFor(() => byId('ev14') !== undefined, 60000, 'env.create 保留名');
+  check(
+    byId('ev14').ok === false && String(byId('ev14').error?.message ?? '').includes('托管环境'),
+    '保留的环境名被拒    ',
+    '',
+  );
+
+  // --- 19. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

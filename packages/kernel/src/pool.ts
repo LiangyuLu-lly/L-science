@@ -17,6 +17,8 @@ import {
   writeIRkernelLauncher,
   type AvailableKernels,
   type KernelLanguage,
+  type PythonEnv,
+  type REnv,
 } from './launch.js';
 
 export interface KernelPoolOptions {
@@ -53,11 +55,29 @@ export interface KernelPoolOptions {
    * 普通分析内核。
    */
   extraInitCode?: () => readonly string[];
+  /**
+   * 覆盖用哪个解释器启动内核（任务 14.4，需求 15.2）。
+   *
+   * 需求 15.2 要求「注册用户既有的 venv，使内核**直接从该 venv 启动**且代码编辑可持久
+   * 生效」。「直接启动」是关键：任何把环境复制一份到平台目录下的做法都会让
+   * `pip install -e` 装出来的可编辑包与用户直接改的源码不再生效，而那个失败的表现是
+   * 「我改了代码但跑的还是旧的」——最难查的一类。
+   *
+   * 每次启动现取而不是构造时取一次：用户可以在运行中把默认环境切到另一个 venv，
+   * 而缓存下来的那个会让新内核仍然起在旧环境上，且看不出为什么。
+   *
+   * 返回 null 表示用探测到的托管环境。
+   */
+  pythonEnv?: () => PythonEnv | null;
+  /** 同上，R 侧（需求 15.7 的独立 R 环境仍然可以被换掉）。 */
+  rEnv?: () => REnv | null;
 }
 
 interface Entry {
   kernel: JupyterKernel;
   lastUsedAt: number;
+  /** 启动时用的环境目录。见 PoolEntryInfo.envPrefix 的说明。 */
+  envPrefix: string;
 }
 
 export interface PoolEntryInfo {
@@ -66,6 +86,15 @@ export interface PoolEntryInfo {
   pid: number | null;
   busy: boolean;
   idleMs: number;
+  /**
+   * 这个内核是从哪个环境起来的（任务 14.4，需求 15.5）。
+   *
+   * 记下来而不是事后按「当前默认环境」推断：用户切换默认环境之后，已经跑着的内核仍然
+   * 在旧环境上。按当前默认推断会把它们算到新环境头上，于是「在新环境里装包要不要
+   * 重启」这个问题的答案是错的——而错的方向是说「要重启」然后清掉一批本来不受影响的
+   * 内核的内存状态。
+   */
+  envPrefix: string;
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -137,8 +166,8 @@ export class KernelPool {
     if (inFlight !== undefined) return inFlight;
 
     const startup = this.#start(conversationId, language)
-      .then((kernel) => {
-        this.#entries.set(key, { kernel, lastUsedAt: Date.now() });
+      .then(({ kernel, envPrefix }) => {
+        this.#entries.set(key, { kernel, lastUsedAt: Date.now(), envPrefix });
         return kernel;
       })
       .finally(() => {
@@ -149,7 +178,10 @@ export class KernelPool {
     return startup;
   }
 
-  async #start(conversationId: string, language: KernelLanguage): Promise<JupyterKernel> {
+  async #start(
+    conversationId: string,
+    language: KernelLanguage,
+  ): Promise<{ kernel: JupyterKernel; envPrefix: string }> {
     const a = this.available();
     const runtimeDir = join(this.#opts.runtimeDir, conversationId);
     const cwd = join(this.#opts.workspaceRoot, conversationId);
@@ -157,14 +189,22 @@ export class KernelPool {
     const interrupter = this.#opts.interrupterFactory?.() ?? null;
 
     if (language === 'python') {
-      if (a.python === null) {
+      /*
+       * 覆盖优先于探测（需求 15.2）。
+       *
+       * 用户把默认环境切到自己的 venv 之后，新内核必须起在那个 venv 上——否则
+       * 「切换默认环境」这个动作在界面上生效了而实际没有，而两者的区别只在
+       * `sys.executable` 里看得出来。
+       */
+      const python = this.#opts.pythonEnv?.() ?? a.python;
+      if (python === null) {
         throw new Error(
           `Python 内核环境不可用。需先创建托管环境：conda create -n lsci python=3.13 并安装 ipykernel`,
         );
       }
-      const spec = pythonLaunchSpec(a.python);
+      const spec = pythonLaunchSpec(python);
       const extraInit = this.#opts.extraInitCode?.() ?? [];
-      return JupyterKernel.start({
+      const kernel = await JupyterKernel.start({
         // 每次启动都重新取额外环境变量：出口代理的端口在启动时才确定，
         // 取快照会让先起来的内核拿到一个空的代理地址而静默绕过管控
         spec: {
@@ -177,9 +217,11 @@ export class KernelPool {
         onLog: this.#onLog,
         ...(interrupter === null ? {} : { interrupter }),
       });
+      return { kernel, envPrefix: python.prefix };
     }
 
-    if (a.r === null) {
+    const rEnv = this.#opts.rEnv?.() ?? a.r;
+    if (rEnv === null) {
       throw new Error(
         `R 内核环境不可用。需先创建托管环境：conda create -n lsci-r -c conda-forge r-base r-irkernel`,
       );
@@ -189,14 +231,15 @@ export class KernelPool {
     mkdirSync(runtimeDir, { recursive: true });
     const launcher = writeIRkernelLauncher(runtimeDir);
 
-    const rSpec = rLaunchSpec(a.r, launcher);
-    return JupyterKernel.start({
+    const rSpec = rLaunchSpec(rEnv, launcher);
+    const kernel = await JupyterKernel.start({
       spec: { ...rSpec, env: { ...rSpec.env, ...(this.#opts.extraEnv?.() ?? {}) } },
       runtimeDir,
       cwd,
       onLog: this.#onLog,
       ...(interrupter === null ? {} : { interrupter }),
     });
+    return { kernel, envPrefix: rEnv.prefix };
   }
 
   /** 重启指定内核；不存在则视为无操作。 */
@@ -244,6 +287,7 @@ export class KernelPool {
         pid: entry.kernel.pid,
         busy: entry.kernel.busy,
         idleMs: now - entry.lastUsedAt,
+        envPrefix: entry.envPrefix,
       });
     }
     return out;

@@ -56,6 +56,7 @@ export {
   listCondaEnvs,
   pythonLaunchSpec,
   rLaunchSpec,
+  rEnvAt,
   resolveCondaExe,
   resolvePythonEnv,
   resolveREnv,

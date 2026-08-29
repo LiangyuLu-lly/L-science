@@ -24,6 +24,7 @@ import type { ClaimLedger } from '../manuscript/ledger.js';
 import type { CitationVerifier } from '../manuscript/verify.js';
 import type { ManuscriptCompiler } from '../manuscript/compile-service.js';
 import type { ComputeService } from '../compute/service.js';
+import type { EnvService } from '../envs/service.js';
 import { describeTarget } from '../compute/gate.js';
 import { isTerminalJobState, JOB_STATE_LABEL } from '../compute/types.js';
 import { citeLine } from '../refs/csl.js';
@@ -75,6 +76,8 @@ export interface HostMethodDeps {
   manuscripts?: () => ManuscriptCompiler;
   /** 算力服务（任务 14.2）。同样惰性——它要接审批服务与制品库。 */
   compute?: () => ComputeService;
+  /** 环境与包管理（任务 14.4）。它要接后台执行器与内核池。 */
+  envs?: () => EnvService;
 }
 
 /* ------------------------------------------------------------------ *
@@ -192,11 +195,12 @@ const PENDING: readonly ShimPending[] = [];
  * 与「尚未落地」分开：这几层已经做完了，缺席只可能是本次运行没给它们接上依赖
  * （比如一个只跑控制面的测试装置）。说成「尚未落地」会让用户去等一个已经存在的东西。
  */
-const ABSENT: Readonly<Record<'refs' | 'claims' | 'manuscripts' | 'compute', string>> = {
+const ABSENT: Readonly<Record<'refs' | 'claims' | 'manuscripts' | 'compute' | 'envs', string>> = {
   refs: '本次运行没有可用的文献库（项目未完成初始化）',
   claims: '本次运行没有可用的断言台账（项目未完成初始化）',
   manuscripts: '本次运行没有可用的手稿编译器（项目未完成初始化）',
   compute: '本次运行没有可用的算力服务（项目未完成初始化）',
+  envs: '本次运行没有可用的环境管理服务（项目未完成初始化）',
 };
 
 /**
@@ -1460,6 +1464,122 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
     );
   }
 
+  /* ---------------- 环境与包（任务 14.4）---------------- */
+
+  /*
+   * 控制面能查、能算计划、能装，**不能登记用户的 venv 也不能切默认环境**。
+   *
+   * 登记需要一个只有用户知道的绝对路径；切默认影响此后所有会话的新内核，那是全局
+   * 配置，不该由一次对话里的判断改掉。两者都留在界面上。
+   */
+  if (deps.envs !== undefined) {
+    const envsOf = deps.envs;
+
+    surface('envs', '环境与包：列出环境、查包清单与来源、算安装计划、装卸包、查 conda/pip 混装。', {
+      list: (p) =>
+        envsOf()
+          .list({
+            ...(optStr(p, 'language') === undefined
+              ? {}
+              : { language: optStr(p, 'language') as never }),
+          })
+          .map((env) => ({
+            ...env,
+            liveKernels: envsOf().liveKernels(env.id),
+            packageStats: envsOf().repo.packageStats(env.id),
+          })),
+
+      /** 安装器状态与各家族的选择理由（需求 15.3）。 */
+      installers: async () => envsOf().installers(),
+
+      /** 需求 15.7 的检查：R 与 Python 是否分处独立环境。 */
+      separation: () => envsOf().separationCheck(),
+
+      probe: async (p) => {
+        const service = envsOf();
+        const env = service.repo.resolve(reqStr(p, 'env'));
+        if (env === null) throw new Error(`找不到环境：${String(p.env)}`);
+        return service.probe(env.id);
+      },
+
+      packages: (p) => {
+        const service = envsOf();
+        const env = service.repo.resolve(reqStr(p, 'env'));
+        if (env === null) throw new Error(`找不到环境：${String(p.env)}`);
+        return service.packages(env.id, {
+          ...(optStr(p, 'source') === undefined ? {} : { source: optStr(p, 'source') as never }),
+          ...(optStr(p, 'query') === undefined ? {} : { query: optStr(p, 'query') }),
+          limit: optInt(p, 'limit', 500),
+        });
+      },
+
+      /**
+       * 算安装计划但不执行。
+       *
+       * 在写分析代码之前用它确认「这个环境里有 mne 吗、装它会不会撞混装」比装完再
+       * 发现便宜得多——混装造成的失败不报错。
+       */
+      plan: async (p) => {
+        const service = envsOf();
+        const env = service.repo.resolve(reqStr(p, 'env'));
+        if (env === null) throw new Error(`找不到环境：${String(p.env)}`);
+        return service.plan({
+          envId: env.id,
+          request: {
+            specs: strList(p, 'specs'),
+            ...(optStr(p, 'family') === undefined ? {} : { family: optStr(p, 'family') as never }),
+            ...(optStr(p, 'channel') === undefined ? {} : { channel: optStr(p, 'channel') }),
+          },
+          ...(optBool(p, 'uninstall') === undefined ? {} : { uninstall: optBool(p, 'uninstall') }),
+        });
+      },
+
+      /** 装或卸。后台任务（需求 15.6），返回 taskId。 */
+      install: async (p, ctx) => {
+        const service = envsOf();
+        const env = service.repo.resolve(reqStr(p, 'env'));
+        if (env === null) throw new Error(`找不到环境：${String(p.env)}`);
+        if (ctx.conversationId === null) {
+          throw new Error(
+            '装包要挂在一个会话上（后台任务完成后要把通知投递回去）。' +
+              '控制面 REPL 会自动带上当前会话。',
+          );
+        }
+
+        const result = await service.install({
+          envId: env.id,
+          request: {
+            specs: strList(p, 'specs'),
+            ...(optStr(p, 'family') === undefined ? {} : { family: optStr(p, 'family') as never }),
+            ...(optStr(p, 'channel') === undefined ? {} : { channel: optStr(p, 'channel') }),
+          },
+          ...(optBool(p, 'uninstall') === undefined ? {} : { uninstall: optBool(p, 'uninstall') }),
+          conversationId: ctx.conversationId,
+          ...(optBool(p, 'force') === undefined ? {} : { force: optBool(p, 'force') }),
+        });
+
+        if (!result.ok) {
+          throw new Error(
+            `${result.reason ?? '失败'}` +
+              (result.plan.conflicts.length > 0
+                ? '\n不要直接加 force 重试——先问用户要哪种解决办法。' +
+                  'force 会造出一个「能导入但数值可能是错的」环境，而那种问题不报错。'
+                : ''),
+          );
+        }
+        return { taskId: result.taskId, plan: result.plan };
+      },
+
+      /** 这个环境里**已经存在**的 conda/pip 混装（需求 15.4 的排查面）。 */
+      mixups: (p) => {
+        const service = envsOf();
+        const env = service.repo.resolve(reqStr(p, 'env'));
+        if (env === null) throw new Error(`找不到环境：${String(p.env)}`);
+        return service.mixups(env.id);
+      },
+    });
+  }
+
   /* ---------------- MCP 连接器 ---------------- */
 
   /*
@@ -1612,6 +1732,7 @@ export function registerHostMethods(server: HostRpcServer, deps: HostMethodDeps)
     pending.push({ name: 'manuscripts', reason: ABSENT.manuscripts });
   }
   if (deps.compute === undefined) pending.push({ name: 'compute', reason: ABSENT.compute });
+  if (deps.envs === undefined) pending.push({ name: 'envs', reason: ABSENT.envs });
 
   return { surfaces, pending };
 }
