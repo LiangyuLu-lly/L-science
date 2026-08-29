@@ -402,12 +402,133 @@ export interface ClaimSnapshot {
   status: string;
   origin: string;
   numbers: readonly string[];
+  /** 是否为引文支撑陈述。决定要不要检查检索取证（需求 13.9）。 */
+  isCitation?: boolean;
+  /** 有没有真的经过检索的引文核实记录（需求 13.9）。 */
+  retrievalBacked?: boolean;
   evidence: readonly {
     kind: string;
     ref: string;
     verdict: string | null;
     quote: string | null;
   }[];
+}
+
+/* ------------------------------------------------------------------ *
+ * 引文核实
+ * ------------------------------------------------------------------ */
+
+/** 一次引文核实记录的快照。只带确定性检查用得到的字段。 */
+export interface CitationCheckSnapshot {
+  id: string;
+  claimId: string | null;
+  raw: string;
+  verdict: string;
+  /** 实际发出的查询数。0 表示这次「核实」没有真的检索过。 */
+  queryCount: number;
+  detail: string | null;
+  matchedRefId: string | null;
+}
+
+/**
+ * 引文完整性（任务 13.5，需求 13.9）。
+ *
+ * 两类问题，两者都只能在这一层抓到：
+ *
+ * 1. **检索不到的引文**。`not-found` 的核实记录是「这条引文很可能是编造的」的
+ *    直接凭据，判 FAIL。它不是「可能有问题」——检索层已经跑过四家上游了。
+ *
+ * 2. **引文支撑陈述被标成已支持，但没有经过检索取证**。这条检查是需求 13.9 在
+ *    审查层的兜底：`ClaimLedger.verify` 已经在写入时挡了一道，但历史数据、
+ *    直接操作仓储的路径、以及未来新增的写入口都可能绕过它。审查层再查一遍，
+ *    保证「未经检索的引文核实」不会静悄悄留在库里。
+ *
+ * `metadata-mismatch` 判 WARN 而不是 FAIL：它意味着引文写错了（复制错行），
+ * 是要改的，但引用的文献确实存在——与编造引文不是一个量级。
+ */
+export function checkCitationIntegrity(input: {
+  checks: readonly CitationCheckSnapshot[];
+  claims: readonly ClaimSnapshot[];
+}): readonly DraftFinding[] {
+  const findings: DraftFinding[] = [];
+
+  /*
+   * 同一条引文可能被核实过多次（改了 DOI 之后重核）。只看**最近一次**的结论。
+   * 输入按时间倒序，因此首次见到某条原文时它就是最新的那次。
+   */
+  const latest = new Map<string, CitationCheckSnapshot>();
+  for (const check of input.checks) {
+    if (!latest.has(check.raw)) latest.set(check.raw, check);
+  }
+
+  for (const check of latest.values()) {
+    if (check.verdict === 'not-found') {
+      findings.push({
+        severity: 'fail',
+        category: 'claim',
+        title: '引文检索不到，可能是编造的',
+        detail:
+          `引文原文：${check.raw.slice(0, 300)}\n\n` +
+          '已经在 Crossref、OpenAlex、Semantic Scholar、Europe PMC 检索过，' +
+          '全部上游都没有这条记录。\n' +
+          (check.detail ?? '') +
+          '\n\n请核对原文：要么给出正确的 DOI 重新核实，要么把这条引用从正文里去掉。' +
+          '**不要**为它构造一条文献记录。',
+        evidence:
+          check.claimId === null
+            ? // 没挂到断言上时用核实记录本身作为指向。finding 必须有具体证据
+              // （需求 11.8），而这条核实记录就是最具体的指向
+              [{ kind: 'claim' as const, id: check.id, note: check.raw.slice(0, 200) }]
+            : [{ kind: 'claim' as const, id: check.claimId, note: check.raw.slice(0, 200) }],
+      });
+      continue;
+    }
+
+    if (check.verdict === 'metadata-mismatch') {
+      findings.push({
+        severity: 'warn',
+        category: 'claim',
+        title: '引文的字段与上游记录不符',
+        detail:
+          `引文原文：${check.raw.slice(0, 300)}\n\n` +
+          (check.detail ?? '') +
+          '\n\n最常见的成因是复制参考文献时错了一行。这篇文献确实存在，但引文里' +
+          '写的作者、年份或标题指向另一篇。',
+        evidence:
+          check.claimId === null
+            ? [{ kind: 'claim' as const, id: check.id, note: check.raw.slice(0, 200) }]
+            : [{ kind: 'claim' as const, id: check.claimId, note: check.raw.slice(0, 200) }],
+      });
+    }
+  }
+
+  /*
+   * 引文支撑陈述被标成已支持但没有检索记录。
+   *
+   * 这是需求 13.9 的兜底检查。写入时已经挡过一道，但审查层再查一遍才能覆盖
+   * 历史数据与未来新增的写入口。
+   */
+  for (const claim of input.claims) {
+    if (claim.isCitation !== true) continue;
+    if (claim.status !== 'supported') continue;
+    if (claim.retrievalBacked === true) continue;
+
+    findings.push({
+      severity: 'fail',
+      category: 'claim',
+      title: `引文支撑陈述被标成已支持，但没有经过检索取证：${claim.locator ?? claim.id}`,
+      detail:
+        `「${claim.text.slice(0, 300)}」\n\n` +
+        '这条断言引用了文献来支撑结论，状态是「证据支持」，但 Claim Ledger 里没有' +
+        '任何经过检索的引文核实记录。\n' +
+        '需求 13.9 规定引文核实必须经由检索工具取证——一个没有检索记录的' +
+        '「已核实」与凭记忆作答在库里长得一样，因此不能作为依据。\n' +
+        `用 verify_citations 核实一次（claimId=${claim.id}）。`,
+      evidence: [{ kind: 'claim', id: claim.id, note: claim.text.slice(0, 400) }],
+    });
+  }
+
+  return findings;
 }
 
 /* ------------------------------------------------------------------ *
@@ -426,6 +547,12 @@ export interface DeterministicInput {
    * 断言都没有」——两者的区别在于后者说明手稿还没被登记过断言，那本身是个信息。
    */
   claims?: readonly ClaimSnapshot[];
+  /**
+   * 引文核实记录，按时间倒序（任务 13.5，需求 13.9）。
+   *
+   * 省略表示这个部署没有接引文核实。
+   */
+  citationChecks?: readonly CitationCheckSnapshot[];
 }
 
 /**
@@ -457,5 +584,11 @@ export function runDeterministicChecks(input: DeterministicInput): readonly Draf
       exists: (versionId) => input.artifacts.getVersion(versionId) !== null,
     }),
     ...(input.claims === undefined ? [] : checkClaimSupport({ claims: input.claims })),
+    ...(input.citationChecks === undefined
+      ? []
+      : checkCitationIntegrity({
+          checks: input.citationChecks,
+          claims: input.claims ?? [],
+        })),
   ];
 }

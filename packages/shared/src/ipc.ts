@@ -978,6 +978,43 @@ export const requestSchema = z.discriminatedUnion('method', [
   }),
 
   z.object({ method: z.literal('claim.delete'), projectId: idSchema, claimId: idSchema }),
+
+  /* --- 引文核实（任务 13.5，需求 13.9）--- */
+
+  /**
+   * 核实引文。
+   *
+   * 注意这里**没有** verdict 参数：结论由后端检索得出并落库，调用方（界面或模型）
+   * 只能提出「核实什么」。这是需求 13.9「禁止凭记忆作答」在接口层的体现——
+   * 给一个能写结论的参数就等于把那条要求变成一句空话。
+   */
+  z.object({
+    method: z.literal('citation.verify'),
+    projectId: idSchema,
+    citations: z.array(z.string().min(1).max(2000)).max(100).optional(),
+    referenceList: z.string().max(200_000).optional(),
+    artifactVersionId: idSchema.optional(),
+    claimId: idSchema.optional(),
+  }),
+
+  /** 解析一份参考文献列表但**不检索**。用于让用户先看解析对不对。 */
+  z.object({
+    method: z.literal('citation.parse'),
+    projectId: idSchema,
+    referenceList: z.string().min(1).max(200_000).optional(),
+    artifactVersionId: idSchema.optional(),
+  }),
+
+  /** 核实记录（需求 13.9 的审计面）。 */
+  z.object({
+    method: z.literal('citation.checks'),
+    projectId: idSchema,
+    claimId: idSchema.optional(),
+    verdict: z
+      .enum(['verified', 'metadata-mismatch', 'not-found', 'ambiguous', 'unverifiable'])
+      .optional(),
+    limit: z.number().int().min(1).max(500).default(100),
+  }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

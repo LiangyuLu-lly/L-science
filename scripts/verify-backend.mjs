@@ -1036,7 +1036,97 @@ try {
     'manage_claims / manage_references',
   );
 
-  // --- 15. stdin 关闭后自行退出 ---
+  // --- 15. 引文核实（任务 13.5，需求 13.9）---
+  //
+  // citation.parse 完全不需要网络，因此覆盖得深；citation.verify 只验证「不可核实的
+  // 输入会被如实报告」这条不需要上游的路径。
+
+  send(
+    req('ct1', {
+      method: 'citation.parse',
+      projectId: createdProject.id,
+      referenceList:
+        '1. Jumper J, Evans R. Highly accurate protein structure prediction with AlphaFold. ' +
+        'Nature. 2021;596:583-9. doi:10.1038/s41586-021-03819-2\n' +
+        '2. [12]\n',
+    }),
+  );
+  await waitFor(() => byId('ct1') !== undefined, 8000, 'citation.parse');
+  const parsedCites = byId('ct1').result?.citations ?? [];
+  check(
+    byId('ct1').ok === true &&
+      parsedCites.length >= 1 &&
+      parsedCites[0]?.doi === '10.1038/s41586-021-03819-2' &&
+      parsedCites[0]?.firstAuthorSurname === 'Jumper' &&
+      parsedCites[0]?.year === 2021,
+    'citation.parse 解析条目',
+    `${String(parsedCites.length)} 条，首条 ${String(parsedCites[0]?.doi ?? '?')}`,
+  );
+
+  // 纯引用标记必须被判为不可检索：拿 [12] 去检索会返回一堆无关文献，
+  // 其中最相似的会被误判成命中，于是一条编造的引文被「核实」通过
+  send(
+    req('ct2', {
+      method: 'citation.parse',
+      projectId: createdProject.id,
+      referenceList: '1. [12], [3,5-7], [9], [14]\n',
+    }),
+  );
+  await waitFor(() => byId('ct2') !== undefined, 8000, 'citation.parse 标记');
+  const markerCites = byId('ct2').result?.citations ?? [];
+  check(
+    byId('ct2').ok === true &&
+      markerCites.length === 1 &&
+      markerCites[0]?.shape === 'marker-only' &&
+      markerCites[0]?.searchable === false,
+    '纯引用标记不可检索  ',
+    String(markerCites[0]?.shape ?? '?'),
+  );
+
+  send(
+    req('ct3', {
+      method: 'citation.verify',
+      projectId: createdProject.id,
+      citations: ['[12]'],
+    }),
+  );
+  await waitFor(() => byId('ct3') !== undefined, 30000, 'citation.verify 标记');
+  check(
+    byId('ct3').ok === true &&
+      byId('ct3').result?.counts?.unverifiable === 1 &&
+      (byId('ct3').result?.results ?? [])[0]?.queries?.length === 0,
+    '不可核实且一次都没查',
+    String((byId('ct3').result?.results ?? [])[0]?.verdict ?? '?'),
+  );
+
+  // 核实记录必须落库（需求 13.9 的可核查性）
+  send(req('ct4', { method: 'citation.checks', projectId: createdProject.id }));
+  await waitFor(() => byId('ct4') !== undefined, 8000, 'citation.checks');
+  check(
+    byId('ct4').ok === true &&
+      (byId('ct4').result?.checks ?? []).length >= 1 &&
+      (byId('ct4').result?.checks ?? [])[0]?.retrievalBacked === false,
+    '核实记录已落库      ',
+    `${String((byId('ct4').result?.checks ?? []).length)} 条`,
+  );
+
+  send(req('ct5', { method: 'citation.verify', projectId: createdProject.id }));
+  await waitFor(() => byId('ct5') !== undefined, 8000, 'citation.verify 空入参');
+  check(
+    byId('ct5').ok === false && byId('ct5').error?.code === 'bad_request',
+    '空入参被挡住        ',
+    String(byId('ct5').error?.code ?? '?'),
+  );
+
+  send(req('ct6', { method: 'tool.list', projectId: createdProject.id }));
+  await waitFor(() => byId('ct6') !== undefined, 30000, 'tool.list 核实工具');
+  check(
+    (byId('ct6').result?.available ?? []).some((t) => t.name === 'verify_citations'),
+    'verify_citations 已注册',
+    '',
+  );
+
+  // --- 16. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

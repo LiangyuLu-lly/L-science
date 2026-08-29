@@ -32,7 +32,12 @@ import { classifyFailure, type UsageRepo } from '../repo/usage.js';
 import { buildTaskProfile, pickCrossVendor, route } from '../router/index.js';
 import type { ExperienceAdjustment, ModelRuntimeState } from '../router/index.js';
 import { streamModel } from '../orchestrator/agent-runtime.js';
-import { runDeterministicChecks, type ClaimSnapshot, type DraftFinding } from './checks.js';
+import {
+  runDeterministicChecks,
+  type CitationCheckSnapshot,
+  type ClaimSnapshot,
+  type DraftFinding,
+} from './checks.js';
 import { parseReviewOutput } from './parse.js';
 import { buildReviewContext, reviewerSystemPrompt, reviewerUserPrompt } from './prompt.js';
 
@@ -56,6 +61,13 @@ export interface ReviewerServiceDeps {
    * 不提供时跳过断言类检查。
    */
   claims?: (conversationId: string) => readonly ClaimSnapshot[];
+  /**
+   * 引文核实记录，按时间倒序（任务 13.5，需求 13.9）。
+   *
+   * 与 `claims` 分开注入：一个部署可能登记断言但不做引文核实（没有网络授权），
+   * 而那时把这一组检查整体跳过比报一堆「未经检索」更诚实。
+   */
+  citationChecks?: () => readonly CitationCheckSnapshot[];
   /**
    * 有 FAIL 级发现时调用（需求 11.5）。
    *
@@ -265,11 +277,14 @@ export class ReviewerService {
      */
     const claimSnapshots = this.#deps.claims?.(conversationId);
 
+    const citationChecks = this.#deps.citationChecks?.();
+
     const deterministic = runDeterministicChecks({
       artifacts: this.#deps.artifacts,
       messages,
       ...(queued.versionIds.size > 0 ? { versionIds: [...queued.versionIds] } : {}),
       ...(claimSnapshots === undefined ? {} : { claims: claimSnapshots }),
+      ...(citationChecks === undefined ? {} : { citationChecks }),
     });
 
     /*

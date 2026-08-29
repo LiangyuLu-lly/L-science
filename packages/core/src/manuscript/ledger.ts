@@ -434,6 +434,33 @@ export class ClaimLedger {
       return { ok: false, claim: null, reason: `断言不存在：${input.claimId}` };
     }
 
+    /*
+     * 引文支撑陈述的 supports 结论必须有真的经过检索的核实记录（需求 13.9）。
+     *
+     * 这是「禁止凭记忆作答」这条要求在数据层的实现。提示词里写「不要凭记忆回答」
+     * 只是让模型在幻觉之外多加一句「我已核实」；而这里的判据是可查的事实：
+     * `citation_checks` 里有没有一条挂在这个断言上、且真的发出过查询的记录。
+     *
+     * 只挡 `supports`。`contradicts` 与 `insufficient` 不挡：模型判断「这条引文
+     * 不支持该断言」不需要先证明那篇文献存在，而挡住它会让一个正确的否定结论
+     * 无法被记录。
+     */
+    if (input.verdict === 'supports' && claim.kinds.includes('citation')) {
+      const backed = this.repo.hasRetrievalBackedCheck(input.claimId);
+      if (!backed) {
+        return {
+          ok: false,
+          claim,
+          reason:
+            '这是一条引文支撑陈述，而它还没有经过检索取证的核实记录。\n' +
+            '需求 13.9 规定引文核实必须经由检索工具取证，不能凭记忆作答——' +
+            '因此这里不接受一个没有检索记录支撑的「支持」结论。\n' +
+            `先用 verify_citations 核实这条引文（claimId=${input.claimId}），` +
+            '它会真的去 Crossref / OpenAlex / Semantic Scholar / Europe PMC 查一遍并留下记录。',
+        };
+      }
+    }
+
     let recorded: boolean;
     try {
       recorded = this.repo.recordVerdict({

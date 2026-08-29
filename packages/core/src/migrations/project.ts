@@ -478,6 +478,52 @@ ALTER TABLE claim_evidence ADD COLUMN created_at INTEGER;
 CREATE INDEX idx_claim_evidence_ref ON claim_evidence (evidence_kind, evidence_ref);
 `;
 
+/**
+ * 引文核实的取证记录（任务 13.5，需求 13.9）。
+ *
+ * 需求要求「禁止模型凭记忆作答，必须经由检索工具取证」。这是一条**禁止**，而禁止在
+ * 提示词层面守不住——模型说「我查过了，这篇文献存在」与它真的查过在输出里长得
+ * 一模一样。
+ *
+ * 这张表是让那条要求可执行的唯一办法：每一次核实都必须留下「查了什么、向谁查、
+ * 拿回来什么」的记录，而核实结论只能由**产生了记录的那条代码路径**写入。没有记录的
+ * 结论在检查里会被当成未核实——于是「凭记忆作答」这件事从「不该做」变成「做不到」。
+ *
+ * `queried_at` 与 `sources` 一起存：半年后回看一条「已核实」的引文时，要能判断
+ * 那次核实的可信度——是四家上游都命中，还是只有一家在勉强匹配。
+ *
+ * `claim_id` 可空：核实一条正文里的引文时它还没被登记成断言，而那次核实的记录
+ * 不该因此丢掉。
+ */
+const M008 = `
+CREATE TABLE citation_checks (
+  id             TEXT PRIMARY KEY,
+  claim_id       TEXT REFERENCES claims (id) ON DELETE CASCADE,
+  /* 被核实的引文原文（正文里那一段，或参考文献列表的一行） */
+  raw            TEXT NOT NULL,
+  /* 解析出的结构化字段，JSON */
+  parsed_json    TEXT,
+  /* 实际发出的检索查询，JSON 数组。空数组意味着没有真的查过 */
+  queries_json   TEXT NOT NULL,
+  /* 逐源结果，JSON。含每家上游的命中数与失败原因 */
+  attempts_json  TEXT NOT NULL,
+  /* 最终匹配到的文献条目。未命中时为空 */
+  matched_ref_id TEXT REFERENCES refs (id) ON DELETE SET NULL,
+  /* 匹配到的 DOI（即便没入库也记下来） */
+  matched_doi    TEXT,
+  /* 相似度，0-1。用于事后判断这次匹配有多勉强 */
+  similarity     REAL,
+  verdict        TEXT NOT NULL,
+  detail         TEXT,
+  /* 执行这次核实的模型。检索由后端做，这里记的是发起者 */
+  model_id       TEXT,
+  queried_at     INTEGER NOT NULL
+);
+CREATE INDEX idx_citation_checks_claim ON citation_checks (claim_id, queried_at DESC);
+CREATE INDEX idx_citation_checks_verdict ON citation_checks (verdict);
+CREATE INDEX idx_citation_checks_raw ON citation_checks (raw);
+`;
+
 export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'project-initial', sql: M001 },
   { version: 2, name: 'blob-eviction', sql: M002 },
@@ -486,4 +532,5 @@ export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 5, name: 'reference-library', sql: M005 },
   { version: 6, name: 'reference-fulltext', sql: M006 },
   { version: 7, name: 'claim-ledger', sql: M007 },
+  { version: 8, name: 'citation-checks', sql: M008 },
 ];

@@ -52,7 +52,17 @@ import {
   renderExportWarnings,
 } from './refs/index.js';
 import { RefsRepo } from './repo/refs.js';
-import { ClaimLedger, createManageClaimsTool } from './manuscript/index.js';
+import {
+  CitationVerifier,
+  ClaimLedger,
+  createManageClaimsTool,
+  createVerifyCitationsTool,
+  describeCheck,
+  describeCitation,
+  parseCitation,
+  parseReferenceList,
+  renderVerifyResults,
+} from './manuscript/index.js';
 import { ClaimsRepo, type ClaimRecord } from './repo/claims.js';
 import {
   createGeneratePlanTool,
@@ -318,6 +328,7 @@ async function main(): Promise<void> {
   const subAgentRunners = new Map<string, SubAgentRunner>();
   const refLibraries = new Map<string, RefLibrary>();
   const claimLedgers = new Map<string, ClaimLedger>();
+  const citationVerifiers = new Map<string, CitationVerifier>();
 
   /**
    * 每个项目的执行平面资源，退出时要逐个关掉。
@@ -1043,6 +1054,30 @@ async function main(): Promise<void> {
     });
     claimLedgers.set(projectId, claimLedger);
 
+    /*
+     * 引文核实器（任务 13.5，需求 13.9）。
+     *
+     * 惰性建：它要用文献库（检索由文献库的 `search` / `addByIdentifier` 完成），
+     * 而文献库在下面才建。核实只在模型或界面发起时才跑，那时它一定已经存在。
+     */
+    const citationVerifierFor = (): CitationVerifier => {
+      const library = refLibraries.get(projectId);
+      if (library === undefined) {
+        throw new Error(`项目 ${projectId} 的文献库尚未就绪`);
+      }
+      const existing = citationVerifiers.get(projectId);
+      if (existing !== undefined) return existing;
+      const verifier = new CitationVerifier({
+        library,
+        claims: claimLedger.repo,
+        onLog: (line) => {
+          log(`[citations ${projectId}] ${line}`);
+        },
+      });
+      citationVerifiers.set(projectId, verifier);
+      return verifier;
+    };
+
     /* --- Reviewer Service（任务 12.8，需求 11.1-11.8）--------------- */
 
     const reviewer = new ReviewerService({
@@ -1060,23 +1095,49 @@ async function main(): Promise<void> {
        * 按会话筛：findings 必须挂在一个会话上，而把全项目的断言都报进每个会话的
        * 审查会让同一条无证据断言在五个会话里各出现一次。
        */
-      claims: (conversationId) =>
-        claimLedger.repo
-          .list({ conversationId, status: 'unresolved', limit: 200 })
-          .map((claim) => ({
-            id: claim.id,
-            text: claim.text,
-            locator: claim.locator,
-            status: claim.status,
-            origin: claim.origin,
-            numbers: claim.numbers,
-            evidence: claim.evidence.map((e) => ({
-              kind: e.kind,
-              ref: e.ref,
-              verdict: e.verdict,
-              quote: e.quote,
-            })),
+      claims: (conversationId) => {
+        /*
+         * 未关闭的断言 + 已支持的引文支撑陈述。
+         *
+         * 后者不在「未关闭」里，但需求 13.9 的兜底检查正是要看它们：一条被标成
+         * 「已支持」却没有检索记录的引文断言，只有把它带进快照才能被发现。
+         */
+        const unresolved = claimLedger.repo.list({
+          conversationId,
+          status: 'unresolved',
+          limit: 200,
+        });
+        const supportedCitations = claimLedger.repo
+          .list({ conversationId, status: 'supported', limit: 200 })
+          .filter((claim) => claim.kinds.includes('citation'));
+
+        return [...unresolved, ...supportedCitations].map((claim) => ({
+          id: claim.id,
+          text: claim.text,
+          locator: claim.locator,
+          status: claim.status,
+          origin: claim.origin,
+          numbers: claim.numbers,
+          isCitation: claim.kinds.includes('citation'),
+          retrievalBacked: claimLedger.repo.hasRetrievalBackedCheck(claim.id),
+          evidence: claim.evidence.map((e) => ({
+            kind: e.kind,
+            ref: e.ref,
+            verdict: e.verdict,
+            quote: e.quote,
           })),
+        }));
+      },
+      citationChecks: () =>
+        claimLedger.repo.citationChecks({ limit: 200 }).map((check) => ({
+          id: check.id,
+          claimId: check.claimId,
+          raw: check.raw,
+          verdict: check.verdict,
+          queryCount: check.queries.length,
+          detail: check.detail,
+          matchedRefId: check.matchedRefId,
+        })),
       onFinding: (finding) => {
         d.broadcast({ kind: 'finding.raised', projectId, finding });
       },
@@ -1336,6 +1397,43 @@ async function main(): Promise<void> {
            * 已经说了。
            */
           if (info.action === 'confirm' || info.action === 'verify') {
+            void reviewer.schedule({
+              conversationId: info.conversationId,
+              trigger: 'artifact-saved',
+            });
+          }
+        },
+      }),
+    );
+
+    /* --- 引文核实（任务 13.5，需求 13.9）----------------------------- */
+
+    tools.register(
+      createVerifyCitationsTool({
+        verifier: citationVerifierFor,
+        ledger: () => claimLedger,
+        readVersion: (versionId) => {
+          const bytes = artifactStore.readVersion(versionId);
+          return bytes === null ? null : bytes.toString('utf8');
+        },
+        onChecked: (info) => {
+          d.broadcast({
+            kind: 'citations.checked',
+            projectId,
+            conversationId: info.conversationId,
+            checked: info.checked,
+            notFound: info.notFound,
+            mismatched: info.mismatched,
+          });
+
+          /*
+           * 查出编造或错写的引文之后立刻审查。
+           *
+           * 这两类是需求 13.9 真正要防的东西，而它们的确定性检查在
+           * `checkCitationIntegrity` 里——不主动触发的话要等到下一轮 turn 结束，
+           * 那时模型已经基于「核实过了」继续往下写了。
+           */
+          if (info.notFound > 0 || info.mismatched > 0) {
             void reviewer.schedule({
               conversationId: info.conversationId,
               trigger: 'artifact-saved',
@@ -3236,6 +3334,158 @@ async function main(): Promise<void> {
       });
     }
     return { deleted };
+  });
+
+  /* --- 引文核实（任务 13.5，需求 13.9）--- */
+
+  const verifierFor = async (projectId: string): Promise<CitationVerifier> => {
+    await orchestratorFor(projectId);
+    const verifier = citationVerifiers.get(projectId);
+    if (verifier !== undefined) return verifier;
+
+    // buildOrchestrator 里的工厂是惰性的，界面先发起时它还没被调过。
+    // 这里补建一次，依赖此时都已就绪
+    const library = refLibraries.get(projectId);
+    const ledger = claimLedgers.get(projectId);
+    if (library === undefined || ledger === undefined) {
+      throw notFound(`项目不可用：${projectId}`);
+    }
+    const created = new CitationVerifier({
+      library,
+      claims: ledger.repo,
+      onLog: (line) => {
+        log(`[citations ${projectId}] ${line}`);
+      },
+    });
+    citationVerifiers.set(projectId, created);
+    return created;
+  };
+
+  /** 把 referenceList / artifactVersionId / citations 合成待核实清单。 */
+  const collectCitations = (
+    projectId: string,
+    req: { citations?: readonly string[]; referenceList?: string; artifactVersionId?: string },
+  ): { targets: readonly string[]; notes: readonly string[] } => {
+    const targets: string[] = [...(req.citations ?? [])];
+    const notes: string[] = [];
+
+    if (req.artifactVersionId !== undefined) {
+      const artifacts = artifactStoreFor(projectId);
+      const bytes = artifacts.readVersion(req.artifactVersionId);
+      if (bytes === null) throw notFound(`制品版本不存在：${req.artifactVersionId}`);
+      const parsed = parseReferenceList(bytes.toString('utf8'));
+      targets.push(...parsed.map((p) => p.raw));
+      notes.push(`从制品解析出 ${String(parsed.length)} 条`);
+    }
+    if (req.referenceList !== undefined) {
+      const parsed = parseReferenceList(req.referenceList);
+      targets.push(...parsed.map((p) => p.raw));
+      notes.push(`从列表解析出 ${String(parsed.length)} 条`);
+    }
+
+    const unique = [...new Set(targets.map((t) => t.replace(/\s+/gu, ' ').trim()))].filter(
+      (t) => t !== '',
+    );
+    return { targets: unique, notes };
+  };
+
+  d.register('citation.parse', async (req) => {
+    // 只解析不检索：让用户先确认解析对不对，再决定要不要花几十次上游请求
+    const { targets } = collectCitations(req.projectId, req);
+    if (targets.length === 0) {
+      throw new DispatchError(
+        makeError('bad_request', '没有可解析的内容', {
+          remediation: '传 referenceList 或 artifactVersionId。',
+        }),
+      );
+    }
+    return {
+      citations: targets.map((raw) => {
+        const parsed = parseCitation(raw);
+        return {
+          raw,
+          shape: parsed.shape,
+          searchable: parsed.searchable,
+          doi: parsed.doi,
+          pmid: parsed.pmid,
+          firstAuthorSurname: parsed.firstAuthorSurname,
+          year: parsed.year,
+          title: parsed.title,
+          container: parsed.container,
+          reason: parsed.reason,
+          summary: describeCitation(parsed),
+        };
+      }),
+    };
+  });
+
+  d.register('citation.verify', async (req) => {
+    const verifier = await verifierFor(req.projectId);
+    const { targets, notes } = collectCitations(req.projectId, req);
+
+    if (targets.length === 0) {
+      throw new DispatchError(
+        makeError('bad_request', '没有要核实的引文', {
+          remediation: '传 citations、referenceList 或 artifactVersionId。',
+        }),
+      );
+    }
+
+    const outcome = await verifier.verifyMany(targets, {
+      ...(req.claimId === undefined ? {} : { claimId: req.claimId }),
+      // 界面发起的核实记成 user:manual。判定由后端做，这一列记的是发起者
+      modelId: 'user:manual',
+    });
+
+    if (outcome.counts['not-found'] > 0 || outcome.counts['metadata-mismatch'] > 0) {
+      d.broadcast({
+        kind: 'citations.checked',
+        projectId: req.projectId,
+        conversationId: null,
+        checked: outcome.results.length,
+        notFound: outcome.counts['not-found'],
+        mismatched: outcome.counts['metadata-mismatch'],
+      });
+    }
+
+    return {
+      notes,
+      counts: outcome.counts,
+      summary: renderVerifyResults(outcome.results, outcome.counts),
+      results: outcome.results.map((r) => ({
+        raw: r.raw,
+        verdict: r.verdict,
+        shape: r.parsed.shape,
+        matchedRefId: r.matchedRefId,
+        matchedDoi: r.matchedDoi,
+        matchedCite: r.matchedCite,
+        similarity: r.similarity,
+        mismatches: r.mismatches,
+        // 实际检索记录一并返回：需求 13.9 的可核查性靠它
+        queries: r.queries,
+        attempts: r.attempts,
+        detail: r.detail,
+        checkId: r.checkId,
+      })),
+    };
+  });
+
+  d.register('citation.checks', async (req) => {
+    const ledger = await claimsFor(req.projectId);
+    const checks = ledger.repo.citationChecks({
+      ...(req.claimId === undefined ? {} : { claimId: req.claimId }),
+      ...(req.verdict === undefined ? {} : { verdict: req.verdict }),
+      limit: req.limit,
+    });
+    return {
+      checks: checks.map((check) => ({
+        ...check,
+        // 「有没有真的查过」是这份记录的核心判据，提到平面上让 UI 不必去数数组
+        retrievalBacked: check.queries.length > 0 && check.verdict !== 'unverifiable',
+        summary: describeCheck(check),
+      })),
+      suspects: ledger.repo.fabricationSuspects(50).length,
+    };
   });
 
   /* --- 引用导出（任务 13.3，需求 12.5）--- */

@@ -7,12 +7,18 @@
 
 export {
   checkArtifactLineage,
+  checkCitationIntegrity,
   checkClaimSupport,
   checkDanglingArtifactRefs,
   extractText,
   runDeterministicChecks,
 } from './checks.js';
-export type { ClaimSnapshot, DeterministicInput, DraftFinding } from './checks.js';
+export type {
+  CitationCheckSnapshot,
+  ClaimSnapshot,
+  DeterministicInput,
+  DraftFinding,
+} from './checks.js';
 
 export { extractJsonObject, parseReviewOutput } from './parse.js';
 export type { ParseOptions, ParsedRecheck, ParsedReview, RecheckVerdict } from './parse.js';

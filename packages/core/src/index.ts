@@ -79,6 +79,8 @@ export * from './manuscript/index.js';
 
 export { ClaimsRepo } from './repo/claims.js';
 export type {
+  CitationCheckRecord,
+  CitationVerdict,
   ClaimEvidence,
   ClaimEvidenceKind,
   ClaimOrigin,

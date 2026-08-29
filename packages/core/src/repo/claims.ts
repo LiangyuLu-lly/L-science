@@ -127,6 +127,86 @@ export interface ClaimRecord {
   evidence: readonly ClaimEvidence[];
 }
 
+/**
+ * 引文核实的结论（需求 13.9）。
+ *
+ * `not-found` 与 `unverifiable` 必须分开：前者是「查了，上游都说不存在」，
+ * 后者是「没能真的查」（域名未批准、网络失败、没有可检索字段）。合成一档会把
+ * 一次网络故障说成学术不端。
+ */
+export type CitationVerdict =
+  'verified' | 'metadata-mismatch' | 'not-found' | 'ambiguous' | 'unverifiable';
+
+export interface CitationCheckRecord {
+  id: string;
+  claimId: string | null;
+  raw: string;
+  /** 解析出的结构化字段。形状由 manuscript/citations.ts 的 ParsedCitation 定。 */
+  parsed: unknown;
+  /** 实际发出的检索查询。空数组意味着没有真的查过。 */
+  queries: readonly string[];
+  attempts: readonly unknown[];
+  matchedRefId: string | null;
+  matchedDoi: string | null;
+  similarity: number | null;
+  verdict: CitationVerdict;
+  detail: string | null;
+  /** 发起这次核实的模型。判定由后端做，这一列记的是发起者。 */
+  modelId: string | null;
+  queriedAt: number;
+}
+
+interface CitationCheckRow {
+  id: string;
+  claim_id: string | null;
+  raw: string;
+  parsed_json: string | null;
+  queries_json: string;
+  attempts_json: string;
+  matched_ref_id: string | null;
+  matched_doi: string | null;
+  similarity: number | null;
+  verdict: string;
+  detail: string | null;
+  model_id: string | null;
+  queried_at: number;
+}
+
+function parseJsonValue(text: string | null): unknown {
+  if (text === null) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function toCitationCheck(row: CitationCheckRow): CitationCheckRecord {
+  const queries = parseJsonValue(row.queries_json);
+  const attempts = parseJsonValue(row.attempts_json);
+  return {
+    id: row.id,
+    claimId: row.claim_id,
+    raw: row.raw,
+    parsed: parseJsonValue(row.parsed_json),
+    /*
+     * 解析失败时退回空数组。
+     *
+     * 这个降级方向是刻意的：空数组表示「没有查询记录」，因此下游会把这条核实
+     * 当成未经检索。反过来（假装有查询）会让一条损坏的记录冒充有效核实。
+     */
+    queries: Array.isArray(queries) ? (queries as string[]) : [],
+    attempts: Array.isArray(attempts) ? attempts : [],
+    matchedRefId: row.matched_ref_id,
+    matchedDoi: row.matched_doi,
+    similarity: row.similarity,
+    verdict: row.verdict as CitationVerdict,
+    detail: row.detail,
+    modelId: row.model_id,
+    queriedAt: row.queried_at,
+  };
+}
+
 interface ClaimRow {
   id: string;
   manuscript_id: string | null;
@@ -646,6 +726,137 @@ export class ClaimsRepo {
       byKind,
       byOrigin,
     };
+  }
+
+  /* ---------------- 引文核实记录（需求 13.9）---------------- */
+
+  /**
+   * 记一次引文核实。
+   *
+   * `queries` 为空数组是有意义的状态：它表示这次「核实」没有真的发出任何检索。
+   * 下游的检查据此把它当成未核实——这正是让「禁止凭记忆作答」可执行的机制。
+   * 因此这一列不允许为 NULL，也不该被调用方省略。
+   */
+  addCitationCheck(input: {
+    raw: string;
+    parsed?: unknown;
+    queries: readonly string[];
+    attempts: readonly unknown[];
+    verdict: CitationVerdict;
+    detail?: string | null;
+    claimId?: string | null;
+    matchedRefId?: string | null;
+    matchedDoi?: string | null;
+    similarity?: number | null;
+    modelId?: string | null;
+  }): CitationCheckRecord {
+    const raw = input.raw.trim();
+    if (raw === '') throw new Error('核实记录必须带上被核实的引文原文');
+
+    const id = `cc_${randomUUID()}`;
+    this.#db
+      .prepare(
+        `INSERT INTO citation_checks
+           (id, claim_id, raw, parsed_json, queries_json, attempts_json, matched_ref_id,
+            matched_doi, similarity, verdict, detail, model_id, queried_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.claimId ?? null,
+        raw.slice(0, 4000),
+        input.parsed === undefined ? null : JSON.stringify(input.parsed),
+        JSON.stringify(input.queries),
+        JSON.stringify(input.attempts),
+        input.matchedRefId ?? null,
+        input.matchedDoi ?? null,
+        input.similarity ?? null,
+        input.verdict,
+        input.detail ?? null,
+        input.modelId ?? null,
+        Date.now(),
+      );
+
+    const created = this.getCitationCheck(id);
+    if (created === null) throw new Error('核实记录创建后读取失败');
+    return created;
+  }
+
+  getCitationCheck(id: string): CitationCheckRecord | null {
+    const row = this.#db.prepare('SELECT * FROM citation_checks WHERE id = ?').get(id) as
+      CitationCheckRow | undefined;
+    return row === undefined ? null : toCitationCheck(row);
+  }
+
+  /**
+   * 某条引文最近一次核实。
+   *
+   * 按原文精确匹配（折叠空白后）。用相似匹配会让「改了一个字的引文」复用旧结论，
+   * 而那一个字可能正是错的那个。
+   */
+  latestCheckForRaw(raw: string): CitationCheckRecord | null {
+    const normalized = raw.replace(/\s+/gu, ' ').trim().slice(0, 4000);
+    const row = this.#db
+      .prepare(
+        'SELECT * FROM citation_checks WHERE raw = ? ORDER BY queried_at DESC, rowid DESC LIMIT 1',
+      )
+      .get(normalized) as CitationCheckRow | undefined;
+    return row === undefined ? null : toCitationCheck(row);
+  }
+
+  citationChecks(
+    options: { claimId?: string; verdict?: CitationVerdict; limit?: number } = {},
+  ): readonly CitationCheckRecord[] {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+
+    if (options.claimId !== undefined) {
+      clauses.push('claim_id = ?');
+      params.push(options.claimId);
+    }
+    if (options.verdict !== undefined) {
+      clauses.push('verdict = ?');
+      params.push(options.verdict);
+    }
+
+    const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
+    params.push(Math.max(1, Math.min(options.limit ?? 100, 1000)));
+
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM citation_checks${where} ORDER BY queried_at DESC, rowid DESC LIMIT ?`,
+        )
+        .all(...params) as CitationCheckRow[]
+    ).map(toCitationCheck);
+  }
+
+  /**
+   * 这条断言有没有**真的经过检索**的核实记录（需求 13.9）。
+   *
+   * 判据是「有记录 **且** 记录里发出过至少一次查询」。只看有没有记录不够：
+   * `unverifiable` 类的记录（域名未批准、无可检索字段）也是记录，但它证明的恰恰是
+   * 没查到。
+   */
+  hasRetrievalBackedCheck(claimId: string): boolean {
+    const rows = this.#db
+      .prepare('SELECT queries_json, verdict FROM citation_checks WHERE claim_id = ?')
+      .all(claimId) as { queries_json: string; verdict: string }[];
+
+    return rows.some((row) => {
+      if (row.verdict === 'unverifiable') return false;
+      try {
+        const queries = JSON.parse(row.queries_json) as unknown;
+        return Array.isArray(queries) && queries.length > 0;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  /** 检索不到的引文核实记录。它们是「可能编造」的凭据。 */
+  fabricationSuspects(limit = 100): readonly CitationCheckRecord[] {
+    return this.citationChecks({ verdict: 'not-found', limit });
   }
 
   /** 引用了某个制品版本 / 文献条目的全部断言。删制品前要用它警告用户。 */

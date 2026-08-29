@@ -24,3 +24,25 @@ export { ClaimLedger } from './ledger.js';
 
 export type { ClaimAction, ClaimToolInput, ClaimToolOptions } from './tools.js';
 export { createManageClaimsTool } from './tools.js';
+
+export type { CitationShape, ParsedCitation } from './citations.js';
+export {
+  CITATION_SHAPE_LABEL,
+  describeCitation,
+  parseCitation,
+  parseReferenceList,
+} from './citations.js';
+
+export type { CitationVerifierDeps, CitationVerifyResult } from './verify.js';
+export {
+  CITATION_VERDICT_LABEL,
+  CitationVerifier,
+  buildQuery,
+  compareFields,
+  describeCheck,
+  journalNamesMatch,
+  renderVerifyResults,
+} from './verify.js';
+
+export type { VerifyCitationsInput, VerifyCitationsOptions } from './verify-tools.js';
+export { createVerifyCitationsTool } from './verify-tools.js';
