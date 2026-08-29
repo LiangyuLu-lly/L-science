@@ -84,6 +84,7 @@ export type {
 } from './authoring.js';
 
 export { ARCHIVE_LIMITS, ArchiveError, findArchivedSkills, readArchive } from './archive.js';
+export type { ArchiveLimits } from './archive.js';
 export type { ArchivedSkill, ArchiveEntry, ArchiveResult } from './archive.js';
 
 export {

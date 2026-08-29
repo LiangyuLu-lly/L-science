@@ -385,10 +385,62 @@ CREATE TABLE ref_aliases (
 CREATE INDEX idx_ref_aliases_ref ON ref_aliases (ref_id);
 `;
 
+/**
+ * 全文抓取的尝试记录与随文资源（任务 13.2，需求 12.3、12.4、12.6）。
+ *
+ * `ref_fetch_attempts` 直接对应需求 12.6：拿不到全文时必须记下试过哪些来源、
+ * 各自为什么失败，不得静默跳过。这条要求只能靠一张表满足——把原因塞进 `refs` 的
+ * 一个文本列，第二次尝试就会把第一次的记录覆盖掉，而「上次是 403 这次是 404」
+ * 恰恰是判断「要不要换个途径」的依据。
+ *
+ * 表里不加 UNIQUE：同一来源被试过多次是有意义的历史（半年后开放获取了）。
+ *
+ * `ref_assets` 让一条文献可以绑定多个制品。`refs.fulltext_artifact_id` 只能存一个，
+ * 而 PMC 的一篇论文会带回来正文 Markdown、原始 XML、十几张插图与补充材料。把它们
+ * 都塞进一个制品的多个版本是错的——版本表达的是同一份内容的演进，而这些是并列的
+ * 不同东西。
+ *
+ * `version_id` 与 `artifact_id` 都存：制品会有新版本，而「当时抓到的是这一版」
+ * 是可核查性的一部分。只存 artifact_id 的话，后来有人在同一制品上存了新版本，
+ * 回看时就分不清引用的是哪一版。
+ */
+const M006 = `
+CREATE TABLE ref_fetch_attempts (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ref_id     TEXT NOT NULL REFERENCES refs (id) ON DELETE CASCADE,
+  source     TEXT NOT NULL,
+  url        TEXT,
+  outcome    TEXT NOT NULL,
+  detail     TEXT,
+  status     INTEGER,
+  bytes      INTEGER,
+  at         INTEGER NOT NULL
+);
+CREATE INDEX idx_ref_fetch_ref ON ref_fetch_attempts (ref_id, at DESC);
+CREATE INDEX idx_ref_fetch_outcome ON ref_fetch_attempts (outcome);
+
+CREATE TABLE ref_assets (
+  id          TEXT PRIMARY KEY,
+  ref_id      TEXT NOT NULL REFERENCES refs (id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  version_id  TEXT NOT NULL,
+  label       TEXT,
+  caption     TEXT,
+  source_url  TEXT,
+  /* 包内原文件名。正文 Markdown 里的图片路径靠它对上制品 */
+  origin_path TEXT,
+  created_at  INTEGER NOT NULL,
+  UNIQUE (ref_id, kind, artifact_id)
+);
+CREATE INDEX idx_ref_assets_ref ON ref_assets (ref_id, kind);
+`;
+
 export const PROJECT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'project-initial', sql: M001 },
   { version: 2, name: 'blob-eviction', sql: M002 },
   { version: 3, name: 'skill-load-audit', sql: M003 },
   { version: 4, name: 'subagent-conversations', sql: M004 },
   { version: 5, name: 'reference-library', sql: M005 },
+  { version: 6, name: 'reference-fulltext', sql: M006 },
 ];

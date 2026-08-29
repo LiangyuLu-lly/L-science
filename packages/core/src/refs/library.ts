@@ -17,6 +17,8 @@ import type { ArtifactStore } from '../artifact/store.js';
 import type { RefRecord, RefsRepo } from '../repo/refs.js';
 import { mergeSourceLabel } from '../repo/refs.js';
 import { toBibtex } from './bibtex.js';
+import type { FulltextResult, FulltextSource } from './fulltext.js';
+import { FulltextFetcher } from './fulltext.js';
 import type { CslItem } from './csl.js';
 import { citeLine } from './csl.js';
 import type { MatchResult } from './dedupe.js';
@@ -85,8 +87,15 @@ export interface RefLibraryDeps {
   repo: RefsRepo;
   /** 解析上游的公共选项（mailto、API key、超时、fetch 注入）。 */
   http?: ResolveOptions;
-  /** 制品库。导出 .bib / .json 时用（需求 12.5）。 */
+  /** 制品库。抓全文与导出 .bib / .json 时用（需求 12.3、12.5）。 */
   artifacts?: ArtifactStore;
+  /**
+   * 全文抓取的单主机批准。
+   *
+   * 与元数据的 `authorizeHosts` 分开，因为这一层的主机是运行时才知道的：Unpaywall
+   * 会返回任意出版商或机构仓储的地址，预先列白名单不可能。
+   */
+  authorizeFulltextHost?: (host: string, why: string) => Promise<boolean>;
   /**
    * 域名批准门。
    *
@@ -107,10 +116,13 @@ export class RefLibrary {
   readonly #artifacts: ArtifactStore | null;
   readonly #log: (line: string) => void;
   readonly #authorizeHosts: ((hosts: readonly string[]) => Promise<readonly string[]>) | null;
+  readonly #authorizeFulltextHost: ((host: string, why: string) => Promise<boolean>) | null;
   /** 已获批主机。一次会话内只问一次。 */
   #allowedHosts: Set<string> | null = null;
   /** 正在进行的批准请求。并发调用共用同一次询问，不会弹出两张卡片。 */
   #authorizing: Promise<Set<string>> | null = null;
+  /** 全文抓取器。惰性建：没有制品库时它建不起来。 */
+  #fetcher: FulltextFetcher | null = null;
 
   constructor(deps: RefLibraryDeps) {
     this.repo = deps.repo;
@@ -118,10 +130,102 @@ export class RefLibrary {
     this.#artifacts = deps.artifacts ?? null;
     this.#log = deps.onLog ?? ((): void => undefined);
     this.#authorizeHosts = deps.authorizeHosts ?? null;
+    this.#authorizeFulltextHost = deps.authorizeFulltextHost ?? null;
   }
 
   get artifacts(): ArtifactStore | null {
     return this.#artifacts;
+  }
+
+  /**
+   * 全文抓取器。
+   *
+   * 没有制品库时返回 null 而不是抛错：抓全文本质上是「把外部内容存成制品」，
+   * 没有制品库这件事就无从谈起。调用方按 null 给出可读的原因。
+   */
+  get fulltext(): FulltextFetcher | null {
+    if (this.#artifacts === null) return null;
+    if (this.#fetcher === null) {
+      this.#fetcher = new FulltextFetcher({
+        repo: this.repo,
+        artifacts: this.#artifacts,
+        http: this.#http,
+        ...(this.#authorizeFulltextHost === null
+          ? {}
+          : { authorizeHost: this.#authorizeFulltextHost }),
+        onLog: this.#log,
+      });
+    }
+    return this.#fetcher;
+  }
+
+  /**
+   * 抓一条文献的全文（需求 12.3、12.4、12.6）。
+   *
+   * 逐次尝试的记录由 `FulltextFetcher` 落进 `ref_fetch_attempts`，因此即便这次
+   * 调用的返回值被丢掉，「试过什么」也不会丢。
+   */
+  async fetchFulltext(
+    refId: string,
+    options: { sources?: readonly FulltextSource[]; force?: boolean } = {},
+  ): Promise<FulltextResult> {
+    const ref = this.repo.get(refId);
+    if (ref === null) {
+      return {
+        ok: false,
+        source: null,
+        fulltextArtifactId: null,
+        fulltextVersionId: null,
+        assets: [],
+        attempts: [],
+        summary: `文献不存在：${refId}`,
+        article: null,
+      };
+    }
+
+    const fetcher = this.fulltext;
+    if (fetcher === null) {
+      return {
+        ok: false,
+        source: null,
+        fulltextArtifactId: null,
+        fulltextVersionId: null,
+        assets: [],
+        attempts: [],
+        summary: '这个文献库实例没有接制品库，无法存放抓到的全文。',
+        article: null,
+      };
+    }
+
+    return fetcher.fetch(ref, options);
+  }
+
+  /** 绑定用户手工下载的全文。付费墙后的论文只能这样进来。 */
+  attachFulltext(input: { refId: string; filename: string; content: Buffer; note?: string }): {
+    ok: boolean;
+    artifactId: string | null;
+    versionId: string | null;
+    reason: string | null;
+  } {
+    const ref = this.repo.get(input.refId);
+    if (ref === null) {
+      return { ok: false, artifactId: null, versionId: null, reason: `文献不存在：${input.refId}` };
+    }
+    const fetcher = this.fulltext;
+    if (fetcher === null) {
+      return {
+        ok: false,
+        artifactId: null,
+        versionId: null,
+        reason: '这个文献库实例没有接制品库。',
+      };
+    }
+    return fetcher.attach({
+      ref,
+      filename: input.filename,
+      content: input.content,
+      ...(input.note === undefined ? {} : { note: input.note }),
+    });
   }
 
   /**

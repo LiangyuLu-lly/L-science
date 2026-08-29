@@ -795,6 +795,53 @@ export const requestSchema = z.discriminatedUnion('method', [
     projectId: idSchema,
     limit: z.number().int().min(1).max(200).default(50),
   }),
+
+  /* --- 全文抓取（任务 13.2，需求 12.3、12.4、12.6）--- */
+
+  /**
+   * 按开放获取优先的顺序抓全文。
+   *
+   * `sources` 省略时按文献实际拥有的标识自动排序。给出时只试指定的——用户想
+   * 「只从 PMC 拿，别去出版商站点」时需要这个。
+   */
+  z.object({
+    method: z.literal('ref.fetchFulltext'),
+    projectId: idSchema,
+    refId: idSchema,
+    sources: z
+      .array(
+        z.enum([
+          'pmc-oa-package',
+          'europepmc-xml',
+          'unpaywall',
+          'openalex-oa',
+          'arxiv',
+          'biorxiv',
+          'publisher-url',
+        ]),
+      )
+      .max(8)
+      .optional(),
+    force: z.boolean().default(false),
+  }),
+
+  /** 已抓到的全文、插图、补充材料，外加逐次尝试的历史（需求 12.6）。 */
+  z.object({ method: z.literal('ref.assets'), projectId: idSchema, refId: idSchema }),
+
+  /**
+   * 绑定用户手工下载的全文。
+   *
+   * 付费墙后的论文只能这样进来，而那是绝大多数期刊。内容走 base64：IPC 是一条
+   * 行分隔的 JSON 通道，二进制必须先编码。
+   */
+  z.object({
+    method: z.literal('ref.attachFulltext'),
+    projectId: idSchema,
+    refId: idSchema,
+    fileName: z.string().min(1).max(255),
+    contentBase64: z.string().min(1),
+    note: z.string().max(500).optional(),
+  }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;

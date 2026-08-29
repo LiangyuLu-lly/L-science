@@ -1183,6 +1183,47 @@ async function main(): Promise<void> {
         }
         return [...allowed, ...missing];
       },
+      /*
+       * 全文抓取的单主机批准（任务 13.2）。
+       *
+       * 与元数据那道门分开，因为这里的主机运行时才知道：Unpaywall 会返回任意
+       * 出版商或机构仓储的地址。合成一张卡片在这里做不到，也不该做——把外部 PDF
+       * 拉进工作区的影响与查一次元数据不是一个量级，用户有权逐个主机决定。
+       */
+      authorizeFulltextHost: async (host, why) => {
+        if (grants.isDomainAllowed({ domain: host, projectId })) return true;
+
+        const result = await approvalFor(projectId).request({
+          kind: 'domain-allowlist',
+          title: `允许从 ${host} 下载全文？`,
+          detail:
+            `${why}\n\n这个地址来自开放获取索引（Unpaywall / OpenAlex）或预印本服务器，` +
+            '不是本平台内置的名单。',
+          impact:
+            '批准后会把该地址的文件下载进项目的制品库。下载的是文档，不会执行；' +
+            '但内容来自外部，引用前应当核对它确实是你要的那篇。',
+          reversible: true,
+          undoHint: '在设置的授权列表里撤销该域名，并删除已下载的制品。',
+          scopeOptions: ['once', 'project', 'always'],
+          payload: { host, reason: why },
+        });
+
+        if (result.state !== 'approved') return false;
+        if (result.scope !== 'once') {
+          try {
+            grants.allowDomain({
+              domain: host,
+              mode: 'rw',
+              scope: result.scope,
+              scopeId: result.scope === 'project' ? projectId : null,
+              reason: `用户为全文抓取在项目 ${projectId} 内批准`,
+            });
+          } catch (err) {
+            log(`全文抓取域名授权写入失败：${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        return true;
+      },
       http: {
         ...(process.env.LSCIENCE_CONTACT_EMAIL === undefined
           ? {}
@@ -2753,6 +2794,99 @@ async function main(): Promise<void> {
   d.register('ref.duplicates', async (req) => {
     const library = await refsFor(req.projectId);
     return library.scanDuplicates({ limit: req.limit });
+  });
+
+  /* --- 全文抓取（任务 13.2，需求 12.3、12.4、12.6）--- */
+
+  d.register('ref.fetchFulltext', async (req) => {
+    const library = await refsFor(req.projectId);
+    const result = await library.fetchFulltext(req.refId, {
+      ...(req.sources === undefined ? {} : { sources: req.sources }),
+      force: req.force,
+    });
+
+    if (result.ok) {
+      d.broadcast({
+        kind: 'refs.changed',
+        projectId: req.projectId,
+        action: 'fulltext',
+        refIds: [req.refId],
+      });
+    }
+
+    return {
+      ok: result.ok,
+      source: result.source,
+      summary: result.summary,
+      fulltextArtifactId: result.fulltextArtifactId,
+      fulltextVersionId: result.fulltextVersionId,
+      assets: result.assets,
+      // 逐次尝试原样给出：失败时用户要看到试过谁、各自为什么不行
+      attempts: result.attempts,
+      article:
+        result.article === null
+          ? null
+          : {
+              title: result.article.title,
+              figures: result.article.figures.length,
+              tables: result.article.tables.length,
+              references: result.article.references.length,
+              license: result.article.license,
+            },
+    };
+  });
+
+  d.register('ref.assets', async (req) => {
+    const library = await refsFor(req.projectId);
+    const ref = library.repo.get(req.refId);
+    if (ref === null) throw notFound(`文献不存在：${req.refId}`);
+    return {
+      assets: library.repo.assets(req.refId),
+      attempts: library.repo.fetchAttempts(req.refId),
+      fulltextArtifactId: ref.fulltextArtifactId,
+      oaStatus: ref.oaStatus,
+    };
+  });
+
+  d.register('ref.attachFulltext', async (req) => {
+    const library = await refsFor(req.projectId);
+
+    let content: Buffer;
+    try {
+      content = Buffer.from(req.contentBase64, 'base64');
+    } catch {
+      throw new DispatchError(makeError('bad_request', '内容不是合法的 base64'));
+    }
+    if (content.byteLength === 0) {
+      throw new DispatchError(
+        makeError('bad_request', '解出来是空内容', {
+          remediation: 'base64 可能被截断了。确认整份内容都传上来了。',
+        }),
+      );
+    }
+
+    const result = library.attachFulltext({
+      refId: req.refId,
+      filename: req.fileName,
+      content,
+      ...(req.note === undefined ? {} : { note: req.note }),
+    });
+
+    if (!result.ok) {
+      throw new DispatchError(
+        makeError('bad_request', result.reason ?? '绑定失败', {
+          remediation: '确认下载到的是文档本身而不是出版商的落地页。',
+        }),
+      );
+    }
+
+    d.broadcast({
+      kind: 'refs.changed',
+      projectId: req.projectId,
+      action: 'fulltext',
+      refIds: [req.refId],
+    });
+    return { artifactId: result.artifactId, versionId: result.versionId };
   });
 
   d.register('credential.delete', async (req) => {

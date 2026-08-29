@@ -76,7 +76,15 @@ export * from './mcp/index.js';
 export * from './refs/index.js';
 
 export { FULL_SCAN_LIMIT, RefsRepo, mergeSourceLabel } from './repo/refs.js';
-export type { RefAlias, RefAliasScheme, RefRecord } from './repo/refs.js';
+export type {
+  FetchOutcome,
+  RefAlias,
+  RefAliasScheme,
+  RefAsset,
+  RefAssetKind,
+  RefFetchAttempt,
+  RefRecord,
+} from './repo/refs.js';
 
 export { ConnectorRepo } from './repo/connectors.js';
 export type {

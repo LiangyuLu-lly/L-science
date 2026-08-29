@@ -25,7 +25,8 @@ export interface RefToolOptions {
   onChanged?: (info: { action: string; refIds: readonly string[] }) => void;
 }
 
-export type RefAction = 'resolve' | 'search' | 'list' | 'get' | 'remove' | 'merge';
+export type RefAction =
+  'resolve' | 'search' | 'list' | 'get' | 'remove' | 'merge' | 'fulltext' | 'assets';
 
 export interface RefToolInput {
   action: RefAction;
@@ -38,6 +39,7 @@ export interface RefToolInput {
   dropId?: string;
   limit?: number;
   refresh?: boolean;
+  force?: boolean;
 }
 
 const SCHEMA = {
@@ -45,12 +47,14 @@ const SCHEMA = {
   properties: {
     action: {
       type: 'string',
-      enum: ['resolve', 'search', 'list', 'get', 'remove', 'merge'],
+      enum: ['resolve', 'search', 'list', 'get', 'remove', 'merge', 'fulltext', 'assets'],
       description:
         'resolve：按 DOI/PMID/PMCID/arXiv 标识解析元数据并入库（支持一次多个）。' +
         'search：按标题或书目信息检索上游，返回候选但**不入库**。' +
         'list：列出文献库里已有的条目。get：看某一条的完整元数据。' +
-        'remove：删除一条。merge：把两条重复记录合并。\n' +
+        'remove：删除一条。merge：把两条重复记录合并。' +
+        'fulltext：按开放获取优先的顺序抓全文（PMC 开放获取包能一并拿到插图）。' +
+        'assets：列出某条文献已抓到的全文、插图与补充材料，含制品版本 id。\n' +
         '只知道标题时必须先 search 确认是哪一篇，再用它的 DOI 走 resolve。' +
         '不要凭记忆构造 DOI——错的 DOI 会解析出另一篇文献，而结果看起来是成功的。',
     },
@@ -70,13 +74,20 @@ const SCHEMA = {
     },
     author: { type: 'string', description: 'action=search 时可选的作者姓氏，用于收窄结果。' },
     year: { type: 'integer', description: '发表年份，用于收窄检索或筛选库内条目。' },
-    refId: { type: 'string', description: 'action=get / remove 时的文献 id（形如 rf_…）。' },
+    refId: {
+      type: 'string',
+      description: 'action=get / remove / fulltext / assets 时的文献 id（形如 rf_…）。',
+    },
     keepId: { type: 'string', description: 'action=merge 时保留的文献 id。' },
     dropId: { type: 'string', description: 'action=merge 时并入并删除的文献 id。' },
     limit: { type: 'integer', minimum: 1, maximum: 50, description: '返回条数上限。' },
     refresh: {
       type: 'boolean',
       description: 'action=resolve 时即使库里已有也重新解析一遍。用于修补当初元数据不全的记录。',
+    },
+    force: {
+      type: 'boolean',
+      description: 'action=fulltext 时即使已有全文也重抓。用于换一个能拿到插图的来源。',
     },
   },
   required: ['action'],
@@ -94,10 +105,13 @@ function parseInput(raw: unknown): RefToolInput {
     action !== 'list' &&
     action !== 'get' &&
     action !== 'remove' &&
-    action !== 'merge'
+    action !== 'merge' &&
+    action !== 'fulltext' &&
+    action !== 'assets'
   ) {
     throw new Error(
-      `action 必须是 resolve/search/list/get/remove/merge 之一，收到 ${String(action)}`,
+      `action 必须是 resolve/search/list/get/remove/merge/fulltext/assets 之一，` +
+        `收到 ${String(action)}`,
     );
   }
 
@@ -153,6 +167,7 @@ function parseInput(raw: unknown): RefToolInput {
       : { dropId: text(obj.dropId, 'dropId') as string }),
     ...(num(obj.limit, 'limit') === undefined ? {} : { limit: num(obj.limit, 'limit') as number }),
     ...(obj.refresh === undefined ? {} : { refresh: obj.refresh === true }),
+    ...(obj.force === undefined ? {} : { force: obj.force === true }),
   };
 }
 
@@ -415,6 +430,113 @@ export function createManageReferencesTool(options: RefToolOptions): ToolDefinit
                 `被并入那条的标识已记入别名，用旧 DOI 仍能查到这条记录。`,
             ),
           };
+        }
+
+        case 'fulltext': {
+          if (input.refId === undefined) {
+            return {
+              ok: false,
+              output: errorOutput(
+                'MissingRefId',
+                'action=fulltext 需要 refId。先用 action=list 或 resolve 拿到它。',
+              ),
+            };
+          }
+
+          const result = await library.fetchFulltext(input.refId, {
+            ...(input.force === undefined ? {} : { force: input.force }),
+          });
+
+          if (!result.ok) {
+            /*
+             * 抓不到全文是**正常结果**而不是工具故障，因此用 text 而不是 error 返回：
+             * 摘要里已经逐条说明试过哪些来源、各自为什么失败（需求 12.6），
+             * 模型据此决定下一步（换来源、请用户手工下载、还是退回只用摘要）。
+             * 报成 error 会让模型倾向于重试同一个调用，而重试不会改变结果。
+             */
+            return { ok: false, output: textOutput(result.summary) };
+          }
+
+          const lines = [
+            `全文已抓到并绑定到 ${input.refId}。`,
+            '',
+            result.summary,
+            '',
+            `正文制品：${result.fulltextArtifactId ?? '?'}`,
+          ];
+          if (result.fulltextVersionId !== null) {
+            lines.push(
+              `执行期路径占位符：{{artifact:${result.fulltextVersionId}}}（在内核里会解析成真实文件路径）`,
+            );
+          }
+
+          const figures = result.assets.filter((a) => a.kind === 'figure');
+          if (figures.length > 0) {
+            lines.push('', `随文插图 ${String(figures.length)} 张：`);
+            for (const figure of figures.slice(0, 20)) {
+              lines.push(
+                `- ${figure.label ?? figure.originPath ?? figure.id}　${(figure.caption ?? '').slice(0, 80)}` +
+                  `　{{artifact:${figure.versionId}}}`,
+              );
+            }
+          }
+          const supplements = result.assets.filter((a) => a.kind === 'supplement');
+          if (supplements.length > 0) {
+            lines.push('', `补充材料 ${String(supplements.length)} 份：`);
+            for (const item of supplements.slice(0, 10)) {
+              lines.push(
+                `- ${item.label ?? item.originPath ?? item.id}　{{artifact:${item.versionId}}}`,
+              );
+            }
+          }
+
+          options.onChanged?.({ action: 'fulltext', refIds: [input.refId] });
+          return { ok: true, output: textOutput(lines.join('\n')) };
+        }
+
+        case 'assets': {
+          if (input.refId === undefined) {
+            return { ok: false, output: errorOutput('MissingRefId', 'action=assets 需要 refId。') };
+          }
+          const ref = library.repo.get(input.refId);
+          if (ref === null) {
+            return { ok: false, output: errorOutput('RefNotFound', `文献不存在：${input.refId}`) };
+          }
+
+          const assets = library.repo.assets(input.refId);
+          const attempts = library.repo.fetchAttempts(input.refId, 20);
+
+          const lines = [citeLine(ref.csl), ''];
+
+          if (assets.length === 0) {
+            lines.push('还没有抓到任何全文或随文资源。');
+          } else {
+            for (const asset of assets) {
+              lines.push(
+                `- [${asset.kind}] ${asset.label ?? asset.originPath ?? '(无标签)'}　` +
+                  `{{artifact:${asset.versionId}}}` +
+                  (asset.caption === null ? '' : `　${asset.caption.slice(0, 80)}`),
+              );
+            }
+          }
+
+          /*
+           * 抓取尝试历史一并给出（需求 12.6）。
+           *
+           * 即便这次没抓，模型也要能看到「上次试过什么」，否则它会重复一遍已知
+           * 会失败的来源，然后得出同样的结论。
+           */
+          if (attempts.length > 0) {
+            lines.push('', '抓取历史（最近在前）：');
+            for (const attempt of attempts) {
+              lines.push(
+                `- ${attempt.source}　${attempt.outcome}` +
+                  (attempt.detail === null ? '' : `　${attempt.detail.split('\n')[0] ?? ''}`),
+              );
+            }
+          }
+
+          return { ok: true, output: textOutput(lines.join('\n')) };
         }
 
         default:

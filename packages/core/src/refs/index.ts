@@ -105,8 +105,42 @@ export {
   sniffIdentifier,
 } from './resolver.js';
 
+export type { XmlElement, XmlNode, XmlText } from './xml.js';
+export {
+  XML_LIMITS,
+  XmlError,
+  at,
+  attr,
+  child,
+  childElements,
+  decodeXmlEntities,
+  find,
+  findAll,
+  isElement,
+  parseXml,
+  textOf,
+  trimmedText,
+} from './xml.js';
+
+export type {
+  JatsArticle,
+  JatsFigure,
+  JatsReference,
+  JatsTable,
+  ParseJatsOptions,
+} from './jats.js';
+export { describeAssets, jatsToMarkdown, parseJats } from './jats.js';
+
+export type {
+  FulltextAttemptRecord,
+  FulltextDeps,
+  FulltextResult,
+  FulltextSource,
+} from './fulltext.js';
+export { FULLTEXT_HOSTS, FULLTEXT_SOURCE_LABEL, FulltextFetcher } from './fulltext.js';
+
 export type { AddOutcome, DuplicateSuspect, RefLibraryDeps } from './library.js';
-export { RefLibrary, SOURCE_LABEL, bibtexKeyFor } from './library.js';
+export { REF_SOURCE_HOSTS, RefLibrary, SOURCE_LABEL, bibtexKeyFor } from './library.js';
 
 export type { RefAction, RefToolInput, RefToolOptions } from './tools.js';
 export { createManageReferencesTool } from './tools.js';

@@ -80,6 +80,99 @@ interface RefRow {
   updated_at: number | null;
 }
 
+/**
+ * 一次抓取尝试的结果分类。
+ *
+ * `not-available` 与 `blocked` 刻意分开：前者是「这篇文献确实没有开放获取版本」，
+ * 后者是「有，但我们被拦住了」（付费墙、需要机构 IP、被 Cloudflare 拦）。两者对
+ * 用户的下一步完全不同——前者要去找别的来源或联系作者，后者可以换网络环境或用
+ * 机构账号手动下载再上传。混成一个 `failed` 会让这个判断没法做。
+ */
+export type FetchOutcome = 'success' | 'not-available' | 'blocked' | 'error' | 'skipped';
+
+export interface RefFetchAttempt {
+  id: number;
+  refId: string;
+  source: string;
+  url: string | null;
+  outcome: FetchOutcome;
+  detail: string | null;
+  status: number | null;
+  bytes: number | null;
+  at: number;
+}
+
+/** 随文资源的类型。 */
+export type RefAssetKind = 'fulltext' | 'fulltext-source' | 'figure' | 'table' | 'supplement';
+
+export interface RefAsset {
+  id: string;
+  refId: string;
+  kind: RefAssetKind;
+  artifactId: string;
+  versionId: string;
+  label: string | null;
+  caption: string | null;
+  sourceUrl: string | null;
+  /** 归档包内的原文件名。正文 Markdown 里的图片路径靠它对上制品。 */
+  originPath: string | null;
+  createdAt: number;
+}
+
+interface FetchAttemptRow {
+  id: number;
+  ref_id: string;
+  source: string;
+  url: string | null;
+  outcome: string;
+  detail: string | null;
+  status: number | null;
+  bytes: number | null;
+  at: number;
+}
+
+interface AssetRow {
+  id: string;
+  ref_id: string;
+  kind: string;
+  artifact_id: string;
+  version_id: string;
+  label: string | null;
+  caption: string | null;
+  source_url: string | null;
+  origin_path: string | null;
+  created_at: number;
+}
+
+function toFetchAttempt(row: FetchAttemptRow): RefFetchAttempt {
+  return {
+    id: row.id,
+    refId: row.ref_id,
+    source: row.source,
+    url: row.url,
+    outcome: row.outcome as FetchOutcome,
+    detail: row.detail,
+    status: row.status,
+    bytes: row.bytes,
+    at: row.at,
+  };
+}
+
+function toAsset(row: AssetRow): RefAsset {
+  return {
+    id: row.id,
+    refId: row.ref_id,
+    kind: row.kind as RefAssetKind,
+    artifactId: row.artifact_id,
+    versionId: row.version_id,
+    label: row.label,
+    caption: row.caption,
+    sourceUrl: row.source_url,
+    originPath: row.origin_path,
+    createdAt: row.created_at,
+  };
+}
+
 /** 派生列。写入路径唯一的计算入口。 */
 interface Derived {
   doi: string | null;
@@ -563,6 +656,121 @@ export class RefsRepo {
     }
 
     return [...found.values()].map((r) => this.#toRef(r));
+  }
+
+  /* ---------------- 全文抓取尝试（需求 12.6）---------------- */
+
+  /**
+   * 记一次抓取尝试。
+   *
+   * 成功与失败都记。只记失败会让「这份全文是从哪来的」不可查，而抓取来源决定了
+   * 这份内容能不能再分发（PMC 开放获取 vs 出版商页面）。
+   */
+  addFetchAttempt(input: {
+    refId: string;
+    source: string;
+    url?: string | null;
+    outcome: FetchOutcome;
+    detail?: string | null;
+    status?: number | null;
+    bytes?: number | null;
+  }): void {
+    this.#db
+      .prepare(
+        `INSERT INTO ref_fetch_attempts (ref_id, source, url, outcome, detail, status, bytes, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.refId,
+        input.source,
+        input.url ?? null,
+        input.outcome,
+        input.detail ?? null,
+        input.status ?? null,
+        input.bytes ?? null,
+        Date.now(),
+      );
+  }
+
+  fetchAttempts(refId: string, limit = 50): readonly RefFetchAttempt[] {
+    return (
+      this.#db
+        .prepare(
+          `SELECT * FROM ref_fetch_attempts WHERE ref_id = ?
+           ORDER BY at DESC, id DESC LIMIT ?`,
+        )
+        .all(refId, Math.max(1, Math.min(limit, 200))) as FetchAttemptRow[]
+    ).map(toFetchAttempt);
+  }
+
+  /** 最近一次尝试的时间。用于「不要在一分钟内反复重试」这类节流判断。 */
+  lastFetchAt(refId: string): number | null {
+    const row = this.#db
+      .prepare('SELECT MAX(at) AS at FROM ref_fetch_attempts WHERE ref_id = ?')
+      .get(refId) as { at: number | null } | undefined;
+    return row?.at ?? null;
+  }
+
+  /* ---------------- 随文资源（需求 12.3、12.4）---------------- */
+
+  addAsset(input: {
+    refId: string;
+    kind: RefAssetKind;
+    artifactId: string;
+    versionId: string;
+    label?: string | null;
+    caption?: string | null;
+    sourceUrl?: string | null;
+    originPath?: string | null;
+  }): RefAsset {
+    const id = `ra_${randomUUID()}`;
+    this.#db
+      .prepare(
+        `INSERT INTO ref_assets
+           (id, ref_id, kind, artifact_id, version_id, label, caption, source_url, origin_path, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (ref_id, kind, artifact_id) DO UPDATE SET
+           version_id = excluded.version_id,
+           label      = COALESCE(excluded.label, ref_assets.label),
+           caption    = COALESCE(excluded.caption, ref_assets.caption),
+           source_url = COALESCE(excluded.source_url, ref_assets.source_url),
+           origin_path = COALESCE(excluded.origin_path, ref_assets.origin_path)`,
+      )
+      .run(
+        id,
+        input.refId,
+        input.kind,
+        input.artifactId,
+        input.versionId,
+        input.label ?? null,
+        input.caption ?? null,
+        input.sourceUrl ?? null,
+        input.originPath ?? null,
+        Date.now(),
+      );
+
+    // 冲突时插入的 id 没用上，按唯一键回读
+    const row = this.#db
+      .prepare('SELECT * FROM ref_assets WHERE ref_id = ? AND kind = ? AND artifact_id = ?')
+      .get(input.refId, input.kind, input.artifactId) as AssetRow | undefined;
+    if (row === undefined) throw new Error('随文资源写入后读取失败');
+    return toAsset(row);
+  }
+
+  assets(refId: string, kind?: RefAssetKind): readonly RefAsset[] {
+    const rows =
+      kind === undefined
+        ? (this.#db
+            .prepare('SELECT * FROM ref_assets WHERE ref_id = ? ORDER BY kind, created_at')
+            .all(refId) as AssetRow[])
+        : (this.#db
+            .prepare('SELECT * FROM ref_assets WHERE ref_id = ? AND kind = ? ORDER BY created_at')
+            .all(refId, kind) as AssetRow[]);
+    return rows.map(toAsset);
+  }
+
+  deleteAssets(refId: string): number {
+    return this.#db.prepare('DELETE FROM ref_assets WHERE ref_id = ?').run(refId).changes;
   }
 
   /** 库概览。UI 的文献页与工具输出都要它。 */

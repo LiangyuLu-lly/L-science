@@ -832,6 +832,66 @@ try {
     String(byId('rf5').error?.code ?? '?'),
   );
 
+  // 全文抓取：同样不打真实上游。验证的是「不存在的文献报 not_found」与
+  // 「空内容的手工绑定被拒」这两条不需要网络的路径。
+  send(req('rf6', { method: 'ref.assets', projectId: createdProject.id, refId: 'rf_missing' }));
+  await waitFor(() => byId('rf6') !== undefined, 8000, 'ref.assets 不存在');
+  check(
+    byId('rf6').ok === false && byId('rf6').error?.code === 'not_found',
+    'ref.assets not_found  ',
+    String(byId('rf6').error?.code ?? '?'),
+  );
+
+  send(
+    req('rf7', {
+      method: 'ref.attachFulltext',
+      projectId: createdProject.id,
+      refId: 'rf_missing',
+      fileName: 'x.pdf',
+      contentBase64: Buffer.from('%PDF-1.7 fake').toString('base64'),
+    }),
+  );
+  await waitFor(() => byId('rf7') !== undefined, 8000, 'ref.attachFulltext 不存在');
+  check(
+    byId('rf7').ok === false && String(byId('rf7').error?.message ?? '').includes('文献不存在'),
+    '绑定到不存在的文献被拒',
+    String(byId('rf7').error?.message ?? '').slice(0, 40),
+  );
+
+  // base64 解出空内容通常意味着传输被截断。静默接受会存下一个 0 字节的「全文」
+  send(
+    req('rf8', {
+      method: 'ref.attachFulltext',
+      projectId: createdProject.id,
+      refId: 'rf_missing',
+      fileName: 'x.pdf',
+      contentBase64: '=',
+    }),
+  );
+  await waitFor(() => byId('rf8') !== undefined, 8000, 'ref.attachFulltext 空内容');
+  check(
+    byId('rf8').ok === false && String(byId('rf8').error?.message ?? '').includes('空内容'),
+    '空内容被拒            ',
+    String(byId('rf8').error?.message ?? '').slice(0, 40),
+  );
+
+  // 全文抓取对不存在的文献要报 not_found 而不是内部错误
+  send(
+    req('rf9', {
+      method: 'ref.fetchFulltext',
+      projectId: createdProject.id,
+      refId: 'rf_missing',
+    }),
+  );
+  await waitFor(() => byId('rf9') !== undefined, 20000, 'ref.fetchFulltext 不存在');
+  check(
+    byId('rf9').ok === true &&
+      byId('rf9').result?.ok === false &&
+      String(byId('rf9').result?.summary ?? '').includes('文献不存在'),
+    'fetchFulltext 不存在  ',
+    String(byId('rf9').result?.summary ?? '').slice(0, 40),
+  );
+
   // --- 14. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();

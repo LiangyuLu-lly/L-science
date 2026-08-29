@@ -47,6 +47,24 @@ export const ARCHIVE_LIMITS = {
   maxTotalBytes: 64 * 1024 * 1024,
 } as const;
 
+export type ArchiveLimits = {
+  -readonly [K in keyof typeof ARCHIVE_LIMITS]: number;
+};
+
+/**
+ * 上限可以按调用方覆盖。
+ *
+ * 默认值是按「用户上传一个技能包」定的。PMC 的开放获取包（任务 13.2）是另一种
+ * 量级：一篇带十几张高分辨率插图的论文，压缩包常在 30-80MB，单张 TIFF 就能超过
+ * 8MB。用默认上限去解它的结果是插图被逐个跳过，而需求 12.4 要的正是那些插图。
+ *
+ * 覆盖上限不等于放弃防护：三个上限仍然都在，只是数值由调用方按用途声明。
+ * 保持它们必须被显式给出，而不是在超限时自动放宽——自动放宽等于没有上限。
+ */
+function resolveLimits(override?: Partial<ArchiveLimits>): ArchiveLimits {
+  return { ...ARCHIVE_LIMITS, ...(override ?? {}) };
+}
+
 export class ArchiveError extends Error {
   constructor(message: string) {
     super(message);
@@ -94,7 +112,10 @@ function readOctal(buf: Buffer, offset: number, length: number): number {
   return Number.isNaN(value) ? 0 : value;
 }
 
-function readTar(buf: Buffer): { entries: ArchiveEntry[]; skipped: string[] } {
+function readTar(
+  buf: Buffer,
+  limits: ArchiveLimits,
+): { entries: ArchiveEntry[]; skipped: string[] } {
   const entries: ArchiveEntry[] = [];
   const skipped: string[] = [];
   let total = 0;
@@ -162,16 +183,16 @@ function readTar(buf: Buffer): { entries: ArchiveEntry[]; skipped: string[] } {
       skipped.push(`${name}（路径越界或非法）`);
       continue;
     }
-    if (size > ARCHIVE_LIMITS.maxEntryBytes) {
+    if (size > limits.maxEntryBytes) {
       skipped.push(`${path}（${String(Math.round(size / 1024))} KB，超过单条目上限）`);
       continue;
     }
     total += size;
-    if (total > ARCHIVE_LIMITS.maxTotalBytes) {
+    if (total > limits.maxTotalBytes) {
       throw new ArchiveError('归档解压后超过总大小上限，已中止');
     }
-    if (entries.length >= ARCHIVE_LIMITS.maxEntries) {
-      throw new ArchiveError(`归档条目数超过上限 ${String(ARCHIVE_LIMITS.maxEntries)}，已中止`);
+    if (entries.length >= limits.maxEntries) {
+      throw new ArchiveError(`归档条目数超过上限 ${String(limits.maxEntries)}，已中止`);
     }
 
     entries.push({ path, data: buf.subarray(dataStart, dataEnd) });
@@ -231,7 +252,10 @@ function readZip64Extra(
   return {};
 }
 
-function readZip(buf: Buffer): { entries: ArchiveEntry[]; skipped: string[] } {
+function readZip(
+  buf: Buffer,
+  limits: ArchiveLimits,
+): { entries: ArchiveEntry[]; skipped: string[] } {
   const eocd = findEocd(buf);
   if (eocd === -1) throw new ArchiveError('不是合法的 zip：找不到中央目录结束记录');
 
@@ -294,12 +318,12 @@ function readZip(buf: Buffer): { entries: ArchiveEntry[]; skipped: string[] } {
       skipped.push(`${name}（路径越界或非法）`);
       continue;
     }
-    if (uncompressed > ARCHIVE_LIMITS.maxEntryBytes) {
+    if (uncompressed > limits.maxEntryBytes) {
       skipped.push(`${path}（${String(Math.round(uncompressed / 1024))} KB，超过单条目上限）`);
       continue;
     }
-    if (entries.length >= ARCHIVE_LIMITS.maxEntries) {
-      throw new ArchiveError(`归档条目数超过上限 ${String(ARCHIVE_LIMITS.maxEntries)}，已中止`);
+    if (entries.length >= limits.maxEntries) {
+      throw new ArchiveError(`归档条目数超过上限 ${String(limits.maxEntries)}，已中止`);
     }
 
     /*
@@ -324,8 +348,7 @@ function readZip(buf: Buffer): { entries: ArchiveEntry[]; skipped: string[] } {
     let data: Buffer;
     try {
       if (method === 0) data = Buffer.from(raw);
-      else if (method === 8)
-        data = inflateRawSync(raw, { maxOutputLength: ARCHIVE_LIMITS.maxEntryBytes });
+      else if (method === 8) data = inflateRawSync(raw, { maxOutputLength: limits.maxEntryBytes });
       else {
         skipped.push(`${path}（不支持的压缩方式 ${String(method)}）`);
         continue;
@@ -336,7 +359,7 @@ function readZip(buf: Buffer): { entries: ArchiveEntry[]; skipped: string[] } {
     }
 
     total += data.byteLength;
-    if (total > ARCHIVE_LIMITS.maxTotalBytes) {
+    if (total > limits.maxTotalBytes) {
       throw new ArchiveError('归档解压后超过总大小上限，已中止');
     }
 
@@ -350,12 +373,21 @@ function readZip(buf: Buffer): { entries: ArchiveEntry[]; skipped: string[] } {
  * 入口
  * ------------------------------------------------------------------ */
 
-/** 按内容嗅探格式。不看扩展名——上传过来的文件名不可信。 */
-export function readArchive(data: Buffer): ArchiveResult {
-  if (data.byteLength > ARCHIVE_LIMITS.maxArchiveBytes) {
+/**
+ * 按内容嗅探格式。不看扩展名——上传过来的文件名不可信。
+ *
+ * `options.limits` 只覆盖给出的那几项，其余保持默认。见 `resolveLimits`。
+ */
+export function readArchive(
+  data: Buffer,
+  options: { limits?: Partial<ArchiveLimits> } = {},
+): ArchiveResult {
+  const limits = resolveLimits(options.limits);
+
+  if (data.byteLength > limits.maxArchiveBytes) {
     throw new ArchiveError(
       `归档有 ${String(Math.round(data.byteLength / 1024 / 1024))} MB，超过上限 ` +
-        `${String(ARCHIVE_LIMITS.maxArchiveBytes / 1024 / 1024)} MB`,
+        `${String(Math.round(limits.maxArchiveBytes / 1024 / 1024))} MB`,
     );
   }
   if (data.byteLength < 4) throw new ArchiveError('文件太小，不是有效的归档');
@@ -364,23 +396,23 @@ export function readArchive(data: Buffer): ArchiveResult {
   if (data[0] === 0x1f && data[1] === 0x8b) {
     let plain: Buffer;
     try {
-      plain = gunzipSync(data, { maxOutputLength: ARCHIVE_LIMITS.maxTotalBytes });
+      plain = gunzipSync(data, { maxOutputLength: limits.maxTotalBytes });
     } catch (err) {
       throw new ArchiveError(`gzip 解压失败：${err instanceof Error ? err.message : String(err)}`);
     }
-    const { entries, skipped } = readTar(plain);
+    const { entries, skipped } = readTar(plain, limits);
     return { format: 'tar.gz', entries, skipped };
   }
 
   // zip：本地文件头签名，或空归档/分卷的其他签名
   if (data.readUInt32LE(0) === LOCAL_SIG || data.readUInt32LE(0) === EOCD_SIG) {
-    const { entries, skipped } = readZip(data);
+    const { entries, skipped } = readZip(data, limits);
     return { format: 'zip', entries, skipped };
   }
 
   // 裸 tar：第 257 字节起是 `ustar`
   if (data.byteLength >= 512 && data.subarray(257, 262).toString('ascii') === 'ustar') {
-    const { entries, skipped } = readTar(data);
+    const { entries, skipped } = readTar(data, limits);
     return { format: 'tar', entries, skipped };
   }
 
