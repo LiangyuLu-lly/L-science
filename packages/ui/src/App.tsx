@@ -408,6 +408,7 @@ export function App(): React.JSX.Element {
    * 记得改回来，忘了会在后续几十次廉价调用上一直付高价。
    */
   const [routingOverride, setRoutingOverride] = useState<RoutingOverride>({});
+  const mainRef = useRef<HTMLElement>(null);
 
   const turn = useTurn(conversationId);
   // 连接状态放在头部而不是只在「工具与环境」页里。后端挂掉时对话会静默停止
@@ -475,6 +476,18 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="app">
+      {/*
+        跳到主内容（需求 20.5.2）。
+        
+        会话列表会长到几十项，而它在 Tab 顺序上排在主内容之前。没有这个入口时，用键盘的
+        用户每次想回到正文都要按几十次 Tab——那不是「不方便」，是让键盘操作在实际使用中
+        不成立。用按钮而不是 `href="#main"`：后者会改 URL 的 hash，在 file:// 加载的
+        渲染层里没有意义，且会在 Electron 里留下一段谁都不需要的历史记录。
+      */}
+      <button type="button" className="skip-to-main" onClick={() => mainRef.current?.focus()}>
+        跳到主内容
+      </button>
+
       <header className="app__header">
         <span className="app__brand">L-science</span>
         <span className="app__tag">本地优先 AI 科研工作台</span>
@@ -563,7 +576,8 @@ export function App(): React.JSX.Element {
           )}
         </nav>
 
-        <main className="app__main">
+        {/* tabIndex={-1} 让它可以成为编程焦点目标，但不进 Tab 顺序 */}
+        <main className="app__main" ref={mainRef} tabIndex={-1}>
           {/* 审批与提问置顶：它们阻塞流程，埋在下面用户看不到 */}
           {turn.approvals.map((approval) => (
             <ApprovalCard

@@ -17,7 +17,7 @@
  *    没有任何报错。要改就另存为用户技能，界面直接给这个动作。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import {
   deleteSkill,
@@ -373,6 +373,15 @@ function ImportPanel({
   const [overwrite, setOverwrite] = useState(false);
   const [credentials, setCredentials] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  /*
+   * 三个导入入口各自的输入框都要有可编程访问的名称（需求 20.5.2）。
+   *
+   * 原先旁边那行文字是 `<span>`：视觉上是标签，程序上不是。屏幕阅读器把焦点移到这里
+   * 只会读「编辑框」，而这一屏上有三个并列的输入框，读不出名字等于分不清哪个是哪个。
+   */
+  const archiveId = useId();
+  const directoryId = useId();
+  const specId = useId();
 
   useEffect(() => {
     void listCredentials()
@@ -420,8 +429,11 @@ function ImportPanel({
       </label>
 
       <div className="skillimport__row">
-        <span className="skillimport__label">压缩包</span>
+        <label className="skillimport__label" htmlFor={archiveId}>
+          压缩包
+        </label>
         <input
+          id={archiveId}
           ref={fileRef}
           type="file"
           accept=".zip,.tar,.tar.gz,.tgz"
@@ -439,8 +451,11 @@ function ImportPanel({
       </div>
 
       <div className="skillimport__row">
-        <span className="skillimport__label">本机目录</span>
+        <label className="skillimport__label" htmlFor={directoryId}>
+          本机目录
+        </label>
         <input
+          id={directoryId}
           type="text"
           value={directory}
           placeholder="D:\my-skills"
@@ -458,8 +473,11 @@ function ImportPanel({
       </div>
 
       <div className="skillimport__row">
-        <span className="skillimport__label">GitHub</span>
+        <label className="skillimport__label" htmlFor={specId}>
+          GitHub
+        </label>
         <input
+          id={specId}
           type="text"
           value={spec}
           placeholder="owner/repo、owner/repo@分支，或直接粘贴仓库网址"

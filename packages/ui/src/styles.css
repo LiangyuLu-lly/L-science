@@ -1,16 +1,46 @@
 :root {
   --bg: #111318;
   --bg-raised: #181b22;
+  /* 装饰性分隔线。纯装饰不受对比度要求约束，因此可以压得很低 */
   --border: #262b36;
+  /*
+   * 交互控件的边框（需求 20.5.3）。
+   *
+   * 与 `--border` 分开，因为两者受的约束不同。WCAG 1.4.11 要求「识别界面控件所必需
+   * 的视觉信息」达到 3:1，而按钮和输入框的边界正是这类信息——它们没有其它可辨识的
+   * 视觉线索。`--border` 对 `--bg` 只有 1.31:1，用它画输入框等于让低视力用户看不出
+   * 哪里可以输入。分隔线不在这条要求里，因此不必跟着变亮（跟着变亮会让界面全是格子）。
+   *
+   * 取值对 `--bg` 3.63:1、对 `--bg-raised` 3.36:1，两个背景都过线。
+   */
+  --border-control: #666e7e;
   --fg: #e6e8ee;
   --fg-dim: #9aa2b1;
   --accent: #6aa9ff;
 
   color-scheme: dark;
+  /*
+   * 中英混排（需求 20.5.1）。
+   *
+   * 显式列出 CJK 字体，不靠浏览器兜底。'Segoe UI' 没有汉字字形，缺了这几项时汉字由
+   * 浏览器的默认后备字体渲染，而那个后备在不同机器上不一样——中文界面里最常见的表现
+   * 是汉字与拉丁字母的字重、基线和字高对不上，一行「使用 GPT-5 生成」看起来像两种排版
+   * 拼在一起。学术内容里中英混排是常态而不是例外，因此这条不能靠运气。
+   *
+   * 顺序是先拉丁再 CJK：字体后备按字符逐个查找，拉丁字体在前保证英文用它渲染，
+   * 汉字自然落到后面的 CJK 字体。反过来会让英文也用 CJK 字体里的拉丁字形，那套字形
+   * 通常是为等宽排版设计的，混在正文里偏宽。
+   */
   font-family:
     'Segoe UI',
     system-ui,
     -apple-system,
+    'Microsoft YaHei UI',
+    'Microsoft YaHei',
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Noto Sans CJK SC',
+    'Source Han Sans SC',
     sans-serif;
   font-size: 14px;
   line-height: 1.6;
@@ -18,6 +48,69 @@
 
 * {
   box-sizing: border-box;
+}
+
+/*
+ * 交互控件改用 `--border-control`（需求 20.5.3）。
+ *
+ * 做法是**在控件上重定义变量**，而不是去改二十来条规则里的 `var(--border)`。理由是
+ * 后者要求每加一个控件样式都记得用对那个变量，而记错不会有任何信号；这里改的是变量
+ * 在控件内部的取值，因此所有已有和将来的 `var(--border)` 自动落到正确的一侧。
+ *
+ * 这样也不必和 `border` 简写抢优先级：自定义属性只跟其它 `--border` 声明竞争，而元素
+ * 自身的声明总是赢过从 `:root` 继承来的那份，与特异性无关。
+ */
+button,
+.btn,
+input,
+select,
+textarea {
+  --border: var(--border-control);
+}
+
+/*
+ * 全局焦点环（需求 20.5.2）。
+ *
+ * 各组件此前各写一条 `:focus-visible`，覆盖到的只是一部分控件，其余靠浏览器默认样式。
+ * 那能用，但它有一个安静的失效方式：任何一处 `outline: none`（为了改按钮外观时最常见
+ * 的写法）都会让那个控件的焦点位置彻底看不见，而这种回退在视觉上完全无感——用鼠标的人
+ * 永远不会发现。放一条兜底规则之后，新加的控件默认就有焦点指示。
+ *
+ * 用 `:focus-visible` 而不是 `:focus`：后者会让鼠标点击也画出焦点环，那个视觉噪音会让
+ * 人想去关掉它，而关掉的方式正是上面那条 `outline: none`。
+ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/*
+ * Windows 高对比度模式（需求 20.5.3）。
+ *
+ * `forced-colors: active` 下系统接管全部颜色，自定义的 background/border 被丢弃。
+ * 平台的按钮与输入框只靠边框区分，因此必须显式改用系统颜色关键字，否则在高对比度
+ * 主题下它们会变成一片没有边界的文本。焦点环同理——`Highlight` 是系统的强调色。
+ */
+@media (forced-colors: active) {
+  .btn,
+  .composer__input,
+  input,
+  select,
+  textarea {
+    border: 1px solid ButtonBorder;
+  }
+
+  :focus-visible {
+    outline: 2px solid Highlight;
+  }
+
+  /* 用颜色表达状态的地方在高对比度下会全部同色，靠边框把差异留住 */
+  .badge,
+  .chip,
+  [class*='__status'],
+  [class*='badge--'] {
+    border: 1px solid CanvasText;
+  }
 }
 
 body {
@@ -30,6 +123,42 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+}
+
+/*
+ * 跳到主内容（需求 20.5.2）。
+ *
+ * 平时不占版面，得到焦点后浮出来。不用 `display: none`——那会让它连焦点都拿不到，
+ * 于是这个入口对唯一需要它的人不存在。
+ */
+.skip-to-main {
+  position: absolute;
+  left: 8px;
+  top: -60px;
+  z-index: 100;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg-raised);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 6px 12px;
+  transition: top 120ms ease-out;
+}
+
+.skip-to-main:focus-visible {
+  top: 8px;
+}
+
+/* 主内容作为编程焦点目标时不画焦点环：它不是控件，画出来会像一个巨大的输入框 */
+.app__main:focus {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-to-main {
+    transition: none;
+  }
 }
 
 .app__header {
@@ -108,6 +237,14 @@ code {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
+  /*
+   * 长标识符必须能断行（需求 20.5.1）。
+   *
+   * 这里放的是 DOI、文件路径、模型 id 这类没有空格的长串。不断行的话它们会把容器撑宽，
+   * 在窄侧栏里表现为横向滚动条或干脆被裁掉——而被裁掉的那一截往往正是区分两个 DOI
+   * 的部分。`anywhere` 而不是 `break-word`：后者只在没有其它断点时才生效。
+   */
+  overflow-wrap: anywhere;
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 12px;
 }
@@ -2200,8 +2337,14 @@ code {
 }
 
 /* 缺项与 0 分是两件事，压暗以示区别 */
+/*
+ * 「不适用」的单元格。
+ *
+ * 同样从 #4a505e（2.13:1）提到 `--fg-dim`（6.71:1）。这里放的是「缺项与 0 分是两件事」
+ * 这个区分——本地偏好在云端模型上是不适用，不是拿了 0 分。看不清等于这个区分不存在。
+ */
 .matrix__absent {
-  color: #4a505e;
+  color: var(--fg-dim);
 }
 
 .matrix__info {
@@ -2379,8 +2522,18 @@ code {
 }
 
 /* 归零的维度要看得出来：那是「这个任务完全不看它」的显式表达 */
+/*
+ * 权重为 0 的行压成次要色（需求 20.5.3）。
+ *
+ * 原先用的是 #4a505e，对 `--bg-raised` 只有 2.13:1。这一行的滑块**仍然可以拖回去**，
+ * 因此它不属于「禁用控件可豁免对比度」那一类——用户要看清标签才知道自己在把哪一项调回来。
+ * `verify:ui` 的逐视图实测抓到了这处：颜色写在这条规则里而背景来自祖先，静态检查看不到
+ * 这个配对。
+ *
+ * 删除线本身已经表达了「这项不看」，所以调亮颜色不会丢掉任何信息——状态不靠颜色单独承载。
+ */
 .weights__row--zero .weights__label {
-  color: #4a505e;
+  color: var(--fg-dim);
   text-decoration: line-through;
 }
 

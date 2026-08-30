@@ -22,7 +22,7 @@
  * 它同时也是唯一能表达任意结构改动的形式。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 
 import {
   decidePlan,
@@ -158,6 +158,7 @@ function PlanEditor({
   const [issues, setIssues] = useState<PlanIssue[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const editorId = useId();
 
   const save = async (): Promise<void> => {
     setSaving(true);
@@ -186,7 +187,12 @@ function PlanEditor({
   return (
     <div className="planeditor">
       <div className="planeditor__head">
-        <span>编辑计划本体</span>
+        {/*
+          用 label 而不是 span（需求 20.5.2）。视觉上一样，区别在于屏幕阅读器把焦点
+          移到编辑框时能读出「编辑计划本体」——挂在 span 上的话它只会读「编辑框」，
+          而这个页面上有好几个多行输入。
+        */}
+        <label htmlFor={editorId}>编辑计划本体</label>
         <button type="button" className="btn btn--ghost btn--small" onClick={onClose}>
           取消
         </button>
@@ -196,6 +202,7 @@ function PlanEditor({
         替换才表达得出来。`phases` 可以省略，后端会按步骤里出现的阶段号补全。
       </p>
       <textarea
+        id={editorId}
         className="planeditor__code"
         value={text}
         rows={20}

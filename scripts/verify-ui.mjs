@@ -148,11 +148,246 @@ check(
 const focusables = await evaluate(
   `[...document.querySelectorAll('button,a[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')].length`,
 );
-const interactive = await evaluate(`document.querySelectorAll('.app__nav li').length`);
-// 当前导航项还是占位文本，尚未成为可交互控件；这条只报告不判失败。
-process.stdout.write(
-  `INFO  可聚焦元素          ${String(focusables.value)} 个（导航占位项 ${String(interactive.value)} 个，成为真实导航后须可键盘操作）\n`,
+check(Number(focusables.value) > 0, '存在可聚焦元素      ', `${String(focusables.value)} 个`);
+
+/* --- 7. 无障碍名称（需求 20.5.2）---------------------------------------
+ *
+ * 静态检查只能看到源码里写了什么，看不到浏览器最终算出的无障碍名称——那是 label 关联、
+ * aria-*、内容文本、placeholder 一起参与的结果。这一段问的是浏览器自己：拿无障碍树，
+ * 看有没有哪个可聚焦控件的名字是空的。名字为空时屏幕阅读器只会念出角色（「按钮」），
+ * 而一屏上有六十多个按钮。
+ */
+await send('DOM.enable');
+await send('Accessibility.enable');
+const { nodes: axNodes } = await send('Accessibility.getFullAXTree');
+
+const FOCUSABLE_ROLES = new Set([
+  'button',
+  'link',
+  'textbox',
+  'combobox',
+  'listbox',
+  'checkbox',
+  'radio',
+  'switch',
+  'slider',
+  'spinbutton',
+  'searchbox',
+  'menuitem',
+  'tab',
+]);
+
+/** 当前视图里没有无障碍名称的控件。 */
+const namelessControls = async () => {
+  const { nodes } = await send('Accessibility.getFullAXTree');
+  const nameless = [];
+  let counted = 0;
+  for (const node of nodes) {
+    if (node.ignored === true) continue;
+    const role = node.role?.value;
+    if (!FOCUSABLE_ROLES.has(role)) continue;
+    counted += 1;
+    const name = (node.name?.value ?? '').trim();
+    const disabled = (node.properties ?? []).some(
+      (p) => p.name === 'disabled' && p.value?.value === true,
+    );
+    if (name === '' && !disabled) nameless.push(role);
+  }
+  return { nameless, counted };
+};
+
+const firstView = await namelessControls();
+check(
+  firstView.nameless.length === 0,
+  '控件都有无障碍名称  ',
+  firstView.nameless.length === 0
+    ? `会话视图 ${String(firstView.counted)} 个控件`
+    : `无名控件：${firstView.nameless.join('、')}`,
 );
+void axNodes;
+
+/* --- 8. Tab 顺序可达性（需求 20.5.2）----------------------------------- */
+const tabTo = async () => {
+  // rawKeyDown + char + keyUp 是 CDP 里模拟真实按键的完整序列；只发 keyDown
+  // 不会触发浏览器的默认焦点移动
+  await send('Input.dispatchKeyEvent', {
+    type: 'rawKeyDown',
+    windowsVirtualKeyCode: 9,
+    nativeVirtualKeyCode: 9,
+    key: 'Tab',
+    code: 'Tab',
+  });
+  await send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    windowsVirtualKeyCode: 9,
+    nativeVirtualKeyCode: 9,
+    key: 'Tab',
+    code: 'Tab',
+  });
+  const r = await evaluate(
+    `(() => { const el = document.activeElement; if (el === null) return 'null';
+       return [el.tagName, el.className || '', (el.textContent || '').trim().slice(0, 20)].join('|'); })()`,
+  );
+  return String(r.value);
+};
+
+// 把焦点收回文档本身，让 Tab 从头开始。document.body.focus() 在 body 没有 tabindex
+// 时是空操作，因此要 blur 当前那个元素
+await evaluate(
+  `(() => { const el = document.activeElement; if (el instanceof HTMLElement) el.blur(); return document.activeElement === document.body; })()`,
+);
+const tabOrder = [];
+for (let i = 0; i < 60; i += 1) {
+  const where = await tabTo();
+  tabOrder.push(where);
+  // 焦点回到起点说明走完一圈
+  if (i > 2 && where === tabOrder[0]) break;
+}
+
+/*
+ * 跳转入口必须排在主导航之前。
+ *
+ * 断言的是**相对次序**而不是「第一站」：这个页面可能已经有一个控件持有焦点（启动过程中
+ * 的一次点击就够了），那时 Tab 从中途开始并绕回来。相对次序在绕回时保持不变，而
+ * 「第一站」会随起点变化——一个会因为起点不同而红绿摇摆的检查等于没有检查。
+ */
+const skipAt = tabOrder.findIndex((t) => t.includes('skip-to-main'));
+const firstNavAt = tabOrder.findIndex((t) => t.includes('nav__item'));
+check(
+  skipAt !== -1 && firstNavAt !== -1 && skipAt < firstNavAt,
+  '跳转入口在导航之前  ',
+  `跳转第 ${String(skipAt + 1)} 站，导航第 ${String(firstNavAt + 1)} 站`,
+);
+// 主导航的每一项都必须能被 Tab 走到
+const navReached = tabOrder.filter((t) => t.includes('nav__item')).length;
+check(navReached >= 8, '主导航全部可 Tab 到 ', `走到 ${String(navReached)} 项`);
+// 焦点不能困在一处：连续两站相同说明卡住了
+const stuck = tabOrder.findIndex((t, i) => i > 0 && t === tabOrder[i - 1]);
+check(stuck === -1, '无焦点陷阱          ', stuck === -1 ? '' : `卡在 ${tabOrder[stuck]}`);
+
+/* --- 9. 实测对比度（需求 20.5.3）--------------------------------------
+ *
+ * 静态检查只能判定同一条规则里同时声明的前景/背景。真实页面上背景多半来自某个祖先，
+ * 而那要解析层叠才知道——这里直接问 getComputedStyle，拿的是浏览器算完的结果。
+ */
+const CONTRAST_PROBE = `(() => {
+  const lum = (rgb) => {
+    const f = (v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]);
+  };
+  const parse = (s) => {
+    const m = /rgba?\\(([^)]+)\\)/.exec(s);
+    if (m === null) return null;
+    const parts = m[1].split(',').map((x) => parseFloat(x));
+    return { rgb: [parts[0], parts[1], parts[2]], a: parts.length > 3 ? parts[3] : 1 };
+  };
+  // 有效背景：往上找第一个不透明的背景色
+  const bgOf = (el) => {
+    let node = el;
+    while (node !== null) {
+      const c = parse(getComputedStyle(node).backgroundColor);
+      if (c !== null && c.a > 0.99) return c.rgb;
+      node = node.parentElement;
+    }
+    return [17, 19, 24];
+  };
+  const bad = [];
+  let checked = 0;
+  for (const el of document.querySelectorAll('*')) {
+    // 只看直接含可见文本的元素
+    const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== '');
+    if (!own) continue;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none') continue;
+    if (parseFloat(style.opacity) < 0.9) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) continue;
+    const fg = parse(style.color);
+    if (fg === null || fg.a < 0.99) continue;
+    const bg = bgOf(el);
+    const la = lum(fg.rgb);
+    const lb = lum(bg);
+    const ratio = (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+    const size = parseFloat(style.fontSize);
+    const weight = parseInt(style.fontWeight, 10) || 400;
+    const need = size >= 24 || (size >= 18.66 && weight >= 700) ? 3 : 4.5;
+    checked += 1;
+    if (ratio < need) {
+      bad.push(
+        (el.className || el.tagName) + ' ' + ratio.toFixed(2) + '<' + need +
+          ' (' + style.color + ' on rgb(' + bg.join(',') + '), ' + size + 'px)',
+      );
+    }
+  }
+  return JSON.stringify({ checked, bad: bad.slice(0, 12), total: bad.length });
+})()`;
+
+const contrastResult = JSON.parse(String((await evaluate(CONTRAST_PROBE)).value));
+check(
+  contrastResult.total === 0,
+  '实测文字对比度达标  ',
+  contrastResult.total === 0
+    ? `会话视图 ${String(contrastResult.checked)} 个含文本元素`
+    : `${String(contrastResult.total)} 处不达标：${contrastResult.bad.join(' | ')}`,
+);
+
+/* --- 10. 逐个视图扫一遍（需求 20.5.2、20.5.3）--------------------------
+ *
+ * 上面两条只看了会话视图。八个视图各自有几十个控件，而只查默认视图恰好会漏掉最容易
+ * 出问题的那些——那三个没有标签的技能导入输入框就在「技能」视图里，任何只看首屏的
+ * 检查都发现不了它们。
+ *
+ * 切视图靠点主导航按钮：这与用户的操作路径一致，顺便验证了导航本身能用。
+ */
+const viewLabels = JSON.parse(
+  String(
+    (
+      await evaluate(
+        `JSON.stringify([...document.querySelectorAll('.nav__item')].map((b) => b.textContent.trim()))`,
+      )
+    ).value,
+  ),
+);
+
+const perView = [];
+for (let i = 0; i < viewLabels.length; i += 1) {
+  await evaluate(`[...document.querySelectorAll('.nav__item')][${String(i)}].click()`);
+  // 视图切换后要等它自己的首次拉取落地，否则查到的是空壳
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const names = await namelessControls();
+  const contrastOfView = JSON.parse(String((await evaluate(CONTRAST_PROBE)).value));
+  perView.push({
+    label: viewLabels[i],
+    controls: names.counted,
+    nameless: names.nameless,
+    texts: contrastOfView.checked,
+    bad: contrastOfView.bad,
+    badTotal: contrastOfView.total,
+  });
+}
+
+const namelessViews = perView.filter((v) => v.nameless.length > 0);
+check(
+  namelessViews.length === 0,
+  '各视图控件均有名称  ',
+  namelessViews.length === 0
+    ? perView.map((v) => `${v.label}:${String(v.controls)}`).join(' ')
+    : namelessViews.map((v) => `${v.label}(${v.nameless.join('、')})`).join(' | '),
+);
+
+const badViews = perView.filter((v) => v.badTotal > 0);
+check(
+  badViews.length === 0,
+  '各视图对比度达标    ',
+  badViews.length === 0
+    ? `共检查 ${String(perView.reduce((s, v) => s + v.texts, 0))} 个含文本元素`
+    : badViews.map((v) => `${v.label}: ${v.bad.join(' , ')}`).join(' | '),
+);
+
+// 切回会话，让截图与可见文本反映默认视图
+await evaluate(`[...document.querySelectorAll('.nav__item')][0].click()`);
+await new Promise((r) => setTimeout(r, 600));
 
 /* --- 输出可见文本与截图便于人工核对 ------------------------------------ */
 const text = await evaluate('document.body.innerText');
