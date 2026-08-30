@@ -19,6 +19,8 @@
 import { realpathSync, statSync } from 'node:fs';
 import { isAbsolute, normalize, resolve, sep } from 'node:path';
 
+import { platform } from '../platform/index.js';
+
 export type PathDenyReason =
   | 'not-absolute'
   | 'nul-byte'
@@ -103,7 +105,12 @@ export interface PathGuardOptions {
   readOnlyRoots?: readonly string[];
   /** 额外的受保护路径（例如平台自身的数据目录）。 */
   protectedPaths?: readonly string[];
-  /** 平台在非 Windows 上跑时区分大小写。 */
+  /**
+   * 路径比较是否区分大小写。省略时由平台适配层决定（需求 20.4.1）。
+   *
+   * 这一条错了的后果很具体：NTFS 不区分大小写，因此 `D:/Data` 与 `d:/data` 是同一个
+   * 目录，而按区分大小写比较会让保护路径检查放过一个已经被拒绝的路径。
+   */
   caseSensitive?: boolean;
 }
 
@@ -147,7 +154,7 @@ export class PathGuard {
   readonly #caseSensitive: boolean;
 
   constructor(opts: PathGuardOptions) {
-    this.#caseSensitive = opts.caseSensitive ?? process.platform !== 'win32';
+    this.#caseSensitive = opts.caseSensitive ?? platform().pathsCaseSensitive;
     // 根目录本身也要真实化：若 workspace 自己就在一个 junction 下，
     // 后续对 realpath 的比较会全部落空。
     this.#roots = opts.roots.map((r) => PathGuard.#realOrSelf(resolve(r)));

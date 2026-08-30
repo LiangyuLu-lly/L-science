@@ -14,6 +14,7 @@
 
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 
+import { platform } from '../platform/index.js';
 import { JobObject } from '../win32/index.js';
 
 const MEMORY_POLL_INTERVAL_MS = 3000;
@@ -54,46 +55,51 @@ export interface SupervisedResult {
  * 只 kill 直接子进程不够：PowerShell 或 python 拉起来的孙子进程会变成孤儿继续跑。
  */
 export async function killTree(pid: number): Promise<void> {
-  if (process.platform === 'win32') {
-    await new Promise<void>((resolve) => {
-      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {
-        // 进程可能已自行退出，taskkill 的失败无需处理
-        resolve();
-      });
+  const spec = platform().killTree(pid);
+
+  const ok = await new Promise<boolean>((resolve) => {
+    execFile(spec.command, [...spec.args], { windowsHide: true }, (err) => {
+      // 进程可能已自行退出，命令的失败无需处理——但要知道它失败了，好决定是否走兜底
+      resolve(err === null);
     });
-    return;
-  }
+  });
+  if (ok || spec.signalFallback === null) return;
+
+  /*
+   * 命令不可用时向进程组发信号（极简容器里可能没有 pkill）。
+   *
+   * 先试组再试单个：只杀 pid 会留下它拉起的子进程继续跑，而「退出不留孤儿」正是这个
+   * 函数存在的理由。
+   */
+  const { negatePid, signal } = spec.signalFallback;
   try {
-    process.kill(-pid, 'SIGKILL');
+    process.kill(negatePid ? -pid : pid, signal);
   } catch {
     try {
-      process.kill(pid, 'SIGKILL');
+      process.kill(pid, signal);
     } catch {
       // 已退出
     }
   }
 }
 
-/** 读取进程工作集（MB）。仅在 Job Object 不可用时作为兜底使用。 */
+/**
+ * 读取进程工作集（MB）。仅在 Job Object 不可用时作为兜底使用。
+ *
+ * 命令与解析函数由平台适配器一起给出——分开放会让改了输出格式而忘了改解析，
+ * 而那种错误的表现是内存限额静默失效。
+ */
 async function readMemoryMb(pid: number): Promise<number | null> {
-  if (process.platform !== 'win32') return null;
+  const probe = platform().memoryProbe(pid);
+  if (probe === null) return null;
+
   return new Promise((resolve) => {
     execFile(
-      'tasklist',
-      ['/FI', `PID eq ${String(pid)}`, '/FO', 'CSV', '/NH'],
+      probe.command,
+      [...probe.args],
       { windowsHide: true, timeout: 5000 },
       (err, stdout) => {
-        if (err !== null) {
-          resolve(null);
-          return;
-        }
-        const match = /"([\d,]+) K"\s*$/.exec(stdout.trim());
-        if (match === null) {
-          resolve(null);
-          return;
-        }
-        const kb = Number((match[1] ?? '').replace(/,/g, ''));
-        resolve(Number.isFinite(kb) ? Math.round(kb / 1024) : null);
+        resolve(err !== null ? null : probe.parse(stdout));
       },
     );
   });
@@ -146,8 +152,9 @@ export async function runSupervised(spec: SupervisedSpawn): Promise<SupervisedRe
     cwd: spec.cwd,
     env: spec.env === undefined ? process.env : { ...process.env, ...spec.env },
     windowsHide: true,
-    // POSIX 上建独立进程组才能整组终止；Windows 上由 Job Object 兜住
-    detached: process.platform !== 'win32',
+    // POSIX 上建独立进程组才能整组终止；Windows 上由 Job Object 兜住，
+    // 建组反而会让 taskkill /T 的父子关系记录失效
+    detached: platform().detachChildren,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 

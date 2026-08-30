@@ -5,21 +5,23 @@
  * 测试与多实例并行需要这个逃生口。
  */
 
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { platform } from './platform/index.js';
 
 export const APP_DIR_NAME = 'L-science';
 
+/**
+ * 数据目录。
+ *
+ * 默认位置由平台适配器给（需求 20.4.1）：Windows 是 `%LOCALAPPDATA%`，Linux 走 XDG，
+ * macOS 是 `~/Library/Application Support`。把三者混成一个 `~/.l-science` 能跑，但在
+ * macOS 上那个目录不会被 Time Machine 按应用数据处理，而用户以为它被备份了。
+ */
 export function dataDir(): string {
   const override = process.env['L_SCIENCE_DATA_DIR'];
   if (override !== undefined && override !== '') return override;
-
-  const localAppData = process.env['LOCALAPPDATA'];
-  if (localAppData !== undefined && localAppData !== '') {
-    return join(localAppData, APP_DIR_NAME);
-  }
-  // 非 Windows 或环境变量缺失时的回退，保持跨平台可测试性。
-  return join(homedir(), '.l-science');
+  return platform().defaultDataDir(APP_DIR_NAME);
 }
 
 export interface AppPaths {

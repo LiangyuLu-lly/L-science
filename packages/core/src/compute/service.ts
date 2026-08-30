@@ -37,7 +37,7 @@ import {
 } from '../repo/compute.js';
 
 import { ComputeGate, describeTarget, type GateDecision } from './gate.js';
-import { pingSsh, probeTarget, runLocalShell } from './probe.js';
+import { defaultLocalShell, pingSsh, probeTarget, runLocalShell } from './probe.js';
 import { classifyCommand, riskRank, RISK_LABEL, type RiskVerdict } from './risk.js';
 import {
   buildJobScript,
@@ -1274,7 +1274,7 @@ export class ComputeService {
     if (config.runVia === 'local') {
       const result = await runLocalShell({
         command,
-        shell: process.platform === 'win32' ? 'powershell' : 'bash',
+        shell: defaultLocalShell(),
         timeoutMs,
         ...(await this.#credentialEnv(config)),
       });
@@ -1414,11 +1414,21 @@ function schedulerOf(target: ComputeTargetRecord): SchedulerKind {
   return target.config.family === 'ssh' ? target.config.scheduler : 'none';
 }
 
+/** 本地目标的作业目录。 */
+const LOCAL_JOB_WORKDIR = '/tmp/lsci-jobs';
+
 function remoteWorkdirOf(target: ComputeTargetRecord): string {
   if (target.config.family === 'ssh') return target.config.remoteWorkdir;
-  // 本地目标把作业文件放进系统临时目录下的固定子目录：作业结束后用户可能还要看输出，
-  // 因此不用一次性的 mkdtemp
-  return process.platform === 'win32' ? '/tmp/lsci-jobs' : '/tmp/lsci-jobs';
+  /*
+   * 本地目标把作业文件放进一个固定子目录：作业结束后用户可能还要看输出，因此不用
+   * 一次性的 mkdtemp。
+   *
+   * 在 Windows 上也用 POSIX 形式的 `/tmp/...` 而不是 `%TEMP%` 下的真实路径，这是
+   * 刻意的：这个字符串会被插进作业脚本，而本地作业既可能走 PowerShell 也可能走
+   * WSL 里的 bash。`/tmp/lsci-jobs` 在 PowerShell 里解析成当前盘的 `\tmp\lsci-jobs`，
+   * 在 bash 里就是它本身；换成带反斜杠的绝对路径则会在 bash 分支里被当成转义字符。
+   */
+  return LOCAL_JOB_WORKDIR;
 }
 
 /** 填模板。未提供的占位符替换成空串而不是留着——留着会把 `{{gpus}}` 原样传给 CLI。 */

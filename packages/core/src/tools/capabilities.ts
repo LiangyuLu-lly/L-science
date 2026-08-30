@@ -10,6 +10,7 @@ import { basename } from 'node:path';
 
 import { detectKernels } from '@l-science/kernel';
 
+import { platform } from '../platform/index.js';
 import { isolationStrength, type SandboxBackend } from '../sandbox/backend.js';
 
 /** 能力标识。用字符串而不是枚举，便于第三方工具声明自己的依赖。 */
@@ -61,8 +62,12 @@ export function detectCapabilities(backend?: SandboxBackend): CapabilitySnapshot
   if (kernels.r !== null) available.add(CAPABILITY.kernelR);
 
   // Windows 上 PowerShell 总是存在。真不存在时 bash 工具也没法用，
-  // 因此不做额外探测——省下的那次进程启动在启动路径上是可感知的
-  if (process.platform === 'win32') available.add(CAPABILITY.shellPowershell);
+  // 因此不做额外探测——省下的那次进程启动在启动路径上是可感知的。
+  //
+  // 问适配器而不是判平台（需求 20.4.1）：POSIX 适配器如实报不支持 powershell，
+  // 因为平台的 PowerShell 代码路径依赖 Windows 专属的编码前导与路径形式，
+  // 哪怕机器上装了 PowerShell Core 也一样
+  if (platform().supportsShell('powershell')) available.add(CAPABILITY.shellPowershell);
 
   if (backend !== undefined && backend.id === 'wsl2') {
     available.add(CAPABILITY.shellBash);

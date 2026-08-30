@@ -16,6 +16,7 @@
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 
+import { platform } from '../platform/index.js';
 import { runSupervised } from '../sandbox/supervisor.js';
 
 import { parseSchedulerProbe, schedulerProbeCommand } from './schedulers.js';
@@ -149,15 +150,18 @@ async function probeLocal(config: LocalTargetConfig): Promise<ProbeReport> {
    * sm_90 的 CUDA 11.8）会在第一次 kernel 启动时报「no kernel image is available」，
    * 而那条错误信息不会提到版本不匹配。把 sm_ 版本摆出来，用户至少有的可查。
    */
-  const shellOk = config.shell === 'powershell' ? process.platform === 'win32' : true;
+  const adapter = platform();
+  const shellOk = adapter.supportsShell(config.shell === 'bash' ? 'posix' : 'powershell');
   checks.push({
     name: 'shell',
     ok: shellOk,
-    detail: shellOk ? `用 ${config.shell}` : `本机是 ${process.platform}，用不了 ${config.shell}`,
+    detail: shellOk
+      ? `用 ${config.shell}`
+      : `本机是 ${adapter.label}，用不了 ${config.shell}（可用的是 ${adapter.defaultShell}）`,
   });
 
   const facts: Record<string, string> = {
-    platform: process.platform,
+    platform: adapter.id,
     maxConcurrent: String(config.maxConcurrent),
   };
   if (config.visibleDevices !== null) facts['visibleDevices'] = config.visibleDevices;
@@ -444,8 +448,8 @@ async function probeByoc(config: ByocTargetConfig): Promise<ProbeReport> {
   const firstWord = config.submitTemplate.trim().split(/\s+/u)[0] ?? '';
   if (config.runVia === 'local' && firstWord !== '' && !firstWord.includes('{{')) {
     const found = await new Promise<boolean>((resolve) => {
-      const probe = process.platform === 'win32' ? 'where' : 'which';
-      execFile(probe, [firstWord], { windowsHide: true, timeout: 8000 }, (err) => {
+      const probe = platform().whichCommand(firstWord);
+      execFile(probe.command, [...probe.args], { windowsHide: true, timeout: 8000 }, (err) => {
         resolve(err === null);
       });
     });
@@ -540,7 +544,7 @@ export async function suggestLocalTarget(): Promise<{
       // 默认 1：两个并行的训练作业通常是双双 OOM 而不是各跑一半速度
       maxConcurrent: 1,
       visibleDevices: null,
-      shell: process.platform === 'win32' ? 'powershell' : 'bash',
+      shell: platform().defaultShell === 'powershell' ? 'powershell' : 'bash',
     },
   };
 }
@@ -558,9 +562,33 @@ export async function pingSsh(config: SshTargetConfig): Promise<{ ok: boolean; d
   };
 }
 
-/** 本机 shell 执行（本地目标与 BYOC 的 `runVia: 'local'` 用它）。 */
+/**
+ * 本机默认用哪种 shell，用 `runLocalShell` 认的取值表示。
+ *
+ * 存在的理由是**只做一次映射**。在这之前，「判一下是不是 Windows，是就 powershell
+ * 否则 bash」这句三元在 envs 与 compute 里出现了五遍；五遍都对的时候它只是重复，而
+ * 其中一遍写反的时候没有任何编译信号——那一处会在非 Windows 上去起 powershell。
+ */
+export function defaultLocalShell(): 'powershell' | 'bash' {
+  return platform().defaultShell === 'powershell' ? 'powershell' : 'bash';
+}
+
+/**
+ * 本机 shell 执行（本地目标与 BYOC 的 `runVia: 'local'` 用它）。
+ *
+ * 命令构造走平台适配层（需求 20.4.1）：PowerShell 的 `-EncodedCommand` 与输出编码
+ * 前导都在那一层。以前这段是内联的，而它与 `sandbox/native.ts`、`envs/service.ts`
+ * 各有一份——三份里有两份漏了完整的编码前导，表现是中文输出乱码。
+ */
 export async function runLocalShell(input: {
   command: string;
+  /**
+   * shell 种类沿用 `'bash'` 而不是平台层的 `'posix'`。
+   *
+   * 这个取值出现在**已落库的** `LocalTargetConfig.shell` 里（compute_targets 的
+   * config_json）。改名意味着要给一条迁移只为了换一个字符串，而映射在边界上做一次
+   * 就够了。
+   */
   shell: 'powershell' | 'bash';
   cwd?: string;
   timeoutMs?: number;
@@ -574,28 +602,28 @@ export async function runLocalShell(input: {
   timedOut: boolean;
   durationMs: number;
 }> {
-  const { command, args } =
-    input.shell === 'bash'
-      ? process.platform === 'win32'
-        ? { command: 'wsl.exe', args: ['-e', 'bash', '-lc', input.command] }
-        : { command: '/bin/sh', args: ['-lc', input.command] }
-      : {
-          command: 'powershell.exe',
-          args: [
-            '-NoProfile',
-            '-NonInteractive',
-            // 与 NativeBackend 同一个理由：命令文本经多层传参时引号会被剥掉
-            '-EncodedCommand',
-            Buffer.from(
-              `$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8\n${input.command}`,
-              'utf16le',
-            ).toString('base64'),
-          ],
-        };
+  const adapter = platform();
+  const invocation = adapter.shellInvocation({
+    family: input.shell === 'bash' ? 'posix' : 'powershell',
+    command: input.command,
+  });
+  if (invocation === null) {
+    return {
+      ok: false,
+      exitCode: null,
+      stdout: '',
+      stderr:
+        `当前平台（${adapter.label}）起不了 ${input.shell}。` +
+        `可用的是 ${adapter.defaultShell}。`,
+      truncated: false,
+      timedOut: false,
+      durationMs: 0,
+    };
+  }
 
   const result = await runSupervised({
-    command,
-    args,
+    command: invocation.command,
+    args: invocation.args,
     cwd: input.cwd ?? tmpdir(),
     ...(input.env === undefined ? {} : { env: input.env }),
     timeoutMs: input.timeoutMs ?? 120_000,

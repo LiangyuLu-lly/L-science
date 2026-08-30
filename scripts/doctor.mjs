@@ -225,6 +225,40 @@ async function probeWin32Api() {
   }
 }
 
+/**
+ * 平台缺口（需求 20.4.1）。
+ *
+ * 同样是「问被测代码本人」：缺口清单由平台适配器自己声明，doctor 只负责打印。
+ * 在这里重写一份的话，两份迟早分叉——而分叉的表现是自检说某项能力可用而运行时
+ * 走了降级分支。
+ */
+async function probePlatformLayer() {
+  const entry = resolve(repoRoot, 'packages', 'core', 'dist', 'index.js');
+  if (!existsSync(entry)) return { available: false, reason: '控制平面尚未构建' };
+  try {
+    const core = await import(pathToFileURL(entry).href);
+    const adapter = core.platform();
+    return {
+      available: true,
+      id: adapter.id,
+      label: adapter.label,
+      unknown: core.unknownPlatform(),
+      defaultShell: adapter.defaultShell,
+      pathsCaseSensitive: adapter.pathsCaseSensitive,
+      dataDirDefault: adapter.defaultDataDir(core.APP_DIR_NAME),
+      gaps: core.platformGaps().map((g) => ({
+        id: g.id,
+        what: g.what,
+        consequence: g.consequence,
+        plan: g.plan,
+      })),
+      description: core.describePlatform(),
+    };
+  } catch (err) {
+    return { available: false, reason: `加载平台适配层失败：${err.message}` };
+  }
+}
+
 /* ---------------------------------------------------------------- *
  * 汇总
  * ---------------------------------------------------------------- */
@@ -248,6 +282,7 @@ const report = {
     koffi: probeNativeModule('koffi', (k) => (k.version ? `koffi ${k.version}` : null)),
   },
   win32Api: await probeWin32Api(),
+  platform: await probePlatformLayer(),
   conda: { exe: conda.exe, base: conda.base, envCount: conda.envs?.length ?? 0 },
   uv: firstLine(capture('uv', ['--version'])),
   managedEnv: managed,
@@ -309,6 +344,32 @@ process.stdout.write('\nL-science 环境自检\n');
 process.stdout.write(`${'-'.repeat(76)}\n`);
 
 line(OK, 'Node', `${node.version}  ABI ${node.abi}  ${node.platform}  npm ${node.npm ?? '?'}`);
+
+// 平台适配层：缺口非空意味着某些能力在这台机器上是降级的（需求 20.4.1）
+if (report.platform.available) {
+  const p = report.platform;
+  line(
+    p.gaps.length === 0 ? OK : WARN,
+    '平台适配层',
+    `${p.label}（${p.id}）  默认 shell ${p.defaultShell}  路径${p.pathsCaseSensitive ? '区分' : '不区分'}大小写` +
+      (p.gaps.length === 0 ? '  全部能力可用' : `  ${p.gaps.length} 项能力降级`),
+  );
+  if (p.unknown) {
+    line(
+      WARN,
+      '  未知平台',
+      '不在已知平台列表里，按 POSIX 处理；路径与 shell 应当可用，其余未验证',
+    );
+  }
+  // 每条都打印实际行为而不只是「不支持」：用户需要知道的是「那我现在得到的是什么」
+  for (const gap of p.gaps) {
+    line(WARN, `  ${gap.id}`, gap.what);
+    process.stdout.write(`       实际行为：${gap.consequence}\n`);
+    process.stdout.write(`       补齐方式：${gap.plan ?? '暂无已知方案'}\n`);
+  }
+} else {
+  line(WARN, '平台适配层', report.platform.reason);
+}
 
 for (const [name, res] of Object.entries(report.native)) {
   line(res.available ? OK : NO, name, res.available ? (res.detail ?? '已加载') : res.error);

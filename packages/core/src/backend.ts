@@ -140,6 +140,7 @@ import {
 } from './reviewer/index.js';
 import { RoutingRepo } from './repo/routing.js';
 import { UsageRepo } from './repo/usage.js';
+import { platform, platformGaps, unknownPlatform } from './platform/index.js';
 import { isolationStrength } from './sandbox/backend.js';
 import { EgressProxy } from './sandbox/egress-proxy.js';
 import { requestHostAccess } from './sandbox/host-access.js';
@@ -2053,10 +2054,31 @@ async function main(): Promise<void> {
    */
   d.register('sandbox.isolation', async () => {
     const isolation = nativeIsolationReport({ proxyEnabled: true });
+    const adapter = platform();
     return {
       backend: 'native' as const,
       isolation,
       strength: isolationStrength(isolation),
+      /*
+       * 平台缺口一起返回（任务 15.1，需求 20.4.1）。
+       *
+       * 放在这个方法里而不是单开一个：用户问「我现在受什么保护」时，「沙箱能做到什么」
+       * 与「这个平台上哪几项能力是降级的」是同一个问题的两半。分成两个接口的话 UI 会
+       * 只显示前一半——而在 Linux 上后一半恰好包含「凭据库不可用」这种必须知道的事。
+       *
+       * 在 Windows 上 gaps 为空数组，UI 不显示这一段。
+       */
+      platform: {
+        id: adapter.id,
+        label: adapter.label,
+        unknown: unknownPlatform(),
+        gaps: platformGaps().map((gap) => ({
+          id: gap.id,
+          what: gap.what,
+          consequence: gap.consequence,
+          plan: gap.plan,
+        })),
+      },
       skipped: wslAvailable
         ? [
             {

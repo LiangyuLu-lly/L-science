@@ -14,6 +14,7 @@
 
 import { execFile } from 'node:child_process';
 
+import { isWindows } from '../platform/index.js';
 import type {
   IsolationReport,
   SandboxBackend,
@@ -40,7 +41,9 @@ const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 /** 列出已安装的 WSL 发行版。wsl.exe 输出 UTF-16LE，需按此解码。 */
 export async function listWslDistros(): Promise<string[]> {
-  if (process.platform !== 'win32') return [];
+  // WSL 只存在于 Windows。这一条不走 gaps 而是直接返回空：非 Windows 上「没有发行版」
+  // 与「装了但一个都没建」在调用方看来该是同一件事——都退回 native 后端
+  if (!isWindows()) return [];
   return new Promise((resolve) => {
     execFile(
       'wsl.exe',

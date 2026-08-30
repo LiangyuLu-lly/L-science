@@ -15,7 +15,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { MANAGED_PYTHON_ENV, MANAGED_R_ENV, resolveCondaExe } from '@l-science/kernel';
 import type { ToolOutput } from '@l-science/shared';
@@ -25,7 +25,7 @@ import type { GrantScope } from '@l-science/shared';
 import type { ApprovalService } from '../approval/service.js';
 import type { BackgroundRunner } from '../tools/background.js';
 import type { EnvRecord, EnvsRepo } from '../repo/envs.js';
-import { runLocalShell } from '../compute/probe.js';
+import { defaultLocalShell, runLocalShell } from '../compute/probe.js';
 
 import {
   checkConflicts,
@@ -375,7 +375,7 @@ export class EnvService {
     const runCreate = async (): Promise<ToolOutput> => {
       const result = await runLocalShell({
         command: command.display,
-        shell: process.platform === 'win32' ? 'powershell' : 'bash',
+        shell: defaultLocalShell(),
         timeoutMs: CREATE_TIMEOUT_MS,
       });
 
@@ -438,9 +438,11 @@ export class EnvService {
   #guessPrefix(name: string): string {
     const exe = resolveCondaExe();
     if (exe === null) return name;
-    // <base>/Scripts/conda.exe 或 <base>/bin/conda → <base>/envs/<name>
+    // <base>/Scripts/conda.exe 或 <base>/bin/conda → <base>/envs/<name>。
+    // 用 join 而不是自己拼分隔符：分隔符是平台差异里最容易写成三元的一处，
+    // 而 node:path 早就按当前平台给出正确答案了
     const base = prefixOfInterpreter(exe);
-    return `${base.replace(/[\\/]+$/u, '')}${process.platform === 'win32' ? '\\envs\\' : '/envs/'}${name}`;
+    return join(base.replace(/[\\/]+$/u, ''), 'envs', name);
   }
 
   /**
@@ -503,7 +505,7 @@ export class EnvService {
         });
         const result = await runLocalShell({
           command: command.display,
-          shell: process.platform === 'win32' ? 'powershell' : 'bash',
+          shell: defaultLocalShell(),
           timeoutMs: 10 * 60 * 1000,
         });
         deletedFiles = result.ok;
@@ -916,7 +918,7 @@ export class EnvService {
     const run = async (): Promise<ToolOutput> => {
       const result = await runLocalShell({
         command: plan.command as string,
-        shell: process.platform === 'win32' ? 'powershell' : 'bash',
+        shell: defaultLocalShell(),
         timeoutMs: INSTALL_TIMEOUT_MS,
       });
 

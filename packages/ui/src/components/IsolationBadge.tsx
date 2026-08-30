@@ -139,13 +139,45 @@ export function IsolationBadge(): React.JSX.Element {
             </section>
           )}
 
+          {/*
+            平台缺口（需求 20.4.1）。在 Windows 上这一段不出现——那是权威实现，
+            gaps 为空。在 Linux/macOS 上它回答的是「这个平台上哪几项能力是降级的」，
+            与沙箱强度是两件不同的事：即便沙箱后端一样，凭据库能不能用也不一样。
+
+            每条都展示「实际行为」而不只是「不支持」，理由同 caveats：概括的过程
+            就是弱化的过程。
+          */}
+          {info.platform.gaps.length > 0 && (
+            <section className="isolation__gaps">
+              <h4>{info.platform.label} 上降级的能力</h4>
+              <ul>
+                {info.platform.gaps.map((gap) => (
+                  <li key={gap.id}>
+                    <strong>{gap.what}</strong>
+                    <p className="isolation__gap-consequence">{gap.consequence}</p>
+                    {gap.plan !== null && (
+                      <p className="isolation__gap-plan">补齐方式：{gap.plan}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {info.platform.unknown && (
+            <p className="isolation__proxy-note" role="note">
+              当前平台（{info.platform.id}）不在已知平台列表里，按 POSIX 处理。路径与 shell
+              应当可用，其余能力未经验证。
+            </p>
+          )}
+
           {info.skipped.length > 0 && (
             <section className="isolation__skipped">
               <h4>为什么没用更强的隔离</h4>
               <ul>
                 {info.skipped.map((s) => (
-                  <li key={s.backend}>
-                    <strong>{BACKEND_LABEL[s.backend] ?? s.backend}</strong>：{s.reason}
+                  <li key={s.id}>
+                    <strong>{BACKEND_LABEL[s.id] ?? s.id}</strong>：{s.reason}
                   </li>
                 ))}
               </ul>

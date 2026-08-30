@@ -636,8 +636,14 @@
 
 ## 跨阶段
 
-- [ ] 15.1 路径与 shell 抽象层收口
+- [x] 15.1 路径与 shell 抽象层收口
   - 把平台差异集中到可替换的抽象层，为 Linux 与 macOS 留空间
+  - 新增 `packages/core/src/platform/{types,windows,posix,index}.ts`。适配器分四组：**路径**（数据目录、大小写敏感性、比较用归一化、bin 子目录、可执行扩展名）、**shell**（默认族、支持判定、调用构造、which 命令）、**进程**（是否建进程组、进程树终止、内存探测）、**环境**（PATH 变量名与分隔符、主目录变量）。分组不是为了整齐——移植时这四组的难度差着量级
+  - **写出第二个实现（POSIX）而不是留 TODO**。只有一个实现的接口会长出 Windows 专属的形状，而形状泄漏不以报错的形式出现；第二个实现让它立刻变编译错误。同时让「移植还差什么」从「把十几处逐个读一遍」变成一份可枚举清单（`PlatformGap`），每条都要写清**降级后的实际行为**而不只是「不支持」
+  - 已 refactor 的调用点：`paths.ts`、`sandbox/{supervisor,native,path-guard,wsl2}.ts`、`skills/requirements.ts`、`compute/{probe,service}.ts`、`envs/service.ts`、`tools/capabilities.ts`、`mcp/transport.ts`
+  - `describePlatform()` 接进 `doctor` 与 `sandbox.isolation`（缺口与隔离强度是同一个问题的两半，分成两个接口的话 UI 只会显示前一半）；UI 的隔离徽章新增缺口段
+  - 顺带修两个真 bug：**(1)** POSIX 的 `ps -o rss=` 解析在进程已退出时返回 `Number('') === 0`，把「读不到」当成「占用 0 MB」——方向上是把未知说成正常，正是资源限额最不该出现的错；**(2)** `sandbox.isolation` 的 `skipped[]` 控制面给 `id` 而前端读 `backend`，于是「为什么没用更强的隔离」那段里后端名渲染成空白
+  - 约定靠测试守：`tests/platform.test.ts` 扫 `packages/*/src` 断言 `process.platform` 只出现在允许清单里（win32 FFI / DPAPI / Electron 窗口生命周期 / conda 的 R 布局），并禁止 `=== 'win32'` 这类写死三元
   - _需求：20.4.1_
 - [ ] 15.2 数据目录覆盖与多实例
   - 环境变量覆盖数据目录，支持测试与多实例并行

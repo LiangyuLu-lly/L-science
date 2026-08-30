@@ -1835,7 +1835,69 @@ try {
     '（schema 通过，id 不存在因此报 not_found）',
   );
 
-  // --- 20. stdin 关闭后自行退出 ---
+  // --- 20. 平台抽象层与隔离报告（任务 15.1，需求 20.4.1）---
+  process.stdout.write('\n--- 20. 平台抽象层 ---\n');
+
+  send(req('pf1', { method: 'sandbox.isolation' }));
+  await waitFor(() => byId('pf1') !== undefined, 10000, 'sandbox.isolation');
+  const iso = byId('pf1').result ?? {};
+  check(
+    byId('pf1').ok === true && iso.backend === 'native' && typeof iso.strength === 'string',
+    'sandbox.isolation 可用  ',
+    `backend=${String(iso.backend)} strength=${String(iso.strength)}`,
+  );
+
+  /*
+   * caveats 必须原文透出。
+   *
+   * 「诚实降级」这条设计目标全靠它落地——概括的过程就是弱化的过程，而在通道这一层
+   * 裁剪之后前端再怎么如实展示都补不回来。
+   */
+  check(
+    Array.isArray(iso.isolation?.caveats) && iso.isolation.caveats.length > 0,
+    'caveats 原文透出       ',
+    `${String((iso.isolation?.caveats ?? []).length)} 条`,
+  );
+
+  /*
+   * 平台缺口与隔离报告同一个响应返回。
+   *
+   * 分成两个接口的话 UI 会只显示前一半，而在 Linux 上后一半恰好包含「凭据库不可用」
+   * 这种必须知道的事。
+   */
+  check(
+    typeof iso.platform === 'object' &&
+      iso.platform !== null &&
+      typeof iso.platform.id === 'string' &&
+      typeof iso.platform.label === 'string' &&
+      iso.platform.unknown === false &&
+      Array.isArray(iso.platform.gaps),
+    '响应带平台缺口清单    ',
+    `${String(iso.platform?.label)}（${String(iso.platform?.id)}）${String((iso.platform?.gaps ?? []).length)} 项降级`,
+  );
+
+  // Windows 是权威实现，缺口为空。非空意味着有人把某项能力标成了降级而没同步文档
+  check(
+    iso.platform?.id === 'win32' ? (iso.platform?.gaps ?? []).length === 0 : true,
+    'Windows 上缺口为空    ',
+    iso.platform?.id === 'win32' ? '（权威实现）' : `平台为 ${String(iso.platform?.id)}`,
+  );
+
+  /*
+   * 被跳过的后端用 `id` 字段。
+   *
+   * 这里曾经与 UI 的类型不一致（控制面给 id、前端读 backend），表现是「为什么没用
+   * 更强的隔离」那一段里后端名渲染成空白——恰好是这条信息最需要被看清的位置。
+   */
+  check(
+    Array.isArray(iso.skipped) &&
+      iso.skipped.length > 0 &&
+      iso.skipped.every((s) => typeof s.id === 'string' && typeof s.reason === 'string'),
+    'skipped 用 id 字段     ',
+    (iso.skipped ?? []).map((s) => String(s.id)).join('、'),
+  );
+
+  // --- 21. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

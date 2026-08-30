@@ -56,6 +56,7 @@ export {
 } from './schedulers.js';
 
 export {
+  defaultLocalShell,
   detectLocalGpus,
   parseNvidiaSmi,
   pingSsh,

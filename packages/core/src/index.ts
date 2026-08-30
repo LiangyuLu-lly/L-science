@@ -14,6 +14,8 @@ export { PROJECT_MIGRATIONS } from './migrations/project.js';
 export { appPaths, projectPaths, dataDir, blobRelPath, APP_DIR_NAME } from './paths.js';
 export type { AppPaths, ProjectPaths } from './paths.js';
 
+export * from './platform/index.js';
+
 export { AppStore, ProjectStore } from './store.js';
 
 export { ProjectRepo } from './repo/projects.js';

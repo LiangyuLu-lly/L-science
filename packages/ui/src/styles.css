@@ -1178,17 +1178,20 @@ code {
 }
 
 .isolation__caveats,
+.isolation__gaps,
 .isolation__skipped {
   margin-top: 12px;
 }
 
 .isolation__caveats h4,
+.isolation__gaps h4,
 .isolation__skipped h4 {
   margin: 0 0 6px;
   font-size: 11px;
 }
 
 .isolation__caveats ul,
+.isolation__gaps ul,
 .isolation__skipped ul {
   margin: 0;
   padding-left: 18px;
@@ -1198,6 +1201,23 @@ code {
 .isolation__caveats li {
   margin-bottom: 6px;
   color: #e2d27e;
+}
+
+/* 平台缺口（需求 20.4.1）。与 caveats 同色系：两者都是「你实际得到的比看起来少」 */
+.isolation__gaps li {
+  margin-bottom: 10px;
+  color: #e2d27e;
+}
+
+.isolation__gap-consequence,
+.isolation__gap-plan {
+  margin: 4px 0 0;
+}
+
+/* 补齐方式是给开发者看的，压一档对比度以免与「实际行为」抢注意力。
+   仍保持 4.5:1 以上（#9aa3b2 对 #171a21 约 7.3:1） */
+.isolation__gap-plan {
+  color: var(--text-muted, #9aa3b2);
 }
 
 /* 制品视图 --------------------------------------------------------- */

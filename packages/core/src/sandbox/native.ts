@@ -7,8 +7,7 @@
  * 「失控」而非「恶意」。
  */
 
-import { existsSync } from 'node:fs';
-
+import { platform } from '../platform/index.js';
 import { nativeCapabilities } from '../win32/index.js';
 import type {
   IsolationReport,
@@ -35,31 +34,6 @@ export interface NativeBackendOptions {
 const DEFAULT_MEMORY_MB = 4096;
 const DEFAULT_WALL_CLOCK_SEC = 600;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
-
-/**
- * 给 PowerShell 命令加编码前导。
- *
- * 命令文本本身经 `-EncodedCommand`（UTF-16LE）传入不会有问题，但 PowerShell 的
- * **输出**默认用控制台的 OEM 代码页（简体中文机器上是 936/GBK）。我们按 UTF-8
- * 解码 stdout，于是任何非 ASCII 输出都会变成乱码——对一个中文平台来说这是
- * 必然会撞上的问题，而不是边缘情况。
- *
- * `$OutputEncoding` 管 PowerShell 传给原生命令的编码，`[Console]::OutputEncoding`
- * 管读取原生命令输出与写自身输出的编码，两者都要设。
- */
-function withUtf8Preamble(command: string): string {
-  return [
-    '$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    command,
-  ].join('\n');
-}
-
-function findPowerShell(): string {
-  // 优先 PowerShell 7，回落到系统自带的 5.1
-  const pwsh = 'pwsh.exe';
-  const legacy = `${process.env['SystemRoot'] ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
-  return existsSync(legacy) ? legacy : pwsh;
-}
 
 /**
  * 构造 native 后端的隔离报告。
@@ -156,20 +130,25 @@ export class NativeBackend implements SandboxBackend {
       }
     }
 
-    const { command, args } =
-      kind === 'bash'
-        ? { command: 'wsl.exe', args: ['-e', 'bash', '-lc', spec.command] }
-        : {
-            command: findPowerShell(),
-            args: [
-              '-NoProfile',
-              '-NonInteractive',
-              // 用 Base64 传命令：命令文本经多层传参时引号会被剥掉，
-              // 这是实测反复踩到的问题（IRkernel 启动、conda run 都撞过）
-              '-EncodedCommand',
-              Buffer.from(withUtf8Preamble(spec.command), 'utf16le').toString('base64'),
-            ],
-          };
+    /*
+     * 命令构造走平台适配层（需求 20.4.1）。
+     *
+     * PowerShell 的 `-EncodedCommand`、输出编码前导、以及经 WSL 起 bash 的形式都在
+     * 那一层，这里只做 shell 种类的映射。以前这段是内联的，于是同一套 PowerShell
+     * 参数在这个文件、`compute/probe.ts` 与 `envs/service.ts` 各写了一份——三份里
+     * 有两份漏了编码前导，表现是中文输出乱码。
+     */
+    const invocation = platform().shellInvocation({
+      family: kind === 'bash' ? 'posix' : 'powershell',
+      command: spec.command,
+    });
+    if (invocation === null) {
+      throw new Error(
+        `当前平台（${platform().label}）起不了 ${kind}。` +
+          `可用的 shell：${platform().defaultShell}。`,
+      );
+    }
+    const { command, args } = invocation;
 
     const result = await runSupervised({
       command,

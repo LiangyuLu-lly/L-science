@@ -16,6 +16,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
+import { platform } from '../platform/index.js';
 import {
   McpError,
   RPC_INTERNAL_ERROR,
@@ -167,8 +168,13 @@ export interface StdioTransportOptions {
   onLog?: (line: string) => void;
 }
 
-/** 默认放行的父进程变量。只够找到可执行文件与临时目录。 */
-const DEFAULT_ALLOW: readonly string[] = [
+/**
+ * 与平台无关的那部分放行清单。只够找到可执行文件与临时目录。
+ *
+ * `Path` 与 `PATH` 都列上：Windows 的 `process.env` 是大小写不敏感的代理，两者取到
+ * 同一个值，多列一个不会有副作用；而漏掉实际的键名会让子进程完全找不到可执行文件。
+ */
+const BASE_ALLOW: readonly string[] = [
   'PATH',
   'Path',
   'SystemRoot',
@@ -176,11 +182,21 @@ const DEFAULT_ALLOW: readonly string[] = [
   'COMSPEC',
   'TEMP',
   'TMP',
-  'HOME',
-  'USERPROFILE',
   'LANG',
   'LC_ALL',
 ];
+
+/**
+ * 默认放行的父进程变量。
+ *
+ * 「主目录」那几项从平台适配层取（需求 20.4.1），不硬编码：Windows 上是
+ * `USERPROFILE` 加 `HOMEDRIVE`/`HOMEPATH`，POSIX 上是 `HOME`。少放一个的表现不是
+ * 报错，是连接器进程读不到 `~/.config` 下自己的配置，然后报一个与环境变量毫无关系的
+ * 错（通常是「未登录」）。
+ */
+export function defaultStdioAllowList(): readonly string[] {
+  return [...BASE_ALLOW, ...platform().homeEnvVars];
+}
 
 export class StdioMcpTransport extends BaseTransport {
   readonly kind = 'stdio' as const;
@@ -198,7 +214,7 @@ export class StdioMcpTransport extends BaseTransport {
   async start(): Promise<void> {
     if (this.#child !== null) return;
 
-    const allow = this.#opts.allowFromParent ?? DEFAULT_ALLOW;
+    const allow = this.#opts.allowFromParent ?? defaultStdioAllowList();
     const env: Record<string, string> = {};
     for (const key of allow) {
       const value = process.env[key];

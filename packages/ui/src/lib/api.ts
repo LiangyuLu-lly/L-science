@@ -325,7 +325,25 @@ export interface IsolationInfo {
     caveats: string[];
   };
   strength: 'strong' | 'weak';
-  skipped: Array<{ backend: string; reason: string }>;
+  /**
+   * 平台缺口（需求 20.4.1）。Windows 上 `gaps` 为空数组。
+   *
+   * 与隔离报告放在同一个响应里，因为它们是同一个问题的两半：「沙箱能做到什么」加上
+   * 「这个平台上哪几项能力是降级的」。
+   */
+  platform: {
+    id: string;
+    label: string;
+    unknown: boolean;
+    gaps: Array<{ id: string; what: string; consequence: string; plan: string | null }>;
+  };
+  /**
+   * 被跳过的更强后端。
+   *
+   * 字段名是 `id` 而不是 `backend`：控制面用的是 `SkippedBackend { id, reason }`，
+   * 而这里曾经写成 `backend`，于是「为什么没用更强的隔离」那一段里后端名渲染成空白。
+   */
+  skipped: Array<{ id: string; reason: string }>;
 }
 
 export interface ToolListing {

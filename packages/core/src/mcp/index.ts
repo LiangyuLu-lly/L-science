@@ -33,7 +33,7 @@ export type {
   McpToolResult,
 } from './protocol.js';
 
-export { HttpMcpTransport, StdioMcpTransport } from './transport.js';
+export { HttpMcpTransport, StdioMcpTransport, defaultStdioAllowList } from './transport.js';
 export type { HttpTransportOptions, McpTransport, StdioTransportOptions } from './transport.js';
 
 export { DEFAULT_CALL_TIMEOUT_MS, McpClient } from './client.js';

@@ -13,6 +13,7 @@
 
 import { spawnSync } from 'node:child_process';
 
+import { platform } from '../platform/index.js';
 import type { SkillRequires } from './manifest.js';
 
 export interface ProbeResult {
@@ -156,9 +157,10 @@ export function probeCommands(): RequirementProbes['commands'] {
   return (names) => {
     const present = new Map<string, boolean>();
     for (const name of names) {
-      // where 在 Windows 上、which 在别处。两者都在找不到时返回非零
-      const r =
-        process.platform === 'win32' ? runCapture('where', [name]) : runCapture('which', [name]);
+      // where 在 Windows 上、which 在别处。两者都在找不到时返回非零。
+      // 命令名由平台适配层给（需求 20.4.1）
+      const probe = platform().whichCommand(name);
+      const r = runCapture(probe.command, [...probe.args]);
       present.set(name, r.ok);
     }
     return { present, failure: null };
