@@ -265,7 +265,18 @@ describe.skipIf(!hasPython)('Python 内核', () => {
       // 核心断言：不管走哪条路，都不能等满 30 秒
       expect(Date.now() - started).toBeLessThan(25_000);
 
-      await vi.waitFor(() => expect(outcome).not.toBeNull(), { timeout: 20_000 });
+      /*
+       * 这个等待与上面那条 25 秒断言测的**不是同一件事**，超时也不该取同一个量级。
+       *
+       * 上面测的是产品性质：中断之后执行必须停下来，不能等满 30 秒的循环。
+       * 这里只是在等 `interrupt()` 的返回值落到变量里，而在 Windows 上那条路径是
+       * 「杀掉内核 + 重新起一个 + 等它就绪」——单独跑两三秒，但全量测试并行时几十个
+       * 文件同时在起 Python 进程，起一个新内核越过 20 秒是常态。
+       *
+       * 之前取 20 秒的后果是这条用例在每次全量运行里都失败、单独跑又通过。一个总是
+       * 失败的用例不提供任何信号，只会让人习惯性忽略这个文件的红色。
+       */
+      await vi.waitFor(() => expect(outcome).not.toBeNull(), { timeout: 90_000 });
       expect(['interrupted', 'restarted']).toContain(outcome);
 
       // 无论如何内核必须仍可用

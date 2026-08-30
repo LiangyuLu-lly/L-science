@@ -24,6 +24,29 @@ export function dataDir(): string {
   return platform().defaultDataDir(APP_DIR_NAME);
 }
 
+/** 生效的数据目录是从哪来的。 */
+export type DataDirSource = 'env' | 'platform-default';
+
+/**
+ * 数据目录的来源（需求 20.4.2）。
+ *
+ * 存在的理由是诊断：「我的项目怎么不见了」最常见的原因就是这次启动的数据目录与上次
+ * 不是同一个（环境变量在某个终端里设过、或某个脚本设了它）。只报路径不报来源的话，
+ * 用户看到一个陌生路径也不知道该去改哪里。
+ */
+export function dataDirSource(): DataDirSource {
+  const override = process.env['L_SCIENCE_DATA_DIR'];
+  return override !== undefined && override !== '' ? 'env' : 'platform-default';
+}
+
+/** 数据目录与来源的一句话说明，供 doctor 与 `app.status` 用。 */
+export function describeDataDir(): string {
+  const root = dataDir();
+  return dataDirSource() === 'env'
+    ? `${root}（来自 L_SCIENCE_DATA_DIR）`
+    : `${root}（平台默认位置）`;
+}
+
 export interface AppPaths {
   root: string;
   config: string;

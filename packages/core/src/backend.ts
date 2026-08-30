@@ -140,6 +140,12 @@ import {
 } from './reviewer/index.js';
 import { RoutingRepo } from './repo/routing.js';
 import { UsageRepo } from './repo/usage.js';
+import {
+  INSTANCE_LOCK_EXIT_CODE,
+  acquireInstanceLock,
+  describeLockConflict,
+} from './instance-lock.js';
+import { dataDir, dataDirSource, describeDataDir } from './paths.js';
 import { platform, platformGaps, unknownPlatform } from './platform/index.js';
 import { isolationStrength } from './sandbox/backend.js';
 import { EgressProxy } from './sandbox/egress-proxy.js';
@@ -225,9 +231,46 @@ function openProject(store: AppStore, projectId: string): ProjectStore {
 
 async function main(): Promise<void> {
   const startedAt = Date.now();
-  const store = AppStore.open();
 
-  log(`数据目录 ${store.paths.root}`);
+  /*
+   * 实例锁必须在打开任何库**之前**取（任务 15.2，需求 20.4.2）。
+   *
+   * 顺序反了的话，被拒绝的那个实例已经跑过一次迁移、已经把内置技能装了一遍、也已经
+   * 把 MCP 桥的临时端口写进了连接器行——而那些写入正是要防的东西。
+   */
+  const root = dataDir();
+  const lockResult = acquireInstanceLock({ root, onLog: log });
+  if (!lockResult.ok) {
+    /*
+     * 走 stderr 而不是抛异常：stdout 被 NDJSON 协议独占，而这条消息的读者是人。
+     * 退出码用一个专属值，让外壳能把它与「后端崩了」区分开并弹出具体说明——
+     * 否则用户看到的只是一句「后端未就绪」。
+     */
+    process.stderr.write(`${describeLockConflict(lockResult)}\n`);
+    process.exitCode = INSTANCE_LOCK_EXIT_CODE;
+    return;
+  }
+  const lock = lockResult.lock;
+  // 退出路径统一在这里释放：正常退出、stdin EOF、未捕获异常都会经过 'exit'
+  process.on('exit', () => {
+    lock.release();
+  });
+
+  const store = AppStore.open(root);
+
+  log(`数据目录 ${describeDataDir()}`);
+  if (lock.tookOverStale !== null) {
+    /*
+     * 崩溃退出要报出来。
+     *
+     * 上一次没有走正常退出路径，意味着可能留下了没跑完的迁移或半个内核目录。这是
+     * 用户排查「上次为什么不对」时唯一的线索，静默接管等于把它丢掉。
+     */
+    log(
+      `上一个实例（pid ${String(lock.tookOverStale.pid)}）没有正常退出，已接管数据目录。` +
+        '若上次运行中断在导入或编译过程中，建议检查一下相关制品是否完整。',
+    );
+  }
   log(`应用库 SQLite ${sqliteVersion(store.db)} schema v${String(schemaVersion(store.db))}`);
 
   const dangling = store.danglingProjects();
@@ -261,6 +304,18 @@ async function main(): Promise<void> {
     uptimeMs: Date.now() - startedAt,
     node: process.version,
     dataDir: store.paths.root,
+    /*
+     * 数据目录的来源与锁状态一起报（需求 20.4.2）。
+     *
+     * 「我的项目怎么不见了」最常见的原因是这次启动的数据目录与上次不同。只报路径的话
+     * 用户看到一个陌生路径也不知道该去改哪里，因此要说清它是环境变量给的还是默认的。
+     */
+    dataDirSource: dataDirSource(),
+    instanceLock: {
+      path: lock.path,
+      pid: lock.info.pid,
+      tookOverStale: lock.tookOverStale === null ? null : lock.tookOverStale.pid,
+    },
     sqlite: sqliteVersion(store.db),
     schema: schemaVersion(store.db),
     projectCount: store.projects.count(),

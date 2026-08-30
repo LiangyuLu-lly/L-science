@@ -11,10 +11,31 @@ export type { Db, Migration } from './db.js';
 export { APP_MIGRATIONS } from './migrations/app.js';
 export { PROJECT_MIGRATIONS } from './migrations/project.js';
 
-export { appPaths, projectPaths, dataDir, blobRelPath, APP_DIR_NAME } from './paths.js';
-export type { AppPaths, ProjectPaths } from './paths.js';
+export {
+  appPaths,
+  projectPaths,
+  dataDir,
+  dataDirSource,
+  describeDataDir,
+  blobRelPath,
+  APP_DIR_NAME,
+} from './paths.js';
+export type { AppPaths, DataDirSource, ProjectPaths } from './paths.js';
 
 export * from './platform/index.js';
+
+export {
+  INSTANCE_LOCK_EXIT_CODE,
+  acquireInstanceLock,
+  describeLockConflict,
+  instanceLockPath,
+} from './instance-lock.js';
+export type {
+  AcquireLockOptions,
+  AcquireLockResult,
+  InstanceLockHandle,
+  InstanceLockInfo,
+} from './instance-lock.js';
 
 export { AppStore, ProjectStore } from './store.js';
 

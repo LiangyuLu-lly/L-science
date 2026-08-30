@@ -11,7 +11,7 @@
  */
 
 import { createRequire } from 'node:module';
-import { existsSync, statfsSync } from 'node:fs';
+import { existsSync, readFileSync, statfsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -259,6 +259,53 @@ async function probePlatformLayer() {
   }
 }
 
+/**
+ * 生效的数据目录与实例锁状态（需求 20.4.2）。
+ *
+ * doctor 以前只报**默认**位置（走适配器），完全不反映 `L_SCIENCE_DATA_DIR` 覆盖。
+ * 那让自检在最需要它的场景下给出误导：「我的项目怎么不见了」最常见的原因正是这次
+ * 启动的数据目录与上次不是同一个。
+ *
+ * 锁状态也一起报：如果显示被占用，那就是「另一个实例在跑」而不是「数据坏了」。
+ */
+async function probeDataDir() {
+  const entry = resolve(repoRoot, 'packages', 'core', 'dist', 'index.js');
+  if (!existsSync(entry)) return { available: false, reason: '控制平面尚未构建' };
+  try {
+    const core = await import(pathToFileURL(entry).href);
+    const root = core.dataDir();
+    const lockPath = core.instanceLockPath(root);
+    let lock = { exists: false };
+    if (existsSync(lockPath)) {
+      try {
+        const held = JSON.parse(readFileSync(lockPath, 'utf8'));
+        let alive = false;
+        try {
+          process.kill(held.pid, 0);
+          alive = true;
+        } catch (err) {
+          // EPERM 表示进程在，只是属于别的用户
+          alive = err.code === 'EPERM';
+        }
+        lock = { exists: true, pid: held.pid, startedAt: held.startedAt, alive };
+      } catch {
+        lock = { exists: true, corrupt: true };
+      }
+    }
+    return {
+      available: true,
+      root,
+      source: core.dataDirSource(),
+      description: core.describeDataDir(),
+      exists: existsSync(root),
+      lockPath,
+      lock,
+    };
+  } catch (err) {
+    return { available: false, reason: `加载控制平面失败：${err.message}` };
+  }
+}
+
 /* ---------------------------------------------------------------- *
  * 汇总
  * ---------------------------------------------------------------- */
@@ -283,6 +330,7 @@ const report = {
   },
   win32Api: await probeWin32Api(),
   platform: await probePlatformLayer(),
+  dataDir: await probeDataDir(),
   conda: { exe: conda.exe, base: conda.base, envCount: conda.envs?.length ?? 0 },
   uv: firstLine(capture('uv', ['--version'])),
   managedEnv: managed,
@@ -369,6 +417,36 @@ if (report.platform.available) {
   }
 } else {
   line(WARN, '平台适配层', report.platform.reason);
+}
+
+// 生效的数据目录（需求 20.4.2）。写在最前面：几乎所有「东西不见了」的排查都从这里开始
+if (report.dataDir.available) {
+  const d = report.dataDir;
+  line(
+    d.exists ? OK : WARN,
+    '数据目录',
+    `${d.description}${d.exists ? '' : '  尚不存在（首次启动时创建）'}`,
+  );
+  if (d.lock.exists && d.lock.corrupt === true) {
+    line(WARN, '  实例锁', `内容无法解析，下次启动会按过期处理并接管：${d.lockPath}`);
+  } else if (d.lock.exists && d.lock.alive) {
+    line(
+      WARN,
+      '  实例锁',
+      `被 pid ${String(d.lock.pid)} 持有 —— 有实例正在运行；` +
+        '要再开一个请给它设不同的 L_SCIENCE_DATA_DIR',
+    );
+  } else if (d.lock.exists) {
+    line(
+      WARN,
+      '  实例锁',
+      `残留自已退出的 pid ${String(d.lock.pid)}（上次未正常退出），下次启动会自动接管`,
+    );
+  } else {
+    line(OK, '  实例锁', '空闲');
+  }
+} else {
+  line(WARN, '数据目录', report.dataDir.reason);
 }
 
 for (const [name, res] of Object.entries(report.native)) {

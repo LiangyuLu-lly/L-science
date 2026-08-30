@@ -13,7 +13,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1897,7 +1897,126 @@ try {
     (iso.skipped ?? []).map((s) => String(s.id)).join('、'),
   );
 
-  // --- 21. stdin 关闭后自行退出 ---
+  // --- 21. 数据目录覆盖与实例锁（任务 15.2，需求 20.4.2）---
+  process.stdout.write('\n--- 21. 数据目录与实例锁 ---\n');
+
+  send(req('in1', { method: 'app.status' }));
+  await waitFor(() => byId('in1') !== undefined, 10000, 'app.status');
+  const status = byId('in1').result ?? {};
+  // 这个进程是我们用 L_SCIENCE_DATA_DIR 起的，来源必须报 env
+  check(
+    status.dataDir === dataDir && status.dataDirSource === 'env',
+    'app.status 报生效目录与来源',
+    `${String(status.dataDirSource)}`,
+  );
+  check(
+    typeof status.instanceLock?.path === 'string' &&
+      status.instanceLock.pid === status.pid &&
+      status.instanceLock.tookOverStale === null,
+    'app.status 报实例锁状态  ',
+    `pid=${String(status.instanceLock?.pid)}`,
+  );
+
+  const lockFile = join(dataDir, 'config', 'instance.lock');
+  check(existsSync(lockFile), '锁文件已落在 config 下  ', lockFile);
+
+  /*
+   * 真正要验的一条：第二个后端指向同一个数据目录必须**拒绝启动**。
+   *
+   * 这条只能端到端验。单元测试能证明锁的逻辑对，但证明不了它被接在启动路径上、
+   * 且接在打开数据库**之前**——而那个顺序是这件事的全部意义所在：被拒绝的实例
+   * 若已经跑过一次迁移、装过一遍内置技能、把 MCP 桥的临时端口写进了连接器行，
+   * 那么「拒绝启动」就没有挡住任何东西。
+   */
+  const second = spawn(process.execPath, [entry], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, L_SCIENCE_DATA_DIR: dataDir },
+  });
+  let secondErr = '';
+  second.stderr.setEncoding('utf8');
+  second.stderr.on('data', (c) => {
+    secondErr += c;
+  });
+  const secondCode = await Promise.race([
+    new Promise((r) => second.once('exit', (code) => r(code))),
+    new Promise((r) => setTimeout(() => r('timeout'), 15000)),
+  ]);
+  if (secondCode === 'timeout') second.kill();
+
+  check(secondCode === 78, '第二个实例被拒（退出 78）', `exit=${String(secondCode)}`);
+  /*
+   * 三件事必须都在说明里：是谁占着、锁文件在哪、怎么并行。
+   *
+   * 最后一条最容易漏，而漏了它用户会以为平台不支持同时开两个——多实例并行是被
+   * 支持的用法，只是要各用一个数据目录。
+   */
+  check(
+    secondErr.includes(String(status.pid)) &&
+      secondErr.includes('instance.lock') &&
+      secondErr.includes('L_SCIENCE_DATA_DIR'),
+    '拒绝说明含持有者/锁/办法',
+    secondErr.split('\n')[0]?.slice(0, 60) ?? '',
+  );
+  // 被拒的一方不能改动锁文件，否则第三个实例会以为目录空着
+  check(
+    JSON.parse(readFileSync(lockFile, 'utf8')).pid === status.pid,
+    '被拒方未篡改锁文件      ',
+    '',
+  );
+
+  /*
+   * 换一个数据目录必须能起来。
+   *
+   * 这是需求 20.4.2 的正面用例。只测「被拒」的话，一个把所有第二实例都拒掉的实现
+   * 也能通过——而那恰好是这一项要修的问题本身。
+   */
+  const otherDir = mkdtempSync(join(tmpdir(), 'lsci-vb2-'));
+  const third = spawn(process.execPath, [entry], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, L_SCIENCE_DATA_DIR: otherDir },
+  });
+  let thirdErr = '';
+  third.stderr.setEncoding('utf8');
+  third.stderr.on('data', (c) => {
+    thirdErr += c;
+  });
+  const thirdReady = await Promise.race([
+    (async () => {
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        if (thirdErr.includes('控制平面就绪')) return true;
+        if (third.exitCode !== null) return false;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return false;
+    })(),
+    new Promise((r) => setTimeout(() => r(false), 22000)),
+  ]);
+  check(thirdReady === true, '换数据目录可并行启动  ', otherDir);
+  check(
+    thirdReady !== true || existsSync(join(otherDir, 'config', 'instance.lock')),
+    '并行实例各有自己的锁  ',
+    '',
+  );
+
+  third.stdin.end();
+  await Promise.race([
+    new Promise((r) => third.once('exit', () => r(true))),
+    new Promise((r) => setTimeout(() => r(false), 6000)),
+  ]);
+  if (third.exitCode === null) third.kill();
+  // 正常退出必须把锁释放掉，否则下次启动会看到一个「残留」锁
+  check(!existsSync(join(otherDir, 'config', 'instance.lock')), '正常退出后锁被释放    ', '');
+  for (let i = 0; i < 5; i += 1) {
+    try {
+      rmSync(otherDir, { recursive: true, force: true });
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  // --- 22. stdin 关闭后自行退出 ---
   const exitPromise = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
   child.stdin.end();
   const code = await Promise.race([

@@ -9,10 +9,19 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
-import { app, BrowserWindow, ipcMain, shell, type WebContents } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron';
 import { parseRequest, type ErrorEnvelope } from '@l-science/shared';
 
 import { BackendClient } from './backend-client.js';
+
+/**
+ * 后端因数据目录被占用而拒绝启动时的退出码。
+ *
+ * 与 `INSTANCE_LOCK_EXIT_CODE`（@l-science/core）必须一致。这里写字面量而不是 import：
+ * 主进程刻意不依赖 core（AD-1，core 带 better-sqlite3 这类原生模块，跑在独立的系统
+ * Node 进程里）。有测试守着这两个常量相等。
+ */
+const BACKEND_EXIT_DATA_DIR_LOCKED = 78;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..');
@@ -51,6 +60,9 @@ function startBackend(): void {
   // Electron 会给子进程注入这个变量，传下去会让 node 行为异常。
   delete env['ELECTRON_RUN_AS_NODE'];
 
+  // 后端拒绝启动时它把原因写在 stderr，这里留着最后几行用于弹窗
+  const stderrTail: string[] = [];
+
   backend = spawn(nodeBin, [entry], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env,
@@ -64,12 +76,30 @@ function startBackend(): void {
     onLog: (line) => {
       process.stderr.write(`[core] ${line}\n`);
       broadcast(IPC_LOG, line);
+      stderrTail.push(line);
+      if (stderrTail.length > 40) stderrTail.shift();
     },
   });
 
-  backend.on('exit', () => {
+  backend.on('exit', (code) => {
     backend = null;
     client = null;
+
+    /*
+     * 数据目录被占用要弹窗说明（任务 15.2，需求 20.4.2）。
+     *
+     * 不弹的话用户看到的是界面上一句「后端未就绪」，那条消息对「另一个实例正在用这个
+     * 目录」这个原因毫无指向性——而这是唯一一种用户能自己解决的启动失败。后端为此专门
+     * 用了一个退出码，正是为了让外壳能把它与「后端崩了」区分开。
+     */
+    if (code === BACKEND_EXIT_DATA_DIR_LOCKED) {
+      const detail = stderrTail.join('\n').trim();
+      dialog.showErrorBox(
+        'L-science 已在运行',
+        detail === '' ? '这个数据目录正被另一个实例使用。' : detail,
+      );
+      app.quit();
+    }
   });
 }
 
@@ -167,7 +197,34 @@ function createWindow(): void {
   }
 }
 
-// 单实例锁：多个实例会争抢同一个 SQLite 库与内核端口。
+/**
+ * 让单实例锁按**数据目录**分离，而不是按应用分离（任务 15.2，需求 20.4.2）。
+ *
+ * Electron 的 `requestSingleInstanceLock()` 没有 key 参数，它的锁文件就放在
+ * `userData` 里。因此在这之前，「一台机器上只能开一个 L-science」是硬性的——即便
+ * 用户给两个实例设了不同的 `L_SCIENCE_DATA_DIR`，第二个进程也会在下面那行直接退出。
+ * 需求 20.4.2 要的多实例并行因此从来不成立。
+ *
+ * 把 `userData` 放进数据目录内之后，锁跟着数据目录走：不同数据目录各有一把锁（两个
+ * 实例都能跑），同一个数据目录仍然只有一把（第二次启动聚焦已有窗口，那正是用户重复
+ * 点图标时想要的行为）。
+ *
+ * 刻意**不**去推算默认数据目录：那要把平台适配层搬进 Electron 主进程，而主进程刻意
+ * 不依赖 @l-science/core（AD-1：core 跑在独立的系统 Node 进程里，带 better-sqlite3
+ * 这类原生模块）。没设环境变量时保持 Electron 的默认 userData，行为与以前一致。
+ *
+ * 用「目录内」而不是「路径哈希」也是刻意的：同一个目录的两种写法（`C:\x` 与 `c:/x/`）
+ * 哈希不同但物理目录相同，放进目录内之后它们自然指向同一个锁文件，不需要我们自己
+ * 处理路径归一化。
+ */
+{
+  const override = process.env['L_SCIENCE_DATA_DIR'];
+  if (override !== undefined && override !== '') {
+    app.setPath('userData', join(resolve(override), 'electron'));
+  }
+}
+
+// 单实例锁：同一个数据目录只能有一个实例，否则会争抢同一个 SQLite 库与凭据文件。
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {

@@ -17,7 +17,18 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const devServer = process.env.L_SCIENCE_DEV_SERVER ?? 'http://127.0.0.1:5223';
+/*
+ * 三个端口/目录都可以覆盖，这样两个开发实例能并行（需求 20.4.2）：
+ *
+ *   $env:L_SCIENCE_UI_PORT   = '5224'   # 与 vite.config.ts 读的是同一个变量
+ *   $env:L_SCIENCE_CDP_PORT  = '9223'
+ *   $env:L_SCIENCE_DATA_DIR  = 'D:\lsci-second'
+ *
+ * 由 `L_SCIENCE_UI_PORT` 推出 dev server 地址而不是让两者各自写死：写死之后改了端口
+ * 却忘了改地址的表现是窗口一片空白，而那看起来像渲染层的问题。
+ */
+const uiPort = process.env.L_SCIENCE_UI_PORT ?? '5223';
+const devServer = process.env.L_SCIENCE_DEV_SERVER ?? `http://127.0.0.1:${uiPort}`;
 const cdpPort = process.env.L_SCIENCE_CDP_PORT ?? '9222';
 
 let electronBin;
@@ -37,7 +48,10 @@ if (typeof electronBin !== 'string') {
 
 const args = [join(repoRoot, 'packages', 'shell'), `--remote-debugging-port=${cdpPort}`];
 
-process.stderr.write(`开发外壳启动：dev server=${devServer}  CDP=${cdpPort}\n`);
+const dataDirNote = process.env.L_SCIENCE_DATA_DIR
+  ? `  数据目录=${process.env.L_SCIENCE_DATA_DIR}`
+  : '';
+process.stderr.write(`开发外壳启动：dev server=${devServer}  CDP=${cdpPort}${dataDirNote}\n`);
 
 const child = spawn(electronBin, args, {
   stdio: 'inherit',
