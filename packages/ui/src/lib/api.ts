@@ -370,6 +370,13 @@ export type EnvDoctorGap = {
   readonly plan: string | null;
 };
 
+export type EnvDoctorBlocker = {
+  readonly id: string;
+  readonly what: string;
+  readonly consequence: string;
+  readonly command: string;
+};
+
 export type EnvDoctor = {
   readonly dataDir: string;
   readonly dataDirSource: 'env' | 'platform-default';
@@ -377,6 +384,7 @@ export type EnvDoctor = {
   readonly platform: string;
   readonly gaps: readonly EnvDoctorGap[];
   readonly capabilities: string;
+  readonly blockers: readonly EnvDoctorBlocker[];
 };
 
 export const loadEnvDoctor = (refresh = false) =>
@@ -955,6 +963,14 @@ export interface SkillCatalogView {
   /** 被用户技能遮蔽的内置技能。查不到它，「我的改动生效了吗」无从确认。 */
   shadowed: Array<{ slug: string; name: string; version: string | null; path: string }>;
   broken: Array<{ path: string; scope: SkillScope; dirName: string; reason: string }>;
+  /** 清单合法但不启用的技能。必须带原因展示。 */
+  unavailable: Array<{
+    slug: string;
+    name: string;
+    path: string;
+    scope: SkillScope;
+    reason: string;
+  }>;
 }
 
 export interface SkillSearchHitView {

@@ -195,6 +195,7 @@ import {
   REMEDIATION,
   resetCapabilityCache,
 } from './tools/capabilities.js';
+import { collectEnvDoctorBlockers } from './tools/env-doctor.js';
 import { createEditFileTool, createReadFileTool } from './tools/files.js';
 import { collectExecution, createKernelTool, formatExecution } from './tools/kernel-tools.js';
 import { ToolRegistry } from './tools/registry.js';
@@ -339,6 +340,7 @@ async function main(): Promise<void> {
       platform: describePlatform(),
       gaps: platformGaps(),
       capabilities: describeCapabilities(caps),
+      blockers: collectEnvDoctorBlockers(caps),
     };
   });
 
@@ -2528,31 +2530,33 @@ async function main(): Promise<void> {
       embedFailure: skills.embedFailure,
       builtinDir: store.paths.skillsBuiltin,
       userDir: store.paths.skillsUser,
-      skills: records.map((record) => {
-        const loaded = catalog.skills.get(record.slug);
-        const requirements = skills.requirementsOf(record.slug);
-        return {
-          slug: record.slug,
-          name: record.name,
-          version: record.version,
-          scope: record.scope,
-          domain: record.domain,
-          description: record.manifest.description,
-          triggers: record.manifest.triggers,
-          tools: record.manifest.tools,
-          requires: record.manifest.requires,
-          enabled: record.enabled,
-          path: record.path,
-          /** 文件系统上是否还在。同步只禁用不删行，这一项让界面能区分两者。 */
-          present: loaded !== undefined,
-          references: loaded?.references ?? [],
-          scripts: loaded?.scripts ?? [],
-          warnings: loaded?.warnings ?? [],
-          requirementsSatisfied: requirements?.satisfied ?? null,
-          missing: requirements?.missing ?? [],
-          probeFailures: requirements?.probeFailures ?? [],
-        };
-      }),
+      skills: records
+        .filter((record) => catalog.unavailable.every((s) => s.manifest.slug !== record.slug))
+        .map((record) => {
+          const loaded = catalog.skills.get(record.slug);
+          const requirements = skills.requirementsOf(record.slug);
+          return {
+            slug: record.slug,
+            name: record.name,
+            version: record.version,
+            scope: record.scope,
+            domain: record.domain,
+            description: record.manifest.description,
+            triggers: record.manifest.triggers,
+            tools: record.manifest.tools,
+            requires: record.manifest.requires,
+            enabled: record.enabled,
+            path: record.path,
+            /** 文件系统上是否还在。同步只禁用不删行，这一项让界面能区分两者。 */
+            present: loaded !== undefined,
+            references: loaded?.references ?? [],
+            scripts: loaded?.scripts ?? [],
+            warnings: loaded?.warnings ?? [],
+            requirementsSatisfied: requirements?.satisfied ?? null,
+            missing: requirements?.missing ?? [],
+            probeFailures: requirements?.probeFailures ?? [],
+          };
+        }),
       // 被用户技能遮蔽的内置技能。查不到它，「我的改动生效了吗」无从确认
       shadowed: catalog.shadowed.map((s) => ({
         slug: s.manifest.slug,
@@ -2561,6 +2565,13 @@ async function main(): Promise<void> {
         path: s.path,
       })),
       broken: catalog.broken,
+      unavailable: catalog.unavailable.map((s) => ({
+        slug: s.manifest.slug,
+        name: s.manifest.name,
+        path: s.path,
+        scope: s.scope,
+        reason: s.unavailableReason ?? '',
+      })),
     };
   });
 

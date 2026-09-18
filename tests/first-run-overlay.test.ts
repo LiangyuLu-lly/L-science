@@ -46,4 +46,25 @@ describe('FirstRunOverlay source', () => {
     );
     expect(section).toContain('loadEnvDoctor(true)');
   });
+
+  it('EnvDoctorSection lists blockers after capabilities', () => {
+    const section = SRC.slice(
+      SRC.indexOf('export function EnvDoctorSection'),
+      SRC.indexOf('export function FirstRunOverlay'),
+    );
+    const caps = section.indexOf('doctor.capabilities');
+    const blockers = section.indexOf('doctor.blockers');
+    expect(caps).toBeGreaterThan(-1);
+    expect(blockers).toBeGreaterThan(-1);
+    expect(blockers).toBeGreaterThan(caps);
+  });
+
+  it('EnvDoctorSection compact copy includes conda create commands', () => {
+    const section = SRC.slice(
+      SRC.indexOf('export function EnvDoctorSection'),
+      SRC.indexOf('export function FirstRunOverlay'),
+    );
+    expect(section).toContain('conda create -n lsci python=3.13');
+    expect(section).toContain('conda create -n lsci-r');
+  });
 });

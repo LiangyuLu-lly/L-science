@@ -20,9 +20,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   APP_DIR_NAME,
+  CAPABILITY,
   KNOWN_PLATFORMS,
   PathGuard,
   adapterFor,
+  collectEnvDoctorBlockers,
   darwinAdapter,
   dataDir,
   defaultLocalShell,
@@ -439,6 +441,64 @@ describe('适配器选择', () => {
     } finally {
       resetCapabilityCache();
     }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * env.doctor compact blockers
+ * ------------------------------------------------------------------ */
+
+describe('env.doctor blockers', () => {
+  it('env.doctor blockers include koffi when ffi load failed', () => {
+    // Given: koffi 加载失败；Python 内核仍在，避免和 lsci blocker 搅在一起
+    const snapshot = {
+      available: new Set([CAPABILITY.filesystem, CAPABILITY.kernelPython]),
+      pythonEnv: 'lsci',
+      rEnv: null,
+    };
+
+    // When
+    const blockers = collectEnvDoctorBlockers(
+      snapshot,
+      '加载 koffi 失败：Error: Cannot find module',
+    );
+
+    // Then: id 是契约字段；what/consequence/command 必须都在
+    const koffi = blockers.find((b) => b.id === 'koffi');
+    expect(koffi).toBeDefined();
+    expect(koffi).toEqual(
+      expect.objectContaining({
+        id: 'koffi',
+        what: expect.any(String),
+        consequence: expect.any(String),
+        command: expect.any(String),
+      }),
+    );
+  });
+
+  it('env.doctor blockers include lsci when python kernel missing', () => {
+    // Given: 探测不到 Python 内核（lsci / ipykernel）；FFI 正常
+    const snapshot = {
+      available: new Set([CAPABILITY.filesystem]),
+      pythonEnv: null,
+      rEnv: null,
+    };
+
+    // When
+    const blockers = collectEnvDoctorBlockers(snapshot, null);
+
+    // Then
+    const lsci = blockers.find((b) => b.id === 'lsci');
+    expect(lsci).toBeDefined();
+    expect(lsci?.command).toContain('conda create -n lsci');
+    expect(lsci).toEqual(
+      expect.objectContaining({
+        id: 'lsci',
+        what: expect.any(String),
+        consequence: expect.any(String),
+        command: expect.any(String),
+      }),
+    );
   });
 });
 

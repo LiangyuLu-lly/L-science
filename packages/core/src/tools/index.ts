@@ -35,6 +35,9 @@ export {
 } from './capabilities.js';
 export type { CapabilitySnapshot } from './capabilities.js';
 
+export { collectEnvDoctorBlockers } from './env-doctor.js';
+export type { EnvDoctorBlocker } from './env-doctor.js';
+
 export { createShellTool, formatShellResult, truncateStream } from './shell.js';
 export type { ShellInput, ShellToolOptions } from './shell.js';
 

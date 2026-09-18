@@ -79,6 +79,16 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
         {compact ? '环境体检' : '环境'}
       </h2>
       <p className="panel__hint">{CONDA_ENV_NOTICE}</p>
+      {compact && (
+        <>
+          <pre className="tools__remediation">
+            <code>conda create -n lsci python=3.13</code>
+          </pre>
+          <pre className="tools__remediation">
+            <code>conda create -n lsci-r</code>
+          </pre>
+        </>
+      )}
       {loading && (
         <p className="pcard__busy" role="status">
           正在检查环境…
@@ -102,6 +112,21 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
               {line}
             </p>
           ))}
+          {doctor.blockers.length > 0 && (
+            <ul>
+              {doctor.blockers.map((blocker) => (
+                <li key={blocker.id}>
+                  <strong>{blocker.what}</strong>
+                  <p className="panel__hint">{blocker.consequence}</p>
+                  {blocker.command !== '' && (
+                    <pre className="tools__remediation">
+                      <code>{blocker.command}</code>
+                    </pre>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
           {doctor.gaps.length > 0 && (
             <ul>
               {doctor.gaps.map((gap) => (
