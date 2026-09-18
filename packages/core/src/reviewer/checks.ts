@@ -323,10 +323,10 @@ export function checkClaimSupport(input: {
     findings.push({
       severity: 'fail',
       category: 'claim',
-      title: `断言没有任何证据：${claim.locator ?? claim.id}`,
+      title: `这条断言还没有证据：${claim.locator ?? claim.id}`,
       detail:
         `「${claim.text.slice(0, 300)}」\n\n` +
-        '这是一条已确认需要核验的断言，但 Claim Ledger 里没有任何证据绑定到它。\n' +
+        '这是一条已确认需要核验的断言，但 Claim Ledger 里没有任何证据绑定到它。去补证据。\n' +
         (claim.numbers.length > 0
           ? `它声称的数值：${claim.numbers.join('、')}。这些数字必须能指到产生它们的分析输出。\n`
           : '') +

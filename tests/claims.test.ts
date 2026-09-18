@@ -32,6 +32,7 @@ import {
   VERDICT_LABEL,
   checkClaimSupport,
   classifyClaim,
+  createManageClaimsTool,
   extractClaims,
   parseReviewOutput,
   splitSentences,
@@ -758,6 +759,53 @@ describe('汇总', () => {
     const lib = ledger();
     lib.register({ text: 'Unsupported claim (p = 0.01).', origin: 'user' });
     expect(lib.gateSummary()).toContain('不应宣称手稿完成');
+  });
+
+  it('unsupported confirmed claim copy includes 去补证据', async () => {
+    const lib = ledger();
+    const registered = lib.register({
+      text: 'Confirmed claim without evidence (p = 0.01).',
+      origin: 'user',
+    });
+    const claim = registered.claim;
+    expect(registered.ok).toBe(true);
+    expect(claim).not.toBeNull();
+    if (claim === null) return;
+
+    const summary = lib.gateSummary();
+    expect(summary).toContain('这条断言还没有证据');
+    expect(summary).toContain('去补证据');
+    expect(summary).toContain('阻断');
+
+    const findings = checkClaimSupport({
+      claims: [
+        {
+          id: claim.id,
+          text: claim.text,
+          locator: claim.locator,
+          status: claim.status,
+          origin: claim.origin,
+          numbers: claim.numbers,
+          evidence: [],
+        },
+      ],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe('fail');
+    expect(findings[0]?.title).toContain('这条断言还没有证据');
+    expect(findings[0]?.detail).toContain('去补证据');
+
+    const tool = createManageClaimsTool({ ledger: () => lib });
+    const got = await tool.execute(
+      { action: 'get', claimId: claim.id },
+      { projectId: 'p', conversationId: 'c', workspaceDir: root },
+    );
+    expect(got.ok).toBe(true);
+    expect(got.output.kind).toBe('text');
+    if (got.output.kind === 'text') {
+      expect(got.output.text).toContain('这条断言还没有证据');
+      expect(got.output.text).toContain('去补证据');
+    }
   });
 
   it('空库时 gateSummary 如实说没有断言', () => {

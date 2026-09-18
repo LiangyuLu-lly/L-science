@@ -13,7 +13,11 @@ import type { ClaimEvidenceKind, ClaimVerdict } from '../repo/claims.js';
 import { CLAIM_STATUS_LABEL, EVIDENCE_KIND_LABEL, VERDICT_LABEL } from '../repo/claims.js';
 import type { ClaimKind } from './extract.js';
 import { CLAIM_KIND_LABEL } from './extract.js';
-import type { ClaimLedger } from './ledger.js';
+import {
+  UNSUPPORTED_CONFIRMED_CTA,
+  UNSUPPORTED_CONFIRMED_FACT,
+  type ClaimLedger,
+} from './ledger.js';
 
 export interface ClaimToolOptions {
   ledger: () => ClaimLedger;
@@ -452,7 +456,11 @@ export function createManageClaimsTool(options: ClaimToolOptions): ToolDefinitio
 
           lines.push('', `证据（${String(claim.evidence.length)} 条）：`);
           if (claim.evidence.length === 0) {
-            lines.push('  无。这条断言在审查里会被标为无证据。');
+            lines.push(
+              claim.origin === 'extracted'
+                ? '  无。这条断言在审查里会被标为无证据。'
+                : `  无。${UNSUPPORTED_CONFIRMED_FACT}。${UNSUPPORTED_CONFIRMED_CTA}。`,
+            );
           } else {
             for (const evidence of claim.evidence) {
               lines.push(

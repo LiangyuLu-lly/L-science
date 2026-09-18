@@ -69,6 +69,12 @@ export interface RegisterResult {
   reason: string | null;
 }
 
+/** 已确认但未绑证据时给人看的事实句。严重度仍是 fail，界面用「阻断」标出来。 */
+export const UNSUPPORTED_CONFIRMED_FACT = '这条断言还没有证据';
+
+/** 下一步。不去补，审查照样开 FAIL。 */
+export const UNSUPPORTED_CONFIRMED_CTA = '去补证据';
+
 export interface ExtractRegisterResult {
   extraction: ExtractResult;
   created: readonly ClaimRecord[];
@@ -645,10 +651,14 @@ export class ClaimLedger {
       `证据矛盾 ${String(s.refuted)}`,
       `已支持 ${String(s.supported)}`,
     ];
+    const confirmedUnsupported = this.unsupported(scope).confirmed.length;
     const tail =
       s.blocking === 0
         ? '没有阻断项。'
-        : `**${String(s.blocking)} 条阻断项**（无证据或证据矛盾），在它们处理完之前不应宣称手稿完成。`;
+        : `**${String(s.blocking)} 条阻断项**（无证据或证据矛盾），在它们处理完之前不应宣称手稿完成。` +
+          (confirmedUnsupported > 0
+            ? `${UNSUPPORTED_CONFIRMED_FACT}。${UNSUPPORTED_CONFIRMED_CTA}。`
+            : '');
     return `${parts.join('，')}。${tail}`;
   }
 }
