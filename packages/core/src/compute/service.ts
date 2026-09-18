@@ -732,7 +732,14 @@ export class ComputeService {
       activate: target.config.family === 'ssh' ? target.config.activate : null,
     });
 
-    const submitted = await this.#submit({ target, scheduler, script, paths, spec });
+    const submitted = await this.#submit({
+      target,
+      scheduler,
+      script,
+      paths,
+      spec,
+      conversationId: input.conversationId,
+    });
 
     if (!submitted.ok || submitted.externalId === null) {
       this.#deps.jobs.setState({
@@ -781,9 +788,10 @@ export class ComputeService {
     script: string;
     paths: JobPaths;
     spec: JobSpec;
+    conversationId: string | null;
   }): Promise<{ ok: boolean; externalId: string | null; detail: string }> {
     if (input.target.config.family === 'byoc') {
-      return this.#submitByoc(input.target, input.spec, input.script);
+      return this.#submitByoc(input.target, input.spec, input.script, input.conversationId);
     }
 
     const commands = submitCommands({
@@ -826,6 +834,7 @@ export class ComputeService {
     target: ComputeTargetRecord,
     spec: JobSpec,
     script: string,
+    conversationId: string | null,
   ): Promise<{ ok: boolean; externalId: string | null; detail: string }> {
     if (target.config.family !== 'byoc') {
       return { ok: false, externalId: null, detail: '目标类型不是 byoc' };
@@ -852,7 +861,7 @@ export class ComputeService {
         workdir: dir,
       });
 
-      const result = await this.#execByoc(config, command, 120_000);
+      const result = await this.#execByoc(target, command, 120_000, conversationId);
       if (!result.ok) {
         return {
           ok: false,
@@ -1062,7 +1071,7 @@ export class ComputeService {
     const config = target.config;
 
     const command = fillTemplate(config.statusTemplate, { jobId: job.externalId });
-    const result = await this.#execByoc(config, command, 60_000);
+    const result = await this.#execByoc(target, command, 60_000, job.conversationId);
     if (!result.ok && result.stdout.trim() === '') return null;
 
     const text = `${result.stdout}\n${result.stderr}`;
@@ -1190,9 +1199,10 @@ export class ComputeService {
         };
       }
       result = await this.#execByoc(
-        target.config,
+        target,
         fillTemplate(target.config.cancelTemplate, { jobId: job.externalId }),
         60_000,
+        job.conversationId,
       );
     } else {
       result = await this.#exec(target, cancelCommand(schedulerOf(target), job.externalId), 45_000);
@@ -1267,16 +1277,30 @@ export class ComputeService {
 
   /** 跑一条 BYOC 模板命令。按 `runVia` 决定在哪跑。 */
   async #execByoc(
-    config: Extract<ComputeTargetConfig, { family: 'byoc' }>,
+    target: ComputeTargetRecord,
     command: string,
     timeoutMs: number,
+    conversationId: string | null,
   ): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number | null }> {
+    if (target.config.family !== 'byoc') {
+      return { ok: false, stdout: '', stderr: '目标类型不是 byoc', exitCode: null };
+    }
+    const config = target.config;
     if (config.runVia === 'local') {
+      const credentialEnv = await this.#credentialEnv(target, conversationId);
+      if (!credentialEnv.ok) {
+        return {
+          ok: false,
+          stdout: '',
+          stderr: credentialEnv.reason,
+          exitCode: null,
+        };
+      }
       const result = await runLocalShell({
         command,
         shell: defaultLocalShell(),
         timeoutMs,
-        ...(await this.#credentialEnv(config)),
+        ...(credentialEnv.env === undefined ? {} : { env: credentialEnv.env }),
       });
       return {
         ok: result.ok,
@@ -1295,6 +1319,7 @@ export class ComputeService {
         exitCode: null,
       };
     }
+    // 远端 BYOC 只用机器上已有的环境凭据，不把 vault 明文送进 ssh 命令行.
     const result = await runSsh({
       config: withFingerprint(via) as SshTargetConfig,
       script: command,
@@ -1318,10 +1343,33 @@ export class ComputeService {
    * 后果是认证失败，而认证失败的报错通常不会提到我们改过它的形状。
    */
   async #credentialEnv(
-    config: Extract<ComputeTargetConfig, { family: 'byoc' }>,
-  ): Promise<{ env?: Record<string, string> }> {
-    void config;
-    return {};
+    target: ComputeTargetRecord,
+    conversationId: string | null,
+  ): Promise<
+    | { readonly ok: true; readonly env?: Record<string, string> }
+    | { readonly ok: false; readonly reason: string }
+  > {
+    if (
+      target.config.family !== 'byoc' ||
+      target.config.runVia !== 'local' ||
+      target.credentialRef === null
+    ) {
+      return { ok: true };
+    }
+    const decision = await this.#deps.gate.authorizeCredential({
+      target,
+      credentialRef: target.credentialRef,
+      purpose: '执行 BYOC 模板命令',
+      conversationId,
+    });
+    if (!decision.ok) {
+      return { ok: false, reason: decision.reason ?? '凭据未授权' };
+    }
+    const secret = this.#deps.vault?.get(target.credentialRef);
+    if (secret === undefined || secret === null || secret === '') {
+      return { ok: true };
+    }
+    return { ok: true, env: { LSCI_COMPUTE_CREDENTIAL: secret } };
   }
 
   #emit(event: JobEvent): void {

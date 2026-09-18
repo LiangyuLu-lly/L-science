@@ -15,9 +15,10 @@
  * 6. **配置校验**。每条拒绝都要带可执行的说明。
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -29,6 +30,7 @@ import {
   ComputeJobsRepo,
   ComputeService,
   ComputeTargetsRepo,
+  CredentialVault,
   JOB_STATE_LABEL,
   MAX_GRANT_SCOPE,
   SAFE_SSH_OPTIONS,
@@ -1188,6 +1190,155 @@ describe('审批门控', () => {
     expect(result.reason).toContain('OOM');
     // 被并发上限挡住时不该已经弹过审批卡片
     expect(approvals.cards).toHaveLength(0);
+  });
+
+  describe('BYOC 凭据环境（需求 14.4）', () => {
+    const canary = 'sk_test_lock_9f3c_BYOC_NOT_FOR_LOGS';
+    const credProbeTemplate =
+      "node -e \"process.stdout.write('cred=' + ('LSCI_COMPUTE_CREDENTIAL' in process.env ? '1' : '0') + '\\nJ1')\"";
+    const serviceSrc = resolve(
+      fileURLToPath(new URL('../packages/core/src/compute/service.ts', import.meta.url)),
+    );
+
+    let vault: CredentialVault;
+    let logs: string[];
+    let service: ComputeService | null;
+
+    const makeByocService = (approvals: FakeApproval): ComputeService => {
+      const created = new ComputeService({
+        projectId,
+        targets,
+        jobs,
+        grants,
+        gate: new ComputeGate({
+          approvals: () => approvals as never,
+          grants,
+          projectId,
+          vault,
+        }),
+        artifacts,
+        vault,
+        onLog: (line) => {
+          logs.push(line);
+        },
+      });
+      service = created;
+      return created;
+    };
+
+    const addByocTarget = (credentialRef: string | null): string =>
+      targets.add({
+        name: 'byoc-cred',
+        family: 'byoc',
+        config: {
+          ...BYOC_CONFIG,
+          submitTemplate: credProbeTemplate,
+          jobIdPattern: '(J1)',
+        },
+        credentialRef,
+      }).id;
+
+    beforeEach(() => {
+      vault = new CredentialVault(join(root, 'vault.bin'));
+      vault.set('byoc:runai', canary);
+      logs = [];
+      service = null;
+    });
+
+    afterEach(() => {
+      service?.close();
+    });
+
+    it('本地 runVia 在授权通过后注入 LSCI_COMPUTE_CREDENTIAL 且日志不含明文', async () => {
+      addByocTarget('byoc:runai');
+      const approvals = makeApprovals(() => ({
+        state: 'approved',
+        scope: 'once',
+        expiresAt: null,
+      }));
+      const svc = makeByocService(approvals);
+
+      const result = await svc.submitJob({
+        targetRef: 'byoc-cred',
+        spec: { name: 'probe', script: 'true' },
+        conversationId: null,
+      });
+
+      const stdout = result.job?.detail ?? '';
+      const stderr = result.reason ?? '';
+      expect(result.ok).toBe(true);
+      expect(stdout).toContain('cred=1');
+      const leaked = [stdout, stderr, JSON.stringify(approvals.cards), ...logs].some((s) =>
+        s.includes(canary),
+      );
+      expect(leaked).toBe(false);
+    });
+
+    it('未绑定 credentialRef 时不设置该环境变量', async () => {
+      addByocTarget(null);
+      const approvals = makeApprovals(() => ({
+        state: 'approved',
+        scope: 'once',
+        expiresAt: null,
+      }));
+      const svc = makeByocService(approvals);
+
+      const result = await svc.submitJob({
+        targetRef: 'byoc-cred',
+        spec: { name: 'probe', script: 'true' },
+        conversationId: null,
+      });
+
+      const stdout = result.job?.detail ?? '';
+      const stderr = result.reason ?? '';
+      expect(result.ok).toBe(true);
+      expect(stdout).toContain('cred=0');
+      const leaked = [stdout, stderr, JSON.stringify(approvals.cards)].some((s) =>
+        s.includes(canary),
+      );
+      expect(leaked).toBe(false);
+    });
+
+    it('凭据授权被拒时不注入', async () => {
+      addByocTarget('byoc:runai');
+      const approvals = makeApprovals((draft) => {
+        if (draft.kind === 'compute-provider') {
+          return { state: 'denied', fromPriorDenial: false };
+        }
+        return { state: 'approved', scope: 'once', expiresAt: null };
+      });
+      const svc = makeByocService(approvals);
+
+      const result = await svc.submitJob({
+        targetRef: 'byoc-cred',
+        spec: { name: 'probe', script: 'true' },
+        conversationId: null,
+      });
+
+      const stdout = result.job?.detail ?? '';
+      const stderr = result.reason ?? '';
+      expect(result.ok).toBe(false);
+      expect(`${stdout}\n${stderr}`).toMatch(/凭据|拒绝/u);
+      expect(stdout).not.toContain('cred=1');
+      const leaked = [stdout, stderr, JSON.stringify(approvals.cards)].some((s) =>
+        s.includes(canary),
+      );
+      expect(leaked).toBe(false);
+    });
+
+    it('ssh runVia 不把凭据写进命令环境（远端用环境里已有的凭据）', () => {
+      const src = readFileSync(serviceSrc, 'utf8');
+      const execStart = src.indexOf('async #execByoc(');
+      expect(execStart).toBeGreaterThan(-1);
+      const credStart = src.indexOf('async #credentialEnv(', execStart);
+      expect(credStart).toBeGreaterThan(execStart);
+      const execByoc = src.slice(execStart, credStart);
+      const sshCall = execByoc.indexOf('runSsh({');
+      expect(sshCall).toBeGreaterThan(-1);
+      const sshBlock = execByoc.slice(sshCall, execByoc.indexOf('});', sshCall) + 3);
+      expect(sshBlock).not.toMatch(/\benv\s*:/u);
+      expect(sshBlock).not.toContain('#credentialEnv');
+    });
   });
 });
 
