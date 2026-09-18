@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react';
 
 import { listTools, type ToolListing } from '../lib/api.js';
+import { pythonKernelGapBanner, rankUnavailableTools } from '../lib/unavailable-tools.js';
 
 import { EnvDoctorSection } from './FirstRunOverlay.js';
 
@@ -72,6 +73,11 @@ export function ToolsPanel({ projectId }: { projectId: string | null }): React.J
     );
   }
 
+  const rankedUnavailable = rankUnavailableTools(listing.unavailable);
+  const gapBanner = pythonKernelGapBanner({
+    remediations: rankedUnavailable.flatMap((tool) => tool.missing.map((gap) => gap.remediation)),
+  });
+
   return (
     <div className="view">
       <EnvDoctorSection compact />
@@ -107,17 +113,32 @@ export function ToolsPanel({ projectId }: { projectId: string | null }): React.J
         </ul>
       </section>
 
-      {listing.unavailable.length > 0 && (
+      {rankedUnavailable.length > 0 && (
         <section className="panel panel--warn" aria-labelledby="unavailable-heading">
           <h2 id="unavailable-heading" className="panel__title">
-            不可用的工具（{listing.unavailable.length}）
+            不可用的工具（{rankedUnavailable.length}）
           </h2>
           <p className="panel__hint">
             这些工具没有暴露给模型——注册一个一调用就失败的工具只会让它反复重试。
             装好依赖并重启后端即可启用。
           </p>
           <ul className="tools">
-            {listing.unavailable.map((tool) => (
+            {gapBanner !== null && (
+              <li className="tools__item tools__item--unavailable">
+                {gapBanner.split('\n').map((line, index) =>
+                  index === 0 ? (
+                    <p key="gap-copy" className="tools__desc">
+                      {line}
+                    </p>
+                  ) : (
+                    <pre key={line} className="tools__remediation">
+                      <code>{line}</code>
+                    </pre>
+                  ),
+                )}
+              </li>
+            )}
+            {rankedUnavailable.map((tool) => (
               <li key={tool.name} className="tools__item tools__item--unavailable">
                 <code className="tools__name">{tool.name}</code>
                 <ul className="tools__missing">
