@@ -332,11 +332,29 @@ export function createKernelTool(options: KernelToolOptions): ToolDefinition<Cod
        * 没有这一步的话，用户点「中断」只会 abort 编排器的控制器，而正在跑的
        * Python cell 完全不受影响——它会继续跑到结束，期间内核被占住，
        * 用户的下一条消息还会撞上「该内核已有执行在途」。表现是「点了停止没反应」。
+       *
+       * 必须等 interrupt 的真实结果：`restarted` 会清空变量，不能当成
+       * KeyboardInterrupt 成功。真中断（`interrupted`）仍走原来的执行输出。
        */
+      let interruptDone: Promise<'idle' | 'interrupted' | 'restarted' | false> | null = null;
       const onAbort = (): void => {
-        void options.pool.interrupt(kernelKey, options.language).catch(() => undefined);
+        interruptDone = options.pool
+          .interrupt(kernelKey, options.language)
+          .catch(() => false as const);
       };
       ctx.signal?.addEventListener('abort', onAbort, { once: true });
+
+      const afterInterrupt = async (fallback: ToolResult): Promise<ToolResult> => {
+        if (interruptDone === null) return fallback;
+        const outcome = await interruptDone;
+        if (outcome === 'restarted') {
+          return {
+            ok: false,
+            output: { kind: 'text', text: '已中断并重启内核，变量已清空' },
+          };
+        }
+        return fallback;
+      };
 
       try {
         const outputs = kernel.execute(
@@ -344,11 +362,11 @@ export function createKernelTool(options: KernelToolOptions): ToolDefinition<Cod
           input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs },
         );
         const collected = await collectExecution(outputs, ctx.onPartial);
-        return formatExecution(collected);
+        return await afterInterrupt(formatExecution(collected));
       } catch (err) {
         // 执行期抛错（内核崩溃、超时中断失败退化为重启）与代码本身报错不同：
         // 后者由 collected.error 表达，这里是基础设施层面的失败
-        return {
+        return await afterInterrupt({
           ok: false,
           output: {
             kind: 'error',
@@ -356,7 +374,7 @@ export function createKernelTool(options: KernelToolOptions): ToolDefinition<Cod
             evalue: err instanceof Error ? err.message : String(err),
             traceback: [],
           },
-        };
+        });
       } finally {
         // 摘掉监听器。不摘的话一个长会话里的每次执行都会往同一个 signal 上挂一个，
         // 而它们全都指向已经结束的执行

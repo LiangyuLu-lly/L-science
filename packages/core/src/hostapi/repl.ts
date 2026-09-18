@@ -264,7 +264,7 @@ export class ControlRepl {
 
   /** 中断单例内核里正在跑的代码。 */
   async interrupt(): Promise<boolean> {
-    return this.#opts.pool.interrupt(this.#singletonKey, 'python');
+    return (await this.#opts.pool.interrupt(this.#singletonKey, 'python')) !== false;
   }
 
   /** 关掉单例内核。后端退出时用。 */

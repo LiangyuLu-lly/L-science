@@ -19,7 +19,7 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { InterruptEvent, win32Available } from '@l-science/core';
+import { InterruptEvent, createKernelTool, win32Available } from '@l-science/core';
 import {
   JupyterKernel,
   KernelPool,
@@ -204,7 +204,7 @@ describe.skipIf(!canRun)('内核池注入中断事件', () => {
       await kernel.executeToCompletion('import time\nkeep = "yes"');
 
       const iter = kernel.execute('for _ in range(200): time.sleep(0.1)');
-      let interruptPromise: Promise<boolean> | null = null;
+      let interruptPromise: Promise<'idle' | 'interrupted' | 'restarted' | false> | null = null;
       setTimeout(() => {
         interruptPromise = pool.interrupt('conv-int', 'python');
       }, 900);
@@ -318,4 +318,104 @@ describe.skipIf(available.python === null)('重启的自递归防护', () => {
     },
     SLOW,
   );
+});
+
+describe('中断结果回传到工具输出', () => {
+  it('restarted interrupt surfaces 已中断并重启内核，变量已清空', async () => {
+    let failExecute: ((err: Error) => void) | undefined;
+    let executing: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      executing = resolve;
+    });
+
+    const pool = {
+      acquire: async () => ({
+        execute: () => ({
+          async *[Symbol.asyncIterator]() {
+            await new Promise<never>((_, reject) => {
+              failExecute = reject;
+              executing?.();
+            });
+          },
+        }),
+      }),
+      interrupt: async () => {
+        failExecute?.(new Error('kernel restarted'));
+        return 'restarted' as const;
+      },
+    };
+
+    const tool = createKernelTool({ pool: pool as never, language: 'python' });
+    const controller = new AbortController();
+    const pending = tool.execute(
+      { code: 'while True: pass' },
+      {
+        projectId: 'p',
+        conversationId: 'c',
+        workspaceDir: root,
+        signal: controller.signal,
+      },
+    );
+
+    await started;
+    controller.abort();
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.output).toMatchObject({
+      kind: 'text',
+      text: '已中断并重启内核，变量已清空',
+    });
+  });
+
+  it('true interrupt keeps KeyboardInterrupt instead of the restart sentence', async () => {
+    let executing: (() => void) | undefined;
+    let release: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      executing = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const pool = {
+      acquire: async () => ({
+        execute: () => ({
+          async *[Symbol.asyncIterator]() {
+            executing?.();
+            await released;
+            yield {
+              type: 'error' as const,
+              ename: 'KeyboardInterrupt',
+              evalue: '',
+              traceback: ['KeyboardInterrupt'],
+            };
+          },
+        }),
+      }),
+      interrupt: async () => {
+        release?.();
+        return 'interrupted' as const;
+      },
+    };
+
+    const tool = createKernelTool({ pool: pool as never, language: 'python' });
+    const controller = new AbortController();
+    const pending = tool.execute(
+      { code: 'while True: pass' },
+      {
+        projectId: 'p',
+        conversationId: 'c',
+        workspaceDir: root,
+        signal: controller.signal,
+      },
+    );
+
+    await started;
+    controller.abort();
+    const result = await pending;
+
+    expect(result.output).toMatchObject({ kind: 'error', ename: 'KeyboardInterrupt' });
+    expect(JSON.stringify(result.output)).not.toContain('已中断并重启内核，变量已清空');
+  });
 });

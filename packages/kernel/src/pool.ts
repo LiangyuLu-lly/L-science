@@ -251,11 +251,20 @@ export class KernelPool {
     return true;
   }
 
-  async interrupt(conversationId: string, language: KernelLanguage): Promise<boolean> {
+  /**
+   * 中断指定内核的在途执行。
+   *
+   * 返回内核实际做了什么：`false` 表示池里没有这个内核；其余与
+   * `JupyterKernel.interrupt` 相同。调用方必须区分 `interrupted` 与
+   * `restarted`——后者会清空变量，不能当成中断成功。
+   */
+  async interrupt(
+    conversationId: string,
+    language: KernelLanguage,
+  ): Promise<'idle' | 'interrupted' | 'restarted' | false> {
     const entry = this.#entries.get(keyOf(conversationId, language));
     if (entry === undefined) return false;
-    await entry.kernel.interrupt();
-    return true;
+    return entry.kernel.interrupt();
   }
 
   async shutdown(conversationId: string, language: KernelLanguage): Promise<boolean> {
