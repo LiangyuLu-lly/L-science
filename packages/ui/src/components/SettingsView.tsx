@@ -69,6 +69,11 @@ function fingerprintText(fp: CredentialFingerprint | null): string {
   return `${String(fp.length)} 字符，末四位 ${fp.tail}`;
 }
 
+/** Same convention as core `providerRef`. UI must not import the vault module. */
+function providerRef(providerId: string): string {
+  return `provider:${providerId}`;
+}
+
 /** 健康状态徽章。颜色之外必须有文字，不能只靠颜色传达（需求 20.5.2）。 */
 function HealthBadge({ health }: { health: ModelRecord['health'] }): React.JSX.Element {
   if (health === null) {
@@ -393,11 +398,13 @@ function CredentialSection({
   available,
   credentials,
   usedRefs,
+  providerIds,
   onChanged,
 }: {
   available: boolean;
   credentials: ReadonlyArray<{ ref: string; fingerprint: CredentialFingerprint | null }>;
   usedRefs: ReadonlySet<string>;
+  providerIds: readonly string[];
   onChanged: () => void;
 }): React.JSX.Element {
   const [ref, setRef] = useState('');
@@ -500,6 +507,33 @@ function CredentialSection({
         }}
       >
         <div className="cred-form__field">
+          <label htmlFor="cred-provider">供应商</label>
+          <select
+            id="cred-provider"
+            value={providerIds.find((id) => providerRef(id) === ref) ?? ''}
+            disabled={busy}
+            onChange={(e) => {
+              const id = e.target.value;
+              if (id === '') {
+                setRef('');
+                return;
+              }
+              setRef(providerRef(id));
+            }}
+          >
+            <option value="">（选择供应商以填入引用名）</option>
+            {providerIds.map((id) => (
+              <option key={id} value={id}>
+                {id}
+              </option>
+            ))}
+          </select>
+          <span className="cred-form__hint">
+            选中后写入 <code>provider:&lt;id&gt;</code>，也可在引用名里手改。
+          </span>
+        </div>
+
+        <div className="cred-form__field">
           <label htmlFor="cred-ref">引用名</label>
           <input
             id="cred-ref"
@@ -600,6 +634,7 @@ export function SettingsView({ onRegisterModels }: { onRegisterModels: () => voi
         available={vaultAvailable}
         credentials={credentials}
         usedRefs={usedRefs}
+        providerIds={providers.map((p) => p.id)}
         onChanged={reload}
       />
 
