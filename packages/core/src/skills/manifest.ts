@@ -128,6 +128,13 @@ export interface LoadedSkill {
   providerScript: string | null;
   /** 解析期发现的问题。不阻止加载，但要透出给用户。 */
   warnings: readonly string[];
+  /**
+   * 非空时该技能不进入生效目录，但必须在 UI 里展示原因。
+   *
+   * 与 broken 不同：清单是合法的，只是平台故意不启用（例如缺少原生 PDF 抽取）。
+   * 静默从目录里拿掉会让用户以为技能没装上。
+   */
+  unavailableReason: string | null;
 }
 
 export class SkillManifestError extends Error {

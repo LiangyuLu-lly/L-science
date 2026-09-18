@@ -8,7 +8,7 @@
  *    一个逗号写错就会被抓到。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -654,6 +654,34 @@ describe('内置技能目录（需求 9.7）', () => {
       const hits = index.search(query, { limit: 3 });
       const slugs = hits.map((h) => h.slug);
       expect(slugs, `${query} -> ${slugs.join(',')}`).toContain(expected);
+    }
+  });
+
+  it('pdf-explore is catalog-unavailable with python remediation and no native pdf dep', () => {
+    const catalog = loadSkillCatalog({
+      builtinDir: builtinSource,
+      userDir: join(root, 'empty-user'),
+    });
+
+    expect(catalog.skills.has('pdf-explore')).toBe(false);
+    expect(catalog.broken.some((b) => b.dirName === 'pdf-explore')).toBe(false);
+
+    const entry = catalog.unavailable.find((s) => s.manifest.slug === 'pdf-explore');
+    expect(entry).toBeDefined();
+    expect(entry?.unavailableReason).toMatch(/pypdf/);
+    expect(entry?.unavailableReason).toMatch(/pdfplumber/);
+
+    const pkgFiles = [
+      join(repoRoot, 'package.json'),
+      ...readdirSync(join(repoRoot, 'packages'), { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => join(repoRoot, 'packages', e.name, 'package.json'))
+        .filter((p) => existsSync(p)),
+    ];
+    expect(pkgFiles.length).toBeGreaterThan(0);
+    for (const pkg of pkgFiles) {
+      const text = readFileSync(pkg, 'utf8');
+      expect(text, pkg).not.toMatch(/pdfjs-dist|pdf-parse|pdfjs/);
     }
   });
 });

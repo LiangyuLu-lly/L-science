@@ -40,6 +40,31 @@ export interface SkillCatalog {
   /** 被用户技能遮蔽的内置技能。要能查到，否则「我的改动生效了吗」无从确认。 */
   shadowed: readonly LoadedSkill[];
   broken: readonly BrokenSkill[];
+  /**
+   * 清单合法但不进入生效目录的技能。必须带原因展示，不能静默省略。
+   */
+  unavailable: readonly LoadedSkill[];
+}
+
+/**
+ * 内置技能的目录拒绝名单。skill.json 的 unavailableReason 优先；
+ * 这里是防止有人删掉字段后 pdf-explore 又被当成可用技能检索到。
+ */
+const CATALOG_UNAVAILABLE: Readonly<Record<string, string>> = {
+  'pdf-explore':
+    'read_file 未接入原生 PDF 抽取。请用 python 工具读取：pypdf 或 pdfplumber。',
+};
+
+function catalogUnavailableReason(raw: unknown, slug: string, scope: SkillScope): string | null {
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw) && 'unavailableReason' in raw) {
+    const value = raw.unavailableReason;
+    if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  }
+  if (scope === 'builtin') {
+    const denylist = CATALOG_UNAVAILABLE[slug];
+    if (denylist !== undefined) return denylist;
+  }
+  return null;
 }
 
 export interface LoadSkillsOptions {
@@ -165,6 +190,7 @@ export function loadSkill(dir: string, scope: SkillScope): LoadedSkill {
     provider,
     providerScript,
     warnings,
+    unavailableReason: catalogUnavailableReason(raw, manifest.slug, scope),
   };
 }
 
@@ -236,7 +262,15 @@ export function loadSkillCatalog(options: LoadSkillsOptions): SkillCatalog {
     skills.set(slug, skill);
   }
 
-  return { skills, shadowed, broken };
+  const unavailable: LoadedSkill[] = [];
+  for (const [slug, skill] of [...skills]) {
+    if (skill.unavailableReason !== null) {
+      unavailable.push(skill);
+      skills.delete(slug);
+    }
+  }
+
+  return { skills, shadowed, broken, unavailable };
 }
 
 /**

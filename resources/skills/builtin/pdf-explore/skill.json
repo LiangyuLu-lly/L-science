@@ -13,5 +13,6 @@
   "requires": {
     "capabilities": ["kernel:python"]
   },
-  "tools": ["read_file", "python", "save_artifacts"]
+  "tools": ["read_file", "python", "save_artifacts"],
+  "unavailableReason": "read_file 未接入原生 PDF 抽取。请用 python 工具读取：pypdf 或 pdfplumber。"
 }

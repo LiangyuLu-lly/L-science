@@ -478,6 +478,15 @@ describe('read_file 工具', () => {
     expect(result.output).toMatchObject({ ename: 'PdfSupportMissing' });
   });
 
+  it('未接入抽取器时指定页码仍报 PdfSupportMissing 并给出 python 补救', async () => {
+    writeFileSync(join(workspace, 'p.pdf'), Buffer.from('%PDF-1.7\ncontent', 'latin1'));
+    const result = await tool().execute({ path: 'p.pdf', page: 1 }, ctx());
+    expect(result.output).toMatchObject({ ename: 'PdfSupportMissing' });
+    const evalue = (result.output as { evalue: string }).evalue;
+    expect(evalue).toMatch(/pypdf/);
+    expect(evalue).toMatch(/pdfplumber/);
+  });
+
   it('接入抽取器后可按页读 PDF', async () => {
     writeFileSync(join(workspace, 'p.pdf'), Buffer.from('%PDF-1.7\ncontent', 'latin1'));
     const withPdf = createReadFileTool({

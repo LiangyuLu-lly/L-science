@@ -62,7 +62,7 @@ export class SkillManager {
   readonly #repo: SkillRepo;
   readonly #onLog: (line: string) => void;
 
-  #catalog: SkillCatalog = { skills: new Map(), shadowed: [], broken: [] };
+  #catalog: SkillCatalog = { skills: new Map(), shadowed: [], broken: [], unavailable: [] };
   #index = new SkillSearchIndex([]);
   #requirements = new Map<string, RequirementReport>();
   /** 嵌入层是否已就绪。构建失败时保持 false 并只走词法层。 */
@@ -101,7 +101,7 @@ export class SkillManager {
     });
 
     const skills = [...this.#catalog.skills.values()];
-    this.#repo.sync(skills);
+    this.#repo.sync([...skills, ...this.#catalog.unavailable]);
 
     for (const skill of skills) {
       for (const warning of skill.warnings) {
@@ -110,6 +110,9 @@ export class SkillManager {
     }
     for (const broken of this.#catalog.broken) {
       this.#onLog(`技能加载失败 ${broken.dirName}：${broken.reason}`);
+    }
+    for (const skill of this.#catalog.unavailable) {
+      this.#onLog(`技能不可用 ${skill.manifest.slug}：${skill.unavailableReason ?? ''}`);
     }
 
     // 只把用户启用的技能放进索引：禁用的技能被检索命中再告诉用户「它被你关了」

@@ -908,6 +908,20 @@ export function SkillsView({ projectId, conversationId }: SkillsViewProps): Reac
         </section>
       )}
 
+      {catalog !== null && catalog.unavailable.length > 0 && (
+        <section className="skillsview__unavailable" aria-label="当前不可用的技能">
+          <h3>当前不可用（{catalog.unavailable.length}）</h3>
+          {/* 不能静默从目录拿掉：用户会以为技能没装上，而真正缺的是原生能力 */}
+          <ul>
+            {catalog.unavailable.map((u) => (
+              <li key={u.path}>
+                <code>{u.slug}</code>（{u.scope === 'builtin' ? '内置' : '自建'}）：{u.reason}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {catalog !== null && catalog.shadowed.length > 0 && (
         <section className="skillsview__shadowed" aria-label="被遮蔽的内置技能">
           <h3>被自建技能遮蔽的内置技能（{catalog.shadowed.length}）</h3>
