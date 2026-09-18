@@ -706,9 +706,7 @@ async function main(): Promise<void> {
       python: probePythonModules(kernelEnvs.python?.executable ?? null),
       r: probeRPackages(kernelEnvs.r?.rscript ?? null),
       commands: probeCommands(),
-      // 连接器要到 M5 才有，此刻恒为空集：声明了连接器依赖的技能会如实报「缺失」，
-      // 而不是假装满足
-      connectors: () => new Set<string>(),
+      connectors: () => new Set(connectorRepo.listEffective().map((c) => c.id)),
       capabilities: () => capabilities.available,
     },
     ...(capabilities.pythonEnv === null ? {} : { pythonEnv: capabilities.pythonEnv }),
@@ -3209,6 +3207,8 @@ async function main(): Promise<void> {
     }
 
     syncConnectorDomains();
+    skills.reload();
+    void skills.buildVectors();
 
     return {
       groups: connectorRepo.listGroups(),

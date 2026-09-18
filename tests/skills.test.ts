@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   AppStore,
+  BUILTIN_CONNECTORS,
   SkillManager,
   SkillManifestError,
   SkillSearchIndex,
@@ -492,6 +493,62 @@ describe('依赖检查', () => {
     expect(r.satisfied).toBe(true);
     expect(called).toBe(false);
   });
+
+  it('连接器缺失时 kind 为 connector 并给出启用指引', () => {
+    const r = checkRequirements({
+      requires: { connectors: ['pubmed'] },
+      probes: probes({}),
+    });
+    expect(r.satisfied).toBe(false);
+    expect(r.missing[0]?.kind).toBe('connector');
+    expect(r.missing[0]?.remediation).toContain('启用连接器');
+  });
+
+  it('连接器在探针集合内时满足', () => {
+    const r = checkRequirements({
+      requires: { connectors: ['pubmed'] },
+      probes: probes({ pubmed: true }),
+    });
+    expect(r.satisfied).toBe(true);
+    expect(r.missing).toHaveLength(0);
+  });
+
+  it('连接器探针变化后必须 reload 才会更新依赖缓存', () => {
+    const builtinDir = join(root, 'builtin-conn');
+    const userDir = join(root, 'user-conn');
+    mkdirSync(builtinDir, { recursive: true });
+    mkdirSync(userDir, { recursive: true });
+    writeSkill(builtinDir, 'needs-conn', { requires: { connectors: ['pubmed'] } });
+
+    const present = new Set<string>();
+    const store = AppStore.open(join(root, 'app-conn'));
+    try {
+      const manager = new SkillManager({
+        builtinDir,
+        userDir,
+        db: store.db,
+        probes: {
+          python: (n) => ({ present: new Map(n.map((x) => [x, true])), failure: null }),
+          r: (n) => ({ present: new Map(n.map((x) => [x, true])), failure: null }),
+          commands: (n) => ({ present: new Map(n.map((x) => [x, true])), failure: null }),
+          connectors: () => present,
+          capabilities: () => new Set(),
+        },
+      });
+
+      manager.reload();
+      expect(manager.requirementsOf('needs-conn')?.satisfied).toBe(false);
+      expect(manager.requirementsOf('needs-conn')?.missing[0]?.kind).toBe('connector');
+
+      present.add('pubmed');
+      expect(manager.requirementsOf('needs-conn')?.satisfied).toBe(false);
+
+      manager.reload();
+      expect(manager.requirementsOf('needs-conn')?.satisfied).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
 });
 
 /* ------------------------------------------------------------------ *
@@ -557,6 +614,19 @@ describe('内置技能目录（需求 9.7）', () => {
       .map((s) => `${s.manifest.slug}:${String(s.instructions.length)}`);
     // 一份两百字的方法学文档基本上等于没写
     expect(thin, thin.join(', ')).toHaveLength(0);
+  });
+
+  it('indication-dossier 的连接器 id 都出现在内置连接器目录里', () => {
+    const catalog = loadSkillCatalog({
+      builtinDir: builtinSource,
+      userDir: join(root, 'empty-user'),
+    });
+    const skill = catalog.skills.get('indication-dossier');
+    expect(skill).toBeDefined();
+    const builtinIds = new Set(BUILTIN_CONNECTORS.map((c) => c.id));
+    const required = skill?.manifest.requires.connectors ?? [];
+    const unknown = required.filter((id) => !builtinIds.has(id));
+    expect(unknown, unknown.join(', ')).toEqual([]);
   });
 
   it('关键技能的典型说法能被检索命中', () => {

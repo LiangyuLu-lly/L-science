@@ -14,7 +14,7 @@
   ],
   "requires": {
     "python": ["pandas", "numpy", "matplotlib"],
-    "connectors": ["opentargets", "pubmed", "clinicaltrials", "chembl", "gnomad"],
+    "connectors": ["open-targets", "pubmed", "clinicaltrials", "chembl", "gnomad"],
     "capabilities": ["kernel:python"]
   },
   "tools": [
