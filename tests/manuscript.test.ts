@@ -30,8 +30,10 @@ import {
   buildCitationMap,
   compileManuscript,
   countWords,
+  createCompileManuscriptTool,
   detectSelfCitationLeaks,
   findJournalProfile,
+  frontMatterErrorMessage,
   parseJournalProfile,
   parseManuscript,
   parseManuscriptFrontMatter,
@@ -150,6 +152,21 @@ function compiler(): ManuscriptCompiler {
     artifacts,
     refs: () => refsRepo.list({ limit: 100 }),
   });
+}
+
+/**
+ * 编译失败的主界面必须是「front matter 第 N 行」，不能把整份 YAML 转储当唯一提示。
+ *
+ * Given / When / Then 的 Then：行号定位是机器可消费的主信号；源文档转储不是。
+ */
+function assertFrontMatterLineUi(message: string | null, source: string): void {
+  expect(message).toMatch(/front matter 第 \d+ 行/);
+  const text = message ?? '';
+  const trimmed = text.trim();
+  expect(trimmed).not.toBe(source.trim());
+  expect(trimmed.startsWith('---')).toBe(false);
+  expect(/^---\s*\n[\s\S]*\n---\s*$/u.test(trimmed)).toBe(false);
+  expect(text).not.toContain('meta: {a: 1}');
 }
 
 /* ------------------------------------------------------------------ *
@@ -911,9 +928,43 @@ describe('编译服务', () => {
   });
 
   it('front matter 语法错误时报错并说明支持范围', async () => {
-    const outcome = await compiler().compile({ markdown: '---\nmeta: {a: 1}\n---\nbody\n' });
+    const markdown = '---\nmeta: {a: 1}\n---\nbody\n';
+    const outcome = await compiler().compile({ markdown });
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toContain('受限的 YAML 子集');
+    assertFrontMatterLineUi(outcome.reason, markdown);
+
+    const parsed = compiler().parse({ markdown });
+    expect(parsed.ok).toBe(false);
+    assertFrontMatterLineUi(parsed.reason, markdown);
+
+    const tool = createCompileManuscriptTool({ compiler });
+    const compiled = await tool.execute(
+      { action: 'compile', markdown },
+      { projectId: 'p', conversationId: 'c', workspaceDir: root },
+    );
+    expect(compiled.ok).toBe(false);
+    expect(compiled.output.kind).toBe('error');
+    if (compiled.output.kind === 'error') {
+      assertFrontMatterLineUi(compiled.output.evalue, markdown);
+    }
+
+    const parsedTool = await tool.execute(
+      { action: 'parse', markdown },
+      { projectId: 'p', conversationId: 'c', workspaceDir: root },
+    );
+    expect(parsedTool.ok).toBe(false);
+    expect(parsedTool.output.kind).toBe('error');
+    if (parsedTool.output.kind === 'error') {
+      assertFrontMatterLineUi(parsedTool.output.evalue, markdown);
+    }
+  });
+
+  it('解开把整份 YAML stringify 进去的包装错误', () => {
+    const inner = new FrontMatterError('不支持流式映射 {}，请用缩进写法', 2);
+    const dumped = '---\nmeta: {a: 1}\n---\n';
+    const wrapped = new Error(JSON.stringify({ yaml: dumped }), { cause: inner });
+    assertFrontMatterLineUi(frontMatterErrorMessage(wrapped), dumped);
   });
 
   it('编译前触发审查', async () => {

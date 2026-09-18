@@ -54,6 +54,7 @@ export {
   asMapList,
   asString,
   asStringList,
+  frontMatterErrorMessage,
   parseManuscriptFrontMatter,
 } from './frontmatter.js';
 

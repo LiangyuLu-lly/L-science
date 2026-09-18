@@ -16,6 +16,7 @@ import type { CompileResult } from './compile.js';
 import { compileManuscript, compileSummary } from './compile.js';
 import type { ManuscriptDocument } from './document.js';
 import { parseManuscript } from './document.js';
+import { frontMatterErrorMessage } from './frontmatter.js';
 import type { JournalProfile } from './journals.js';
 import { findJournalProfile, parseJournalProfile } from './journals.js';
 
@@ -93,7 +94,7 @@ export class ManuscriptCompiler {
       return {
         ok: false,
         doc: null,
-        reason: err instanceof Error ? err.message : String(err),
+        reason: frontMatterErrorMessage(err),
       };
     }
   }
@@ -113,7 +114,7 @@ export class ManuscriptCompiler {
         manuscript: null,
         outputs: [],
         reason:
-          `手稿元数据解析失败：${err instanceof Error ? err.message : String(err)}\n` +
+          `手稿元数据解析失败：${frontMatterErrorMessage(err)}\n` +
           'front matter 只支持一个受限的 YAML 子集（标量、列表、嵌套映射、块标量），' +
           '不支持锚点、别名与流式映射。',
       };

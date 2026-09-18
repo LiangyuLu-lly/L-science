@@ -51,6 +51,27 @@ export class FrontMatterError extends Error {
   }
 }
 
+/**
+ * 给用户看的 front matter 失败原因。
+ *
+ * 包装错误常把整份 YAML `JSON.stringify` 进 `message`；那会让界面只剩文档转储。
+ * 沿 `cause` 找到 `FrontMatterError`，用它已经格式化好的「第 N 行」。
+ */
+export function frontMatterErrorMessage(err: unknown): string {
+  const seen = new Set<object>();
+  let current: unknown = err;
+  while (typeof current === 'object' && current !== null && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof FrontMatterError) return current.message;
+    if (current instanceof Error) {
+      current = current.cause;
+      continue;
+    }
+    break;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 export interface ParsedFrontMatter {
   /** 解析出的元数据。没有 front matter 时是空对象。 */
   meta: YamlMap;
