@@ -917,7 +917,7 @@ describe('默认注册表', () => {
       .list()
       .map((a) => a.id)
       .sort();
-    expect(ids).toEqual(['deepseek', 'ollama']);
+    expect(ids).toEqual(['deepseek', 'ollama', 'openai-compat']);
   });
 
   it('存在至少两家供应商，满足 Reviewer 的异厂商要求', () => {
@@ -932,6 +932,25 @@ describe('默认注册表', () => {
 
   it('取未注册的适配器会报错而不是返回 undefined', () => {
     expect(() => createDefaultRegistry().get('anthropic')).toThrow(/未注册/);
+  });
+
+  it('openai-compat adapter is registered and requires api key', async () => {
+    const adapter = createDefaultRegistry().get('openai-compat');
+    expect(adapter.id).toBe('openai-compat');
+
+    const error = await collect(
+      adapter.chat(
+        { baseUrl: 'https://api.example.com/v1' },
+        {
+          modelName: 'gpt-4',
+          messages: [{ role: 'user', content: 'x' }],
+          stream: true,
+        },
+      ),
+    ).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error).toMatchObject({ retryable: false, status: 401 });
   });
 });
 

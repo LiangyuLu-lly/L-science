@@ -211,7 +211,8 @@ export function FirstRunOverlay({
           登记模型
         </h2>
         <p className="panel__hint">
-          至少登记一家供应商才能路由。可以现在配 DeepSeek 或检测本机 Ollama，也可以稍后设置。
+          至少登记一家供应商才能路由。可以现在配 DeepSeek 或检测本机 Ollama，也可以稍后设置。也可在设置里添加
+          OpenAI 兼容接口。
         </p>
 
         <form

@@ -246,6 +246,14 @@ describe('provider.provision 契约', () => {
     expect(res.ok).toBe(false);
   });
 
+  it('provider.provision still rejects extra baseUrl', () => {
+    const res = parseRequest({
+      method: 'provider.provision',
+      baseUrl: 'http://evil',
+    });
+    expect(res.ok).toBe(false);
+  });
+
   it('拒绝未知供应商 id', () => {
     expect(parseRequest({ method: 'provider.provision', providerId: 'openai' }).ok).toBe(false);
     expect(parseRequest({ method: 'provider.provision', openaiKey: 'sk-x' }).ok).toBe(false);
@@ -260,5 +268,63 @@ describe('provider.provision 契约', () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(JSON.stringify(res.error)).not.toContain(SECRET);
+  });
+});
+
+describe('provider.registerCompat 契约', () => {
+  const KEY = 'sk-COMPAT-CANARY-9f2a11cd';
+
+  it('provider.registerCompat rejects file and javascript URLs', () => {
+    expect(
+      parseRequest({
+        method: 'provider.registerCompat',
+        baseUrl: 'file:///etc/passwd',
+        apiKey: KEY,
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseRequest({
+        method: 'provider.registerCompat',
+        baseUrl: 'javascript:alert(1)',
+        apiKey: KEY,
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseRequest({
+        method: 'provider.registerCompat',
+        baseUrl: 'data:text/html,hi',
+        apiKey: KEY,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('provider.registerCompat rejects non-loopback http', () => {
+    expect(
+      parseRequest({
+        method: 'provider.registerCompat',
+        baseUrl: 'http://evil.example/v1',
+        apiKey: KEY,
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseRequest({
+        method: 'provider.registerCompat',
+        baseUrl: 'http://8.8.8.8/v1',
+        apiKey: KEY,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('provider.registerCompat accepts https URL', () => {
+    const res = parseRequest({
+      method: 'provider.registerCompat',
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: KEY,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.value.method === 'provider.registerCompat') {
+      expect(res.value.baseUrl).toBe('https://api.openai.com/v1');
+      expect(res.value.apiKey).toBe(KEY);
+    }
   });
 });

@@ -131,6 +131,7 @@ import {
   type ProviderRecord,
 } from './repo/registry.js';
 import { provisionKnownProviders } from './providers/provision.js';
+import { registerCompatProvider } from './providers/register-compat.js';
 import { buildTaskProfile, route } from './router/index.js';
 import { FindingsRepo, type FindingStatus, type ReviewerTrigger } from './repo/findings.js';
 import {
@@ -334,7 +335,8 @@ async function main(): Promise<void> {
     if (req.refresh) resetCapabilityCache();
     const caps = detectCapabilities();
     return {
-      dataDir: store.paths.root,
+    dataDir: store.paths.root,
+    version: process.env['L_SCIENCE_APP_VERSION'] ?? '',
       dataDirSource: dataDirSource(),
       dataDirLabel: describeDataDir(),
       platform: describePlatform(),
@@ -2495,6 +2497,29 @@ async function main(): Promise<void> {
         detectOllama: req.detectOllama,
       },
     );
+  });
+
+  d.register('provider.registerCompat', async (req) => {
+    requireVault();
+    try {
+      return await registerCompatProvider(
+        { vault, registry: modelRegistry, sync: modelSync, adapters },
+        {
+          baseUrl: req.baseUrl,
+          apiKey: req.apiKey,
+          ...(req.name === undefined ? {} : { name: req.name }),
+        },
+      );
+    } catch (err) {
+      if (err instanceof DispatchError) throw err;
+      const raw = err instanceof Error ? err.message : String(err);
+      throw new DispatchError(
+        makeError('provider_error', '登记 OpenAI 兼容接口失败', {
+          detail: raw.split(req.apiKey).join('[redacted]'),
+          remediation: '检查基地址是否可访问、密钥是否有效。http 仅允许 127.0.0.1 或 localhost。',
+        }),
+      );
+    }
   });
 
   d.register('credential.list', async () => {

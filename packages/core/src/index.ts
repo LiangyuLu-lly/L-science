@@ -79,6 +79,9 @@ export type {
   ProvisionSkipReason,
 } from './providers/provision.js';
 
+export { registerCompatProvider } from './providers/register-compat.js';
+export type { RegisterCompatInput, RegisterCompatResult } from './providers/register-compat.js';
+
 export { UsageRepo, classifyFailure, redactError } from './repo/usage.js';
 export type {
   CallStatus,

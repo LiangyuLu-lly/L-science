@@ -9,6 +9,7 @@
 import { AdapterRegistry } from './types.js';
 import { DeepSeekAdapter } from './deepseek.js';
 import { OllamaAdapter } from './ollama.js';
+import { OpenAICompatAdapter } from './openai-compat.js';
 
 export type {
   AdapterContext,
@@ -43,6 +44,8 @@ export {
 
 export { OllamaAdapter, OLLAMA_BASE_URL } from './ollama.js';
 
+export { OpenAICompatAdapter, OPENAI_COMPAT_ID } from './openai-compat.js';
+
 /**
  * 注册全部内置适配器。
  *
@@ -53,5 +56,6 @@ export function createDefaultRegistry(): AdapterRegistry {
   const registry = new AdapterRegistry();
   registry.register(new DeepSeekAdapter());
   registry.register(new OllamaAdapter());
+  registry.register(new OpenAICompatAdapter());
   return registry;
 }

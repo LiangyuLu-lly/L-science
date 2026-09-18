@@ -150,6 +150,28 @@ export const routingOverrideSchema = z.object({
 export type RoutingOverride = z.infer<typeof routingOverrideSchema>;
 
 /**
+ * OpenAI 兼容端点的基地址白名单。
+ *
+ * 用 URL 解析而不是字符串前缀：`https://evil` 与 `javascript:https://...`
+ * 这种绕过，前缀检查会放行或误伤，解析后看 protocol + hostname 才是边界。
+ * http 只放行回环——任意主机的明文 http 等于把密钥发到调用方指定的地方。
+ */
+const COMPAT_LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost']);
+
+function isAllowedCompatBaseUrl(raw: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.hostname === '') return false;
+  if (parsed.protocol === 'https:') return true;
+  if (parsed.protocol === 'http:') return COMPAT_LOOPBACK_HOSTS.has(parsed.hostname);
+  return false;
+}
+
+/**
  * M1 阶段的方法面。
  *
  * 每个方法一个独立 schema 而不是 `method: string` + `params: unknown`：
@@ -468,6 +490,28 @@ export const requestSchema = z.discriminatedUnion('method', [
     method: z.literal('provider.provision'),
     deepseekKey: z.string().min(1).max(8192).optional(),
     detectOllama: z.boolean().default(true),
+  }),
+
+  /**
+   * 登记 OpenAI 兼容端点（任意 https，或本机 http）。
+   *
+   * 与 `provider.provision` 分开：那条方法的基地址由适配器常量决定，
+   * **不接受**调用方传入的 URL。兼容端点必须由用户给出基地址，因此另开
+   * 方法，并在边界上解析 URL——只放行 https，或 http 且主机为
+   * 127.0.0.1 / localhost。file: / javascript: / data: 以及非回环 http
+   * 一律拒绝，避免把密钥发到调用方指定的任意协议或主机。
+   */
+  z.strictObject({
+    method: z.literal('provider.registerCompat'),
+    baseUrl: z
+      .string()
+      .min(1)
+      .max(2048)
+      .refine(isAllowedCompatBaseUrl, {
+        message: '基地址必须是 https，或 http 且主机为 127.0.0.1 或 localhost',
+      }),
+    apiKey: z.string().min(1).max(8192),
+    name: z.string().min(1).max(200).optional(),
   }),
 
   z.object({

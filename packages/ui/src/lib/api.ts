@@ -797,6 +797,25 @@ export const provisionProviders = (
     ...(input.detectOllama === undefined ? {} : { detectOllama: input.detectOllama }),
   });
 
+export const registerCompatProvider = (input: {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly name?: string;
+}) =>
+  invoke<{
+    providerId: string;
+    name: string;
+    added: string[];
+    updated: string[];
+    disappeared: string[];
+    modelIds: string[];
+  }>({
+    method: 'provider.registerCompat',
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    ...(input.name === undefined ? {} : { name: input.name }),
+  });
+
 export const setProviderEnabled = (providerId: string, enabled: boolean) =>
   invoke<{ providerId: string; enabled: boolean }>({
     method: 'provider.setEnabled',
