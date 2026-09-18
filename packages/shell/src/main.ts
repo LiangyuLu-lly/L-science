@@ -13,6 +13,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'el
 import { parseRequest, type ErrorEnvelope } from '@l-science/shared';
 
 import { BackendClient } from './backend-client.js';
+import { resolveLaunchPaths, spawnEnv } from './launch-paths.js';
 
 /**
  * 后端因数据目录被占用而拒绝启动时的退出码。
@@ -43,6 +44,16 @@ function broadcast(channel: string, ...args: unknown[]): void {
   }
 }
 
+function launchPaths() {
+  return resolveLaunchPaths({
+    packaged: app.isPackaged,
+    repoRoot,
+    resourcesPath: process.resourcesPath,
+    here,
+    env: process.env,
+  });
+}
+
 /**
  * 启动控制平面后端。
  *
@@ -53,19 +64,17 @@ function broadcast(channel: string, ...args: unknown[]): void {
  * 把 stdin 设成 'ignore' 会让后端立刻收到 EOF 并自行退出。
  */
 function startBackend(): void {
-  const nodeBin = process.env['L_SCIENCE_NODE'] ?? 'node';
-  const entry = join(repoRoot, 'packages', 'core', 'dist', 'backend.js');
-
-  const env = { ...process.env };
-  // Electron 会给子进程注入这个变量，传下去会让 node 行为异常。
-  delete env['ELECTRON_RUN_AS_NODE'];
+  const paths = launchPaths();
+  const env = spawnEnv(paths, process.env);
 
   // 后端拒绝启动时它把原因写在 stderr，这里留着最后几行用于弹窗
   const stderrTail: string[] = [];
 
-  backend = spawn(nodeBin, [entry], {
+  backend = spawn(paths.nodeBin, [paths.backendEntry], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env,
+    cwd: paths.sidecarCwd,
+    windowsHide: true,
   }) as ChildProcessWithoutNullStreams;
 
   client = new BackendClient({
@@ -193,7 +202,7 @@ function createWindow(): void {
   if (DEV_SERVER_URL !== undefined && DEV_SERVER_URL !== '') {
     void win.loadURL(DEV_SERVER_URL);
   } else {
-    void win.loadFile(join(repoRoot, 'packages', 'ui', 'dist', 'index.html'));
+    void win.loadFile(launchPaths().rendererHtml);
   }
 }
 

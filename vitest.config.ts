@@ -13,9 +13,12 @@ export default defineConfig({
       '@l-science/adapters': pkg('adapters'),
       '@l-science/core': pkg('core'),
       // shell 包的入口是 Electron 主进程代码，测试里不能整体导入（会去 require
-      // 'electron'）。这里单独指向可独立测试的协议客户端。
+      // 'electron'）。这里单独指向可独立测试的模块。
       '@l-science/shell/backend-client': fileURLToPath(
         new URL('./packages/shell/src/backend-client.ts', import.meta.url),
+      ),
+      '@l-science/shell/launch-paths': fileURLToPath(
+        new URL('./packages/shell/src/launch-paths.ts', import.meta.url),
       ),
     },
   },
