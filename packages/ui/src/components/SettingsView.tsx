@@ -21,6 +21,7 @@ import {
   listCredentials,
   listModels,
   listProviders,
+  registerCompatProvider,
   setCredential,
   setModelEnabled,
   setProviderCredentialRef,
@@ -33,6 +34,8 @@ import {
   type StrengthKey,
 } from '../lib/api.js';
 import { BackendError } from '../lib/backend.js';
+
+import { AboutFooter } from './AboutFooter.js';
 
 /** 训练策略的中文说明。`unknown` 必须显式说出来，不能显示成空白。 */
 const TRAINING_USE_LABEL: Record<string, string> = {
@@ -578,6 +581,105 @@ function CredentialSection({
   );
 }
 
+function CompatProviderForm({
+  available,
+  onChanged,
+}: {
+  available: boolean;
+  onChanged: () => void;
+}): React.JSX.Element {
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!available) {
+    return (
+      <section className="panel" aria-labelledby="compat-heading">
+        <h2 id="compat-heading" className="panel__title">
+          OpenAI 兼容接口
+        </h2>
+        <p className="panel__hint">这台机器无法加密存储凭据，不能添加需要密钥的兼容端点。</p>
+      </section>
+    );
+  }
+
+  const submit = async (): Promise<void> => {
+    if (baseUrl.trim() === '' || apiKey === '') return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await registerCompatProvider({ baseUrl: baseUrl.trim(), apiKey });
+      setNotice(`已登记 ${result.name}，同步 ${String(result.modelIds.length)} 个模型`);
+      setApiKey('');
+      onChanged();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel" aria-labelledby="compat-heading">
+      <h2 id="compat-heading" className="panel__title">
+        OpenAI 兼容接口
+      </h2>
+      <p className="panel__hint">
+        基地址须为 https，或 http 且主机为 127.0.0.1 / localhost。密钥提交后立刻从界面清除。
+      </p>
+      <form
+        className="cred-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <div className="cred-form__field">
+          <label htmlFor="compat-base-url">基地址</label>
+          <input
+            id="compat-base-url"
+            type="text"
+            value={baseUrl}
+            placeholder="https://api.example.com/v1"
+            autoComplete="off"
+            spellCheck={false}
+            disabled={busy}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </div>
+        <div className="cred-form__field">
+          <label htmlFor="compat-api-key">密钥</label>
+          <input
+            id="compat-api-key"
+            type="password"
+            value={apiKey}
+            autoComplete="off"
+            spellCheck={false}
+            disabled={busy}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </div>
+        <button
+          type="submit"
+          className="btn"
+          disabled={busy || baseUrl.trim() === '' || apiKey === ''}
+        >
+          登记
+        </button>
+      </form>
+      {notice !== null && <p className="pcard__notice">{notice}</p>}
+      {error !== null && (
+        <p className="pcard__error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
 export function SettingsView({ onRegisterModels }: { onRegisterModels: () => void }): React.JSX.Element {
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [models, setModels] = useState<ModelRecord[]>([]);
@@ -638,6 +740,8 @@ export function SettingsView({ onRegisterModels }: { onRegisterModels: () => voi
         onChanged={reload}
       />
 
+      <CompatProviderForm available={vaultAvailable} onChanged={reload} />
+
       <section className="panel" aria-labelledby="providers-heading">
         <h2 id="providers-heading" className="panel__title">
           供应商与模型
@@ -660,6 +764,8 @@ export function SettingsView({ onRegisterModels }: { onRegisterModels: () => voi
           ))
         )}
       </section>
+
+      <AboutFooter />
     </div>
   );
 }

@@ -16,7 +16,7 @@
  * 的 HTTP 是产品功能本身。
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -282,5 +282,44 @@ describe('技能检索不出网（20.6.3）', () => {
     expect(fn).toContain(".find((p) => p.adapter === 'ollama' && p.baseUrl !== null)");
     expect(fn).toMatch(/return null/u);
     expect(fn).toContain('createOllamaEmbedder');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 关于：Help 菜单与设置页脚的隐私文案
+ * ------------------------------------------------------------------ */
+
+const PRIVACY_SENTENCES = [
+  '不发送遥测。',
+  '数据与密钥留在本机。',
+  '技能检索不出网（仅本机索引）。',
+] as const;
+
+describe('关于页隐私文案', () => {
+  it('about/privacy copy asserts 无遥测、全本地、技能检索不出网', () => {
+    const footerPath = join(REPO_ROOT, 'packages', 'ui', 'src', 'components', 'AboutFooter.tsx');
+    const mainPath = join(REPO_ROOT, 'packages', 'shell', 'src', 'main.ts');
+    expect(existsSync(footerPath)).toBe(true);
+    expect(existsSync(mainPath)).toBe(true);
+
+    const footer = readFileSync(footerPath, 'utf8');
+    const main = readFileSync(mainPath, 'utf8');
+
+    for (const sentence of PRIVACY_SENTENCES) {
+      expect(footer).toContain(sentence);
+      expect(main).toContain(sentence);
+    }
+
+    expect(main).toContain('setApplicationMenu');
+    expect(main).toContain('关于');
+    expect(main).toContain('app.getVersion()');
+    expect(main).toContain("method: 'app.status'");
+    expect(main).not.toMatch(/from ['"]@l-science\/core['"]/u);
+    expect(main).not.toMatch(/\bfetch\s*\(/u);
+
+    expect(footer).toContain('getAppStatus');
+    expect(footer).toContain('dataDir');
+    expect(footer).not.toMatch(/from ['"]@l-science\/core['"]/u);
+    expect(footer).not.toMatch(/\bfetch\s*\(/u);
   });
 });

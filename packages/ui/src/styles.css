@@ -511,6 +511,16 @@ code {
   min-height: 0;
 }
 
+.about-footer {
+  margin-block-start: 12px;
+  padding-block-start: 16px;
+  border-block-start: 1px solid var(--border);
+}
+
+.about-footer .panel__title {
+  margin-block-end: 8px;
+}
+
 .view__toolbar {
   display: flex;
   align-items: center;

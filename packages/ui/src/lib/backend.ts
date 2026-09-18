@@ -157,6 +157,8 @@ export interface AppStatus {
   uptimeMs: number;
   node: string;
   dataDir: string;
+  /** Electron 外壳注入的产品版本；未注入时为空字符串。 */
+  version: string;
   sqlite: string;
   schema: number;
 }

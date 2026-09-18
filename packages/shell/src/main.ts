@@ -10,7 +10,7 @@ import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
-import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type WebContents } from 'electron';
 import { parseRequest, type ErrorEnvelope } from '@l-science/shared';
 
 import { BackendClient } from './backend-client.js';
@@ -43,10 +43,15 @@ let crashDialogShown = false;
 
 const OPEN_LOGS = 0;
 
+async function openLogDir(): Promise<void> {
+  const logDir = join(app.getPath('userData'), 'logs');
+  mkdirSync(logDir, { recursive: true });
+  await shell.openPath(logDir);
+}
+
 async function showCrashDialog(detail: string): Promise<void> {
   if (crashDialogShown) return;
   crashDialogShown = true;
-  const logDir = join(app.getPath('userData'), 'logs');
   const { response } = await dialog.showMessageBox({
     type: 'error',
     title: 'L-science 遇到问题',
@@ -57,9 +62,74 @@ async function showCrashDialog(detail: string): Promise<void> {
     noLink: true,
   });
   if (response === OPEN_LOGS) {
-    mkdirSync(logDir, { recursive: true });
-    await shell.openPath(logDir);
+    await openLogDir();
   }
+}
+
+async function showAboutDialog(): Promise<void> {
+  const version = app.getVersion();
+  let dataDir = '（后端未就绪）';
+  if (client !== null) {
+    try {
+      const status = await client.invoke({ method: 'app.status' });
+      if (
+        typeof status === 'object' &&
+        status !== null &&
+        'dataDir' in status &&
+        typeof status.dataDir === 'string'
+      ) {
+        dataDir = status.dataDir;
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error || (typeof err === 'object' && err !== null)) {
+        dataDir = '（无法读取数据目录）';
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    title: '关于 L-science',
+    message: `L-science ${version}`,
+    detail: [
+      `数据目录：${dataDir}`,
+      '',
+      '不发送遥测。',
+      '数据与密钥留在本机。',
+      '技能检索不出网（仅本机索引）。',
+    ].join('\n'),
+    buttons: ['打开日志目录', '关闭'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response === OPEN_LOGS) {
+    await openLogDir();
+  }
+}
+
+function installApplicationMenu(): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      { role: 'fileMenu' },
+      { role: 'editMenu' },
+      { role: 'viewMenu' },
+      { role: 'windowMenu' },
+      {
+        label: '帮助',
+        submenu: [
+          {
+            label: '关于',
+            click: () => {
+              void showAboutDialog();
+            },
+          },
+        ],
+      },
+    ]),
+  );
 }
 
 function broadcast(channel: string, ...args: unknown[]): void {
@@ -91,6 +161,7 @@ function launchPaths() {
 function startBackend(): void {
   const paths = launchPaths();
   const env = spawnEnv(paths, process.env);
+  env['L_SCIENCE_APP_VERSION'] = app.getVersion();
 
   // 后端拒绝启动时它把原因写在 stderr，这里留着最后几行用于弹窗
   const stderrTail: string[] = [];
@@ -292,6 +363,7 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     registerIpc();
     startBackend();
+    installApplicationMenu();
     createWindow();
 
     app.on('activate', () => {
