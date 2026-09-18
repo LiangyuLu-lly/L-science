@@ -6,6 +6,7 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -36,6 +37,30 @@ const IPC_LOG = 'lscience:log';
 
 let backend: ChildProcessWithoutNullStreams | null = null;
 let client: BackendClient | null = null;
+/** before-quit 触发的退出不弹崩溃对话框。 */
+let stopping = false;
+let crashDialogShown = false;
+
+const OPEN_LOGS = 0;
+
+async function showCrashDialog(detail: string): Promise<void> {
+  if (crashDialogShown) return;
+  crashDialogShown = true;
+  const logDir = join(app.getPath('userData'), 'logs');
+  const { response } = await dialog.showMessageBox({
+    type: 'error',
+    title: 'L-science 遇到问题',
+    message: '应用遇到未处理的错误。',
+    detail,
+    buttons: ['打开日志目录', '关闭'],
+    defaultId: OPEN_LOGS,
+    noLink: true,
+  });
+  if (response === OPEN_LOGS) {
+    mkdirSync(logDir, { recursive: true });
+    await shell.openPath(logDir);
+  }
+}
 
 function broadcast(channel: string, ...args: unknown[]): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -108,11 +133,17 @@ function startBackend(): void {
         detail === '' ? '这个数据目录正被另一个实例使用。' : detail,
       );
       app.quit();
+    } else if (code !== null && !stopping) {
+      const detail = stderrTail.join('\n').trim();
+      void showCrashDialog(detail).then(() => {
+        app.quit();
+      });
     }
   });
 }
 
 function stopBackend(): void {
+  stopping = true;
   client?.close();
   client = null;
   if (backend !== null && backend.exitCode === null) {
@@ -178,6 +209,7 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#111318',
     title: 'L-science',
+    icon: join(here, '..', 'build', 'icon.ico'),
     webPreferences: {
       // 必须是 .cjs：sandbox 下的 preload 只能是 CommonJS，源文件为 preload.cts
       preload: join(here, 'preload.cjs'),
@@ -232,6 +264,18 @@ function createWindow(): void {
     app.setPath('userData', join(resolve(override), 'electron'));
   }
 }
+
+app.setAppUserModelId('app.l-science.desktop');
+
+process.on('uncaughtException', (err) => {
+  const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  void showCrashDialog(detail);
+});
+
+app.on('render-process-gone', (_event, _webContents, details) => {
+  if (details.reason === 'clean-exit') return;
+  void showCrashDialog(details.reason);
+});
 
 // 单实例锁：同一个数据目录只能有一个实例，否则会争抢同一个 SQLite 库与凭据文件。
 if (!app.requestSingleInstanceLock()) {

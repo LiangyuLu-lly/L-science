@@ -35,11 +35,13 @@ const shellPkg = JSON.parse(
     files?: unknown;
     extraResources?: Array<{ from?: string; to?: string }>;
     extraFiles?: unknown;
-    win?: { target?: unknown; signAndEditExecutable?: boolean };
+    win?: { target?: unknown; signAndEditExecutable?: boolean; icon?: string };
     nsis?: {
       oneClick?: boolean;
       perMachine?: boolean;
       allowToChangeInstallationDirectory?: boolean;
+      installerIcon?: string;
+      uninstallerIcon?: string;
     };
     mac?: unknown;
     linux?: unknown;
@@ -109,6 +111,12 @@ describe('shell package.json build', () => {
     expect(shellPkg.build?.nsis?.oneClick).toBe(false);
     expect(shellPkg.build?.nsis?.perMachine).toBe(false);
     expect(shellPkg.build?.nsis?.allowToChangeInstallationDirectory).toBe(true);
+  });
+
+  it('declares a win/nsis icon under packages/shell/build/icon.ico', () => {
+    expect(shellPkg.build?.win?.icon).toBe('build/icon.ico');
+    expect(shellPkg.build?.nsis?.installerIcon).toBe('build/icon.ico');
+    expect(shellPkg.build?.nsis?.uninstallerIcon).toBe('build/icon.ico');
   });
 
   it('does not declare extraFiles, mac/linux targets, or auto-update publish', () => {

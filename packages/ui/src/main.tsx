@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 
 // UI 包走 bundler 解析（Vite），相对导入不带扩展名，与后端包的 NodeNext 惯例不同。
 import { App } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import './styles.css';
 
 const container = document.getElementById('root');
@@ -12,6 +13,8 @@ if (container === null) {
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );
