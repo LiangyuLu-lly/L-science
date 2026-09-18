@@ -51,6 +51,7 @@ function provisionLine(result: ProvisionProviderResult): string {
 export function EnvDoctorSection({ compact = false }: { compact?: boolean }): React.JSX.Element {
   const [doctor, setDoctor] = useState<EnvDoctor | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let disposed = false;
@@ -63,6 +64,9 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
       })
       .catch((err: unknown) => {
         if (!disposed) setError(errorText(err));
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false);
       });
     return () => {
       disposed = true;
@@ -75,12 +79,17 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
         {compact ? '环境体检' : '环境'}
       </h2>
       <p className="panel__hint">{CONDA_ENV_NOTICE}</p>
+      {loading && (
+        <p className="pcard__busy" role="status">
+          正在检查环境…
+        </p>
+      )}
       {error !== null && (
         <p className="view__error" role="alert">
           {error}
         </p>
       )}
-      {doctor !== null && (
+      {!loading && doctor !== null && (
         <>
           <dl className="kv">
             <dt>数据目录</dt>
@@ -106,6 +115,30 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
           )}
         </>
       )}
+      <div className="pcard__actions">
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={loading}
+          onClick={() => {
+            setLoading(true);
+            setError(null);
+            void loadEnvDoctor(true)
+              .then((report) => {
+                setDoctor(report);
+                setError(null);
+              })
+              .catch((err: unknown) => {
+                setError(errorText(err));
+              })
+              .finally(() => {
+                setLoading(false);
+              });
+          }}
+        >
+          重新检查
+        </button>
+      </div>
     </section>
   );
 }
@@ -148,7 +181,6 @@ export function FirstRunOverlay({
   return (
     <div className="overlay" role="dialog" aria-modal="true" aria-labelledby="first-run-title">
       <div className="overlay__stack">
-        <EnvDoctorSection />
       <section className="panel">
         <h2 id="first-run-title" className="panel__title">
           登记模型
@@ -177,6 +209,14 @@ export function FirstRunOverlay({
               onChange={(event) => setDeepseekKey(event.target.value)}
             />
             <span className="cred-form__hint">提交后立刻从界面清除，不会回显。</span>
+            <a
+              className="cred-form__hint"
+              href="https://platform.deepseek.com"
+              target="_blank"
+              rel="noreferrer"
+            >
+              获取 DeepSeek API 密钥
+            </a>
           </div>
           <button type="submit" className="btn" disabled={busy || deepseekKey === ''}>
             登记 DeepSeek
@@ -193,7 +233,7 @@ export function FirstRunOverlay({
             检测本机 Ollama
           </button>
           <button type="button" className="btn btn--small" disabled={busy} onClick={onSkip}>
-            稍后设置
+            本次跳过，可在设置里再打开
           </button>
           {busy && (
             <span className="pcard__busy" role="status">
@@ -225,6 +265,7 @@ export function FirstRunOverlay({
           </>
         )}
       </section>
+        <EnvDoctorSection />
       </div>
     </div>
   );

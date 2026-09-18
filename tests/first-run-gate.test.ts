@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { shouldShowFirstRun } from '../packages/ui/src/lib/first-run.js';
+import { CONDA_ENV_NOTICE, shouldShowFirstRun } from '../packages/ui/src/lib/first-run.js';
 
 describe('shouldShowFirstRun', () => {
   it('shows overlay when no providers are registered and session was not skipped', () => {
@@ -52,5 +52,12 @@ describe('shouldShowFirstRun', () => {
 
     // Then
     expect(show).toBe(false);
+  });
+
+  it('keeps CONDA_ENV_NOTICE exact and session-skip semantics', () => {
+    // Given / Then: 安装包不含环境这句必须原文；跳过只影响本会话门闩
+    expect(CONDA_ENV_NOTICE).toBe('安装包不包含 conda 环境 lsci / lsci-r，需自行创建');
+    expect(shouldShowFirstRun({ providerCount: 0, skippedThisSession: true })).toBe(false);
+    expect(shouldShowFirstRun({ providerCount: 0, skippedThisSession: false })).toBe(true);
   });
 });
