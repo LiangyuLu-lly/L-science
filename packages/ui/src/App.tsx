@@ -19,6 +19,7 @@ import { RoutingPanel } from './components/RoutingPanel.js';
 import { SettingsView } from './components/SettingsView.js';
 import { SelectedSkills, SkillPicker } from './components/SkillPicker.js';
 import { SkillsView } from './components/SkillsView.js';
+import { TaskTypeChips } from './components/TaskTypeChips.js';
 import { ToolsPanel } from './components/ToolsPanel.js';
 import { TurnUsageBar, UsagePanel } from './components/UsagePanel.js';
 import {
@@ -635,6 +636,10 @@ export function App(): React.JSX.Element {
                 有覆盖在生效时必须在输入区旁边说出来。藏在路由面板里的话，
                 用户设完切回会话，会以为路由还是自动的——然后对结果感到莫名
               */}
+                <TaskTypeChips
+                  selected={routingOverride.taskType}
+                  onSelect={(taskType) => setRoutingOverride({ ...routingOverride, taskType })}
+                />
                 <OverrideBar
                   override={routingOverride}
                   onClear={() => setRoutingOverride({})}

@@ -94,6 +94,7 @@ textarea {
 @media (forced-colors: active) {
   .btn,
   .composer__input,
+  .tchips__chip,
   input,
   select,
   textarea {
@@ -2243,7 +2244,8 @@ code {
   font-size: 12px;
 }
 
-.cred-form__field input {
+.cred-form__field input,
+.cred-form__field select {
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -2653,6 +2655,36 @@ code {
   color: var(--fg);
 }
 
+.tchips {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+}
+
+.tchips__label {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.tchips__chip {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tchips__chip.is-current {
+  border-color: var(--accent);
+  background: #1b2432;
+  color: var(--fg);
+}
+
 /* ================================================================== *
  * 技能选择器与技能页（任务 12.16）
  *
@@ -2883,6 +2915,7 @@ code {
 }
 
 .skillsview__broken,
+.skillsview__unavailable,
 .skillsview__shadowed {
   margin-block-end: 12px;
   padding: 8px 12px;
@@ -2895,13 +2928,19 @@ code {
   border-color: #5f382f;
 }
 
+.skillsview__unavailable {
+  border-color: #5f4a2f;
+}
+
 .skillsview__broken h3,
+.skillsview__unavailable h3,
 .skillsview__shadowed h3 {
   margin: 0 0 4px;
   font-size: 13px;
 }
 
 .skillsview__broken ul,
+.skillsview__unavailable ul,
 .skillsview__shadowed ul {
   margin: 0;
   padding-inline-start: 18px;
