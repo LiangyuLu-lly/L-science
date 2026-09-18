@@ -153,6 +153,9 @@ export interface ChatViewProps {
   toolCalls: readonly ToolCallView[];
   decisions: readonly RoutingDecision[];
   running: boolean;
+  blocked: boolean;
+  blockedReason: string | null;
+  onRegisterModels?: () => void;
 }
 
 export function ChatView(props: ChatViewProps): React.JSX.Element {
@@ -180,7 +183,18 @@ export function ChatView(props: ChatViewProps): React.JSX.Element {
   return (
     <div className="chat" ref={scroller} onScroll={onScroll}>
       {props.items.length === 0 && props.toolCalls.length === 0 && (
-        <p className="chat__empty">还没有消息。在下方输入框里说点什么。</p>
+        <>
+          <p className="chat__empty">
+            {props.blocked
+              ? (props.blockedReason ?? '还没有消息。')
+              : '还没有消息。在下方输入框里说点什么。'}
+          </p>
+          {props.blocked && props.onRegisterModels !== undefined && (
+            <button type="button" className="btn btn--small" onClick={props.onRegisterModels}>
+              去登记模型
+            </button>
+          )}
+        </>
       )}
 
       {props.decisions.map((decision) => (

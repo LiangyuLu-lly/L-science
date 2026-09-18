@@ -14,7 +14,7 @@ import { ChatView } from './components/ChatView.js';
 import { ConnectorsView } from './components/ConnectorsView.js';
 import { ConversationSidebar } from './components/ConversationSidebar.js';
 import { FirstRunOverlay } from './components/FirstRunOverlay.js';
-import { IsolationBadge } from './components/IsolationBadge.js';
+import { ProjectHeader } from './components/ProjectHeader.js';
 import { RoutingPanel } from './components/RoutingPanel.js';
 import { SettingsView } from './components/SettingsView.js';
 import { SelectedSkills, SkillPicker } from './components/SkillPicker.js';
@@ -24,6 +24,7 @@ import { TurnUsageBar, UsagePanel } from './components/UsagePanel.js';
 import {
   answerQuestion,
   createConversation,
+  createProject,
   decideApproval,
   listConversations,
   listProjects,
@@ -36,6 +37,7 @@ import {
   type TaskType,
 } from './lib/api.js';
 import { hasBackend } from './lib/backend.js';
+import { composerBlockedReason } from './lib/composer-gate.js';
 import { shouldShowFirstRun } from './lib/first-run.js';
 import { useBackend } from './lib/useBackend.js';
 import { useTurn } from './lib/useTurn.js';
@@ -169,6 +171,7 @@ function Composer({
   running,
   onSend,
   onInterrupt,
+  onRegisterModels,
 }: {
   disabled: boolean;
   /**
@@ -181,6 +184,7 @@ function Composer({
   running: boolean;
   onSend: (text: string, skills: readonly string[]) => void;
   onInterrupt: () => void;
+  onRegisterModels?: () => void;
 }): React.JSX.Element {
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
@@ -297,9 +301,16 @@ function Composer({
             中断
           </button>
         ) : (
-          <button type="submit" className="btn" disabled={disabled || text.trim() === ''}>
-            发送
-          </button>
+          <>
+            {onRegisterModels !== undefined && (
+              <button type="button" className="btn" onClick={onRegisterModels}>
+                去登记模型
+              </button>
+            )}
+            <button type="submit" className="btn" disabled={disabled || text.trim() === ''}>
+              发送
+            </button>
+          </>
         )}
       </div>
     </form>
@@ -437,18 +448,17 @@ export function App(): React.JSX.Element {
     (providerCount !== null && shouldShowFirstRun({ providerCount, skippedThisSession }));
 
   /** 输入区不可用时的真实原因。写死一个理由会让用户去排查不存在的问题。 */
-  const composerBlockedReason =
-    backend.state === 'no-bridge'
-      ? '当前在浏览器里直接打开了渲染层，控制平面只在桌面外壳内可用。'
-      : backend.state === 'unavailable'
-        ? `控制平面暂时不可用：${backend.error ?? '未知错误'}`
-        : backend.state === 'connecting'
-          ? '正在连接控制平面…'
-          : projectId === null
-            ? '还没有项目。请先创建一个项目。'
-            : conversationId === null
-              ? '正在准备会话…'
-              : null;
+  const composerBlock = composerBlockedReason({
+    backendState: backend.state,
+    backendError: backend.error,
+    projectId,
+    conversationId,
+    providerCount,
+  });
+  const openRegisterModels = (): void => {
+    setSkippedThisSession(false);
+    setOverlayForced(true);
+  };
 
   // 首次加载：取项目，自动选第一个。空白界面对新用户没有任何指引价值
   useEffect(() => {
@@ -486,6 +496,12 @@ export function App(): React.JSX.Element {
     setConversationId(conversation.id);
   };
 
+  const newProject = async (): Promise<void> => {
+    const { project } = await createProject('未命名项目');
+    setProjects((prev) => [project, ...prev]);
+    setProjectId(project.id);
+  };
+
   const onDecide = async (
     approvalId: string,
     decision: 'approve' | 'deny',
@@ -510,38 +526,14 @@ export function App(): React.JSX.Element {
         跳到主内容
       </button>
 
-      <header className="app__header">
-        <span className="app__brand">L-science</span>
-        <span className="app__tag">本地优先 AI 科研工作台</span>
-
-        {projects.length > 0 && (
-          <div className="app__project">
-            <label className="app__project-label" htmlFor="project-select">
-              项目
-            </label>
-            <select
-              id="project-select"
-              value={projectId ?? ''}
-              onChange={(e) => setProjectId(e.target.value)}
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.archivedAt === null ? '' : '（已归档）'}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* 连接状态常驻可见。文字标签与颜色并存，不只靠颜色 */}
-        <span className={`badge badge--${backend.state}`} role="status">
-          {STATE_LABEL[backend.state] ?? backend.state}
-        </span>
-
-        {/* 隔离强度持续可见，不藏在设置里（需求 2.5） */}
-        <IsolationBadge />
-      </header>
+      <ProjectHeader
+        projects={projects}
+        projectId={projectId}
+        onSelectProject={setProjectId}
+        onCreateProject={() => void newProject()}
+        connectionState={backend.state}
+        connectionLabel={STATE_LABEL[backend.state] ?? backend.state}
+      />
 
       <div className="app__body">
         {/*
@@ -633,6 +625,11 @@ export function App(): React.JSX.Element {
                   toolCalls={turn.toolCalls}
                   decisions={turn.decisions}
                   running={turn.running}
+                  blocked={composerBlock !== null}
+                  blockedReason={composerBlock?.message ?? null}
+                  {...(composerBlock?.code === 'no-model'
+                    ? { onRegisterModels: openRegisterModels }
+                    : {})}
                 />
                 {/*
                 有覆盖在生效时必须在输入区旁边说出来。藏在路由面板里的话，
@@ -646,8 +643,8 @@ export function App(): React.JSX.Element {
                 {/* 本轮累计用量常驻在输入区上方（需求 18.4） */}
                 <TurnUsageBar usage={turn.lastUsage} />
                 <Composer
-                  disabled={composerBlockedReason !== null}
-                  disabledReason={composerBlockedReason}
+                  disabled={composerBlock !== null}
+                  disabledReason={composerBlock?.message ?? null}
                   running={turn.running}
                   onSend={(text, skills) => {
                     void turn.send(text, routingOverride, skills);
@@ -655,6 +652,9 @@ export function App(): React.JSX.Element {
                     if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
                   }}
                   onInterrupt={() => void turn.interrupt()}
+                  {...(composerBlock?.code === 'no-model'
+                    ? { onRegisterModels: openRegisterModels }
+                    : {})}
                 />
               </div>
 
@@ -698,12 +698,7 @@ export function App(): React.JSX.Element {
           )}
 
           {view === 'settings' && (
-            <SettingsView
-              onRegisterModels={() => {
-                setSkippedThisSession(false);
-                setOverlayForced(true);
-              }}
-            />
+            <SettingsView onRegisterModels={openRegisterModels} />
           )}
         </main>
       </div>
