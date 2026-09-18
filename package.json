@@ -1,6 +1,6 @@
 {
   "name": "l-science",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "L-science - 本地优先 AI 科研工作台",
@@ -36,7 +36,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "pack:win": "npm run build && npm run build:ui && node scripts/download-node.mjs && node scripts/pack-sidecar.mjs && npm run pack:win --workspace @l-science/shell"
   },
   "devDependencies": {
     "@types/node": "26.1.2",
