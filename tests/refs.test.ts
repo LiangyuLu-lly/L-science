@@ -29,6 +29,7 @@ import {
   RefLibrary,
   RefsRepo,
   citeLine,
+  createManageReferencesTool,
   clusterRefs,
   completeness,
   crossrefToCsl,
@@ -948,6 +949,33 @@ describe('文献库服务', () => {
     expect(scan.truncated).toBe(false);
     expect(scan.pairs.length).toBeGreaterThanOrEqual(2);
     expect(scan.pairs[0]?.verdict).toBe('same');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 6b. manage_references 空库文案
+ * ------------------------------------------------------------------ */
+
+describe('manage_references 工具', () => {
+  it('empty library copy mentions DOI or title and not action=resolve', async () => {
+    const tool = createManageReferencesTool({
+      library: () =>
+        new RefLibrary({
+          repo: new RefsRepo(project.db),
+          http: { maxRetries: 0 },
+        }),
+    });
+
+    const result = await tool.execute(
+      { action: 'list' },
+      { projectId: 'p1', conversationId: 'c1', workspaceDir: root },
+    );
+
+    expect(result.ok).toBe(true);
+    const text = (result.output as { text: string }).text;
+    expect(/DOI|标题/.test(text)).toBe(true);
+    expect(text).not.toContain('action=resolve');
+    expect(text).not.toContain('refs.list');
   });
 });
 

@@ -381,7 +381,7 @@ export function createManageReferencesTool(options: RefToolOptions): ToolDefinit
               ok: true,
               output: textOutput(
                 stats.total === 0
-                  ? '文献库是空的。用 action=resolve 加上 DOI 或 PMID 来添加。'
+                  ? '文献库还是空的。粘贴 DOI（10.xxxx/…）或论文标题即可入库。'
                   : `库里有 ${String(stats.total)} 条文献，但没有符合当前筛选条件的。`,
               ),
             };
