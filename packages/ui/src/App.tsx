@@ -39,6 +39,7 @@ import {
 } from './lib/api.js';
 import { hasBackend } from './lib/backend.js';
 import { composerBlockedReason } from './lib/composer-gate.js';
+import { conversationStatusLabel } from './lib/conversation-status.js';
 import { shouldShowFirstRun } from './lib/first-run.js';
 import { useBackend } from './lib/useBackend.js';
 import { useTurn } from './lib/useTurn.js';
@@ -48,7 +49,7 @@ type ViewId =
 
 const VIEWS: ReadonlyArray<{ id: ViewId; label: string; ready: boolean }> = [
   { id: 'chat', label: '会话', ready: true },
-  { id: 'artifacts', label: 'Artifacts', ready: true },
+  { id: 'artifacts', label: '制品', ready: true },
   { id: 'routing', label: '模型路由', ready: true },
   { id: 'usage', label: '用量与成本', ready: true },
   { id: 'tools', label: '工具与环境', ready: true },
@@ -582,7 +583,9 @@ export function App(): React.JSX.Element {
                       onClick={() => setConversationId(c.id)}
                     >
                       <span className="nav__conv-title">{c.title ?? '未命名会话'}</span>
-                      {c.status !== 'idle' && <span className="nav__conv-status">{c.status}</span>}
+                      {c.status !== 'idle' && (
+                        <span className="nav__conv-status">{conversationStatusLabel(c.status)}</span>
+                      )}
                     </button>
                   </li>
                 ))}

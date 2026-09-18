@@ -28,6 +28,7 @@ import {
   SUBAGENT_STATUS_LABEL,
   type ChildConversation,
 } from '../lib/api.js';
+import { conversationStatusLabel } from '../lib/conversation-status.js';
 import { BackendError } from '../lib/backend.js';
 
 function errorText(err: unknown): string {
@@ -169,7 +170,7 @@ export function SubAgentsPanel({
             <p className="subrow__meta">
               {child.agentId === null ? '' : <code>{child.agentId}</code>} 起于{' '}
               {timeText(child.createdAt)} · 活跃 {durationText(child.createdAt, child.updatedAt)}
-              {child.status !== 'idle' && ` · ${child.status}`}
+              {child.status !== 'idle' && ` · ${conversationStatusLabel(child.status)}`}
             </p>
 
             <div className="subrow__actions">
