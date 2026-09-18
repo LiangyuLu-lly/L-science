@@ -1,12 +1,13 @@
 {
   "name": "@l-science/shell",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/main.js",
   "scripts": {
     "build": "tsc --build",
-    "start": "electron ."
+    "start": "electron .",
+    "pack:win": "electron-builder --win nsis"
   },
   "dependencies": {
     "@l-science/shared": "*"
@@ -14,5 +15,49 @@
   "devDependencies": {
     "electron": "43.2.0",
     "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "app.l-science.desktop",
+    "productName": "L-science",
+    "artifactName": "L-science-Setup-${version}.exe",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "../../release/win"
+    },
+    "files": [
+      "dist/**/*",
+      {
+        "from": "../ui/dist",
+        "to": "renderer"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "../../vendor/node-win-x64/node.exe",
+        "to": "node/node.exe"
+      },
+      {
+        "from": "../../release/sidecar-stage",
+        "to": "sidecar/app"
+      },
+      {
+        "from": "../../release/sidecar-stage/node_modules",
+        "to": "sidecar/app/node_modules"
+      },
+      {
+        "from": "../../resources/skills/builtin",
+        "to": "skills/builtin"
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

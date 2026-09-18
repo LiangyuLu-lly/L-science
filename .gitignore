@@ -23,6 +23,9 @@ Thumbs.db
 # Claude Science 参考二进制（158MB，仅供本地逆向分析，不入库）
 /linux-x64
 
+# 打包时下载的官方 Node win-x64 运行时（node.exe），不入库
+/vendor/
+
 # verify:ui 的截图产物，每次运行都会覆盖
 ui-shot.png
 
