@@ -363,6 +363,25 @@ export const loadIsolation = () => invoke<IsolationInfo>({ method: 'sandbox.isol
 export const listTools = (projectId: string) =>
   invoke<ToolListing>({ method: 'tool.list', projectId });
 
+export type EnvDoctorGap = {
+  readonly id: string;
+  readonly what: string;
+  readonly consequence: string;
+  readonly plan: string | null;
+};
+
+export type EnvDoctor = {
+  readonly dataDir: string;
+  readonly dataDirSource: 'env' | 'platform-default';
+  readonly dataDirLabel: string;
+  readonly platform: string;
+  readonly gaps: readonly EnvDoctorGap[];
+  readonly capabilities: string;
+};
+
+export const loadEnvDoctor = (refresh = false) =>
+  invoke<EnvDoctor>({ method: 'env.doctor', refresh });
+
 /* ------------------------------------------------------------------ *
  * 回合事件
  * ------------------------------------------------------------------ */
@@ -735,6 +754,40 @@ export interface ProviderView {
 
 export const listProviders = () =>
   invoke<{ vaultAvailable: boolean; providers: ProviderView[] }>({ method: 'provider.list' });
+
+export type ProvisionSkipReason = 'missing_key' | 'health_failed' | 'not_requested';
+
+export type ProvisionProviderResult =
+  | {
+      readonly id: string;
+      readonly name: string;
+      readonly status: 'registered';
+      readonly latencyMs: number;
+      readonly added: readonly string[];
+      readonly updated: readonly string[];
+      readonly disappeared: readonly string[];
+      readonly modelIds: readonly string[];
+    }
+  | {
+      readonly id: string;
+      readonly name: string;
+      readonly status: 'skipped';
+      readonly reason: ProvisionSkipReason;
+      readonly detail?: string;
+    };
+
+export type ProvisionResult = {
+  readonly providers: readonly ProvisionProviderResult[];
+};
+
+export const provisionProviders = (
+  input: { readonly deepseekKey?: string; readonly detectOllama?: boolean } = {},
+) =>
+  invoke<ProvisionResult>({
+    method: 'provider.provision',
+    ...(input.deepseekKey === undefined ? {} : { deepseekKey: input.deepseekKey }),
+    ...(input.detectOllama === undefined ? {} : { detectOllama: input.detectOllama }),
+  });
 
 export const setProviderEnabled = (providerId: string, enabled: boolean) =>
   invoke<{ providerId: string; enabled: boolean }>({

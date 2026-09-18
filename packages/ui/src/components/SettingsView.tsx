@@ -544,7 +544,7 @@ function CredentialSection({
   );
 }
 
-export function SettingsView(): React.JSX.Element {
+export function SettingsView({ onRegisterModels }: { onRegisterModels: () => void }): React.JSX.Element {
   const [providers, setProviders] = useState<ProviderView[]>([]);
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [credentials, setCredentials] = useState<
@@ -591,6 +591,9 @@ export function SettingsView(): React.JSX.Element {
         <button type="button" className="btn btn--small" onClick={reload}>
           刷新
         </button>
+        <button type="button" className="btn btn--small" onClick={onRegisterModels}>
+          登记模型
+        </button>
       </div>
 
       <CredentialSection
@@ -607,13 +610,7 @@ export function SettingsView(): React.JSX.Element {
 
         {providers.length === 0 ? (
           <p className="panel__hint">
-            还没有登记任何供应商。运行 <code>node scripts/provision.mjs</code> 登记。
-            {/*
-              刻意不提供「界面上新增供应商」：那意味着渲染层可以任意指定基地址，
-              等于让界面决定「把数据发给谁」。登记是一次性的部署动作
-            */}
-            <br />
-            登记供应商需要指定基地址，这一步刻意留在命令行——界面不应该能决定把数据发给哪个服务器。
+            还没有登记任何供应商。点上方「登记模型」录入 DeepSeek 密钥或检测本机 Ollama。
           </p>
         ) : (
           providers.map((p) => (

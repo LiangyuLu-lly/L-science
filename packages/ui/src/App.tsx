@@ -13,6 +13,7 @@ import { ArtifactsView } from './components/ArtifactsView.js';
 import { ChatView } from './components/ChatView.js';
 import { ConnectorsView } from './components/ConnectorsView.js';
 import { ConversationSidebar } from './components/ConversationSidebar.js';
+import { FirstRunOverlay } from './components/FirstRunOverlay.js';
 import { IsolationBadge } from './components/IsolationBadge.js';
 import { RoutingPanel } from './components/RoutingPanel.js';
 import { SettingsView } from './components/SettingsView.js';
@@ -26,6 +27,7 @@ import {
   decideApproval,
   listConversations,
   listProjects,
+  listProviders,
   TASK_LABEL,
   type Conversation,
   type GrantScope,
@@ -34,6 +36,7 @@ import {
   type TaskType,
 } from './lib/api.js';
 import { hasBackend } from './lib/backend.js';
+import { shouldShowFirstRun } from './lib/first-run.js';
 import { useBackend } from './lib/useBackend.js';
 import { useTurn } from './lib/useTurn.js';
 
@@ -408,12 +411,30 @@ export function App(): React.JSX.Element {
    * 记得改回来，忘了会在后续几十次廉价调用上一直付高价。
    */
   const [routingOverride, setRoutingOverride] = useState<RoutingOverride>({});
+  const [providerCount, setProviderCount] = useState<number | null>(null);
+  const [skippedThisSession, setSkippedThisSession] = useState(false);
+  const [overlayForced, setOverlayForced] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
 
   const turn = useTurn(conversationId);
   // 连接状态放在头部而不是只在「工具与环境」页里。后端挂掉时对话会静默停止
   // 响应，如果状态藏在另一个标签页里，用户看到的只是「发了消息没反应」
   const backend = useBackend();
+
+  const refreshProviderCount = useCallback(() => {
+    void listProviders().then((result) => {
+      setProviderCount(result.providers.length);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (backend.state !== 'ready') return;
+    refreshProviderCount();
+  }, [backend.state, refreshProviderCount]);
+
+  const showFirstRun =
+    overlayForced ||
+    (providerCount !== null && shouldShowFirstRun({ providerCount, skippedThisSession }));
 
   /** 输入区不可用时的真实原因。写死一个理由会让用户去排查不存在的问题。 */
   const composerBlockedReason =
@@ -475,6 +496,7 @@ export function App(): React.JSX.Element {
   };
 
   return (
+    <>
     <div className="app">
       {/*
         跳到主内容（需求 20.5.2）。
@@ -675,9 +697,30 @@ export function App(): React.JSX.Element {
             </>
           )}
 
-          {view === 'settings' && <SettingsView />}
+          {view === 'settings' && (
+            <SettingsView
+              onRegisterModels={() => {
+                setSkippedThisSession(false);
+                setOverlayForced(true);
+              }}
+            />
+          )}
         </main>
       </div>
     </div>
+    {showFirstRun && (
+      <FirstRunOverlay
+        onSkip={() => {
+          setSkippedThisSession(true);
+          setOverlayForced(false);
+          refreshProviderCount();
+        }}
+        onDone={() => {
+          setOverlayForced(false);
+          refreshProviderCount();
+        }}
+      />
+    )}
+    </>
   );
 }

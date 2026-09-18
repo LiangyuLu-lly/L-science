@@ -13,6 +13,8 @@ import { useEffect, useState } from 'react';
 
 import { listTools, type ToolListing } from '../lib/api.js';
 
+import { EnvDoctorSection } from './FirstRunOverlay.js';
+
 const CAPABILITY_LABEL: Record<string, string> = {
   'kernel:python': 'Python 内核',
   'kernel:r': 'R 内核',
@@ -45,12 +47,34 @@ export function ToolsPanel({ projectId }: { projectId: string | null }): React.J
     };
   }, [projectId]);
 
-  if (projectId === null) return <p className="view__empty">请先选择一个项目。</p>;
-  if (error !== null) return <p className="view__error">{error}</p>;
-  if (listing === null) return <p>加载中…</p>;
+  if (projectId === null) {
+    return (
+      <div className="view">
+        <EnvDoctorSection compact />
+        <p className="view__empty">请先选择一个项目。</p>
+      </div>
+    );
+  }
+  if (error !== null) {
+    return (
+      <div className="view">
+        <EnvDoctorSection compact />
+        <p className="view__error">{error}</p>
+      </div>
+    );
+  }
+  if (listing === null) {
+    return (
+      <div className="view">
+        <EnvDoctorSection compact />
+        <p>加载中…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="view">
+      <EnvDoctorSection compact />
       <section className="panel" aria-labelledby="env-heading">
         <h2 id="env-heading" className="panel__title">
           运行时环境

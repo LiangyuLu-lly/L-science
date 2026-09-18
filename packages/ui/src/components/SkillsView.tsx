@@ -33,7 +33,6 @@ import {
   setSkillEnabled,
   validateSkill,
   writeSkill,
-  SKILL_ORIGIN_LABEL,
   SKILL_REASON_LABEL,
   type SkillCatalogView,
   type SkillImportOutcome,

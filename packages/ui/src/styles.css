@@ -4357,3 +4357,19 @@ code {
   color: var(--fg-dim);
   font-size: 10px;
 }
+
+/* 首次运行遮罩。只负责铺满视口，内容复用已有 .panel */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  overflow: auto;
+  background: var(--bg);
+}
+
+.overlay__stack {
+  margin: 24px auto;
+  max-inline-size: 40rem;
+  padding: 0 16px;
+  background: var(--bg-raised);
+}
