@@ -212,3 +212,53 @@ describe('env.doctor 契约', () => {
     expect(parseRequest({ method: 'env.doctor', refresh: 'yes' }).ok).toBe(false);
   });
 });
+
+describe('provider.provision 契约', () => {
+  const SECRET = 'sk-PROVISION-CANARY-7c1e90ab';
+
+  it('无参数即可解析，detectOllama 默认为 true', () => {
+    const res = parseRequest({ method: 'provider.provision' });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.value.method === 'provider.provision') {
+      expect(res.value.detectOllama).toBe(true);
+      expect(res.value.deepseekKey).toBeUndefined();
+    }
+  });
+
+  it('接受可选 deepseekKey 与 detectOllama', () => {
+    const res = parseRequest({
+      method: 'provider.provision',
+      deepseekKey: SECRET,
+      detectOllama: false,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.value.method === 'provider.provision') {
+      expect(res.value.deepseekKey).toBe(SECRET);
+      expect(res.value.detectOllama).toBe(false);
+    }
+  });
+
+  it('拒绝额外的 baseUrl，不允许 UI 指定任意端点', () => {
+    const res = parseRequest({
+      method: 'provider.provision',
+      baseUrl: 'http://evil',
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it('拒绝未知供应商 id', () => {
+    expect(parseRequest({ method: 'provider.provision', providerId: 'openai' }).ok).toBe(false);
+    expect(parseRequest({ method: 'provider.provision', openaiKey: 'sk-x' }).ok).toBe(false);
+  });
+
+  it('带密钥的非法载荷被拒时，错误信封不含密钥', () => {
+    const res = parseRequest({
+      method: 'provider.provision',
+      deepseekKey: SECRET,
+      baseUrl: 'http://evil',
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(JSON.stringify(res.error)).not.toContain(SECRET);
+  });
+});

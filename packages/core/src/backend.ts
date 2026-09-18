@@ -130,6 +130,7 @@ import {
   type ModelHealth,
   type ProviderRecord,
 } from './repo/registry.js';
+import { provisionKnownProviders } from './providers/provision.js';
 import { buildTaskProfile, route } from './router/index.js';
 import { FindingsRepo, type FindingStatus, type ReviewerTrigger } from './repo/findings.js';
 import {
@@ -2482,6 +2483,17 @@ async function main(): Promise<void> {
       }),
     );
   };
+
+  d.register('provider.provision', async (req) => {
+    if (req.deepseekKey !== undefined) requireVault();
+    return provisionKnownProviders(
+      { vault, registry: modelRegistry, sync: modelSync, adapters },
+      {
+        ...(req.deepseekKey === undefined ? {} : { deepseekKey: req.deepseekKey }),
+        detectOllama: req.detectOllama,
+      },
+    );
+  });
 
   d.register('credential.list', async () => {
     // available 表示「这台机器能不能存凭据」，exists 表示「已经存过没有」。

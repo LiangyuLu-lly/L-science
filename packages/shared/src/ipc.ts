@@ -454,6 +454,22 @@ export const requestSchema = z.discriminatedUnion('method', [
   /** 轻量健康检查，结果写入模型行供路由硬过滤使用。 */
   z.object({ method: z.literal('provider.checkHealth'), providerId: idSchema }),
 
+  /**
+   * 登记内置供应商（DeepSeek / Ollama）。
+   *
+   * 基地址由适配器常量决定，**不接受**调用方传入的 baseUrl——任意端点等于
+   * 把密钥发到调用方指定的主机。未知供应商 id 同样拒绝：这条方法不是通用
+   * 注册入口，只覆盖已知的两家。
+   *
+   * `deepseekKey` 若给出会先写入凭据库再探活；探活失败密钥仍保留。
+   * **请求载荷不得进入任何日志**（与 credential.set 同一条不变量）。
+   */
+  z.strictObject({
+    method: z.literal('provider.provision'),
+    deepseekKey: z.string().min(1).max(8192).optional(),
+    detectOllama: z.boolean().default(true),
+  }),
+
   z.object({
     method: z.literal('model.list'),
     providerId: idSchema.optional(),

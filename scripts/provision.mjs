@@ -10,35 +10,15 @@
  * 幂等：重复运行只会刷新模型清单。
  */
 
-import {
-  createDefaultRegistry,
-  DEEPSEEK_BASE_URL,
-  OLLAMA_BASE_URL,
-} from '../packages/adapters/dist/index.js';
+import { createDefaultRegistry } from '../packages/adapters/dist/index.js';
 import {
   AppStore,
   CredentialVault,
   RegistryRepo,
   RegistrySync,
   providerRef,
+  provisionKnownProviders,
 } from '../packages/core/dist/index.js';
-
-const KNOWN = [
-  {
-    id: 'deepseek',
-    name: 'DeepSeek',
-    adapter: 'deepseek',
-    baseUrl: DEEPSEEK_BASE_URL,
-    needsKey: true,
-  },
-  {
-    id: 'ollama',
-    name: 'Ollama（本地）',
-    adapter: 'ollama',
-    baseUrl: OLLAMA_BASE_URL,
-    needsKey: false,
-  },
-];
 
 const store = AppStore.open();
 const vault = new CredentialVault();
@@ -49,47 +29,33 @@ const adapters = createDefaultRegistry();
 try {
   process.stdout.write(`应用库：${store.paths.root}\n\n`);
 
-  for (const provider of KNOWN) {
-    const ref = providerRef(provider.id);
-    const hasKey = vault.exists && vault.has(ref);
+  const result = await provisionKnownProviders({ vault, registry, sync, adapters });
 
-    if (provider.needsKey && !hasKey) {
+  for (const item of result.providers) {
+    if (item.status === 'registered') {
       process.stdout.write(
-        `跳过 ${provider.name}：凭据库里没有 ${ref}。\n` +
+        `已注册 ${item.name}（${item.latencyMs}ms）\n` +
+          `  新增 ${item.added.length}，更新 ${item.updated.length}，下线 ${item.disappeared.length}\n` +
+          `  模型：${item.modelIds.join(', ')}\n\n`,
+      );
+      continue;
+    }
+
+    if (item.reason === 'missing_key') {
+      const ref = providerRef(item.id);
+      process.stdout.write(
+        `跳过 ${item.name}：凭据库里没有 ${ref}。\n` +
           `  录入方式：$env:L_SCIENCE_SECRET="..."; node scripts/credential.mjs set ${ref}\n\n`,
       );
       continue;
     }
 
-    const apiKey = hasKey ? (vault.get(ref) ?? undefined) : undefined;
-    const ctx = { baseUrl: provider.baseUrl, ...(apiKey === undefined ? {} : { apiKey }) };
-
-    // 先探活再注册：注册一个连不上的供应商会让路由每次都要把它过滤掉，
-    // 而用户看到的是「有这家供应商但从来不被选中」
-    const health = await adapters.get(provider.id).health(ctx);
-    if (!health.ok) {
-      process.stdout.write(`跳过 ${provider.name}：${health.detail ?? '健康检查未通过'}\n\n`);
+    if (item.reason === 'health_failed') {
+      process.stdout.write(`跳过 ${item.name}：${item.detail ?? '健康检查未通过'}\n\n`);
       continue;
     }
 
-    registry.upsertProvider({
-      id: provider.id,
-      name: provider.name,
-      adapter: provider.adapter,
-      baseUrl: provider.baseUrl,
-      credentialRef: provider.needsKey ? ref : null,
-      policy: null,
-      enabled: true,
-    });
-
-    const models = await adapters.get(provider.id).listModels(ctx);
-    const result = sync.sync(provider.id, models);
-
-    process.stdout.write(
-      `已注册 ${provider.name}（${health.latencyMs}ms）\n` +
-        `  新增 ${result.added.length}，更新 ${result.updated.length}，下线 ${result.disappeared.length}\n` +
-        `  模型：${models.map((m) => m.id).join(', ')}\n\n`,
-    );
+    process.stdout.write(`跳过 ${item.name}\n\n`);
   }
 
   const all = registry.listProviders();

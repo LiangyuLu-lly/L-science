@@ -70,6 +70,15 @@ export * from './router/index.js';
 export { RegistryRepo, RegistrySync, buildRouterView, HEALTH_TTL_MS } from './repo/registry.js';
 export type { ProviderRecord, ModelRecord, ModelHealth, SyncResult } from './repo/registry.js';
 
+export { KNOWN_PROVIDERS, provisionKnownProviders } from './providers/provision.js';
+export type {
+  ProvisionDeps,
+  ProvisionOptions,
+  ProvisionProviderResult,
+  ProvisionResult,
+  ProvisionSkipReason,
+} from './providers/provision.js';
+
 export { UsageRepo, classifyFailure, redactError } from './repo/usage.js';
 export type {
   CallStatus,
