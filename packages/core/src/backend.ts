@@ -146,7 +146,7 @@ import {
   describeLockConflict,
 } from './instance-lock.js';
 import { dataDir, dataDirSource, describeDataDir } from './paths.js';
-import { platform, platformGaps, unknownPlatform } from './platform/index.js';
+import { describePlatform, platform, platformGaps, unknownPlatform } from './platform/index.js';
 import { isolationStrength } from './sandbox/backend.js';
 import { EgressProxy } from './sandbox/egress-proxy.js';
 import { requestHostAccess } from './sandbox/host-access.js';
@@ -187,7 +187,13 @@ import {
 } from './skills/index.js';
 import { createAskUserTool } from './tools/ask-user.js';
 import { BackgroundRunner } from './tools/background.js';
-import { capabilityProbe, detectCapabilities, REMEDIATION } from './tools/capabilities.js';
+import {
+  capabilityProbe,
+  describeCapabilities,
+  detectCapabilities,
+  REMEDIATION,
+  resetCapabilityCache,
+} from './tools/capabilities.js';
 import { createEditFileTool, createReadFileTool } from './tools/files.js';
 import { collectExecution, createKernelTool, formatExecution } from './tools/kernel-tools.js';
 import { ToolRegistry } from './tools/registry.js';
@@ -322,8 +328,17 @@ async function main(): Promise<void> {
     danglingProjects: dangling.length,
   }));
 
-  d.register('env.doctor', async () => {
-    throw notFound('环境自检尚未接入控制平面', '暂时使用命令行 npm run doctor');
+  d.register('env.doctor', async (req) => {
+    if (req.refresh) resetCapabilityCache();
+    const caps = detectCapabilities();
+    return {
+      dataDir: store.paths.root,
+      dataDirSource: dataDirSource(),
+      dataDirLabel: describeDataDir(),
+      platform: describePlatform(),
+      gaps: platformGaps(),
+      capabilities: describeCapabilities(caps),
+    };
   });
 
   /* --- 项目 ------------------------------------------------------------ */

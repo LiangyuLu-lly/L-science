@@ -197,3 +197,18 @@ describe('请求参数校验', () => {
     }
   });
 });
+
+describe('env.doctor 契约', () => {
+  it('env.doctor 无需参数即可解析', () => {
+    const res = parseRequest({ method: 'env.doctor' });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.value.method === 'env.doctor') {
+      expect(res.value.refresh).toBe(false);
+    }
+  });
+
+  it('env.doctor 接受 refresh 布尔', () => {
+    expect(parseRequest({ method: 'env.doctor', refresh: true }).ok).toBe(true);
+    expect(parseRequest({ method: 'env.doctor', refresh: 'yes' }).ok).toBe(false);
+  });
+});

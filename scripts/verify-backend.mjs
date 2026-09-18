@@ -112,14 +112,26 @@ try {
     `schema=v${s1.result?.schema} sqlite=${s1.result?.sqlite}`,
   );
 
-  // --- 3. 未实现的方法返回 not_found 而不是崩溃 ---
+  // --- 3a. env.doctor 已接入控制平面 ---
   send(req('s2', { method: 'env.doctor' }));
   await waitFor(() => byId('s2') !== undefined, 8000, 'env.doctor 响应');
   const s2 = byId('s2');
   check(
-    s2.ok === false && s2.error?.code === 'not_found',
-    '未实现方法报 not_found',
-    s2.error?.remediation ?? '',
+    s2.ok === true &&
+      typeof s2.result?.dataDir === 'string' &&
+      (s2.result?.dataDirSource === 'env' || s2.result?.dataDirSource === 'platform-default'),
+    'env.doctor 往返     ',
+    `source=${s2.result?.dataDirSource ?? ''}`,
+  );
+
+  // --- 3b. 不存在的资源返回 not_found 而不是崩溃 ---
+  send(req('s2b', { method: 'compute.target', targetId: '__no_such_target__' }));
+  await waitFor(() => byId('s2b') !== undefined, 8000, 'compute.target 缺失响应');
+  const s2b = byId('s2b');
+  check(
+    s2b.ok === false && s2b.error?.code === 'not_found',
+    '不存在的资源报 not_found',
+    s2b.error?.message ?? '',
   );
 
   // --- 4. 坏帧只报协议错误，通道继续可用 ---
