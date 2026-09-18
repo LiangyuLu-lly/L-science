@@ -42,6 +42,7 @@ const PROCESS_LABEL: Record<string, string> = {
   'job-object': 'Windows 作业对象',
   cgroup: 'cgroup 限额',
   monitor: '进程树监控（非硬限额）',
+  container: '容器隔离',
   none: '无限额',
 };
 

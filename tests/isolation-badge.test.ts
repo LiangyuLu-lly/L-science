@@ -26,4 +26,8 @@ describe('IsolationBadge collapsed copy', () => {
     // Then: 有对应中文，而不是把 raw `monitor` 漏到界面上
     expect(BADGE).toMatch(/monitor:\s*'进程树监控（非硬限额）'/u);
   });
+
+  it('PROCESS_LABEL includes container', () => {
+    expect(BADGE).toMatch(/container:\s*'容器隔离'/u);
+  });
 });
