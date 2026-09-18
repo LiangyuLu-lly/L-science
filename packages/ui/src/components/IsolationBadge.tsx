@@ -41,6 +41,7 @@ const NETWORK_LABEL: Record<string, string> = {
 const PROCESS_LABEL: Record<string, string> = {
   'job-object': 'Windows 作业对象',
   cgroup: 'cgroup 限额',
+  monitor: '进程树监控（非硬限额）',
   none: '无限额',
 };
 
@@ -93,8 +94,8 @@ export function IsolationBadge(): React.JSX.Element {
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
       >
-        {/* 文字标签在前，颜色只是辅助 */}
-        <span className="isolation__strength">{STRENGTH_LABEL[info.strength]}</span>
+        {/* 折叠态说机制，不把「弱隔离」当吓词。强度文字仍走 STRENGTH_LABEL，给展开层与色盲用户 */}
+        <span className="isolation__strength">本机用户态隔离（点击查看说明）</span>
         <span className="isolation__backend">{BACKEND_LABEL[info.backend] ?? info.backend}</span>
         {caveatCount > 0 && <span className="isolation__caveat-count">{caveatCount} 项限制</span>}
         <span aria-hidden="true" className="isolation__chevron">
@@ -105,6 +106,8 @@ export function IsolationBadge(): React.JSX.Element {
       {expanded && (
         <div className="isolation__detail">
           <dl className="kv">
+            <dt>隔离强度</dt>
+            <dd>{STRENGTH_LABEL[info.strength]}</dd>
             <dt>文件系统</dt>
             <dd>{FILESYSTEM_LABEL[info.isolation.filesystem] ?? info.isolation.filesystem}</dd>
             <dt>网络</dt>
