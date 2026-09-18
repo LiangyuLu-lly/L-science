@@ -665,6 +665,10 @@
   - 新增能力：全局 `:focus-visible` 兜底（此前只有 10 条组件规则，其余靠浏览器默认，而任何一处 `outline: none` 都会让焦点位置彻底看不见）；`forced-colors: active` 支持（Windows 高对比度下自定义边框被丢弃，按钮会变成没有边界的文本）；「跳到主内容」入口（会话列表几十项且排在主内容之前，没有它键盘操作在实际使用中不成立）；字体栈显式列 CJK 字体（`Segoe UI` 没有汉字字形，靠浏览器兜底会让汉字与拉丁字母的字重基线对不上）
   - 边界说明：这些断言不等于「符合 WCAG」。真正的合规判定需要用辅助技术实测并由专业人员评审，任何静态或脚本检查只能覆盖机械可判的那部分
   - _需求：20.5.1、20.5.2、20.5.3_
-- [ ] 15.4 隐私与遥测确认
+- [x] 15.4 隐私与遥测确认
   - 无遥测、状态全本地、技能检索不出网
+  - 这三条的共同点是**回退时没有信号**：加一个 Sentry SDK、把 `listen` 绑到 `0.0.0.0`、技能检索里多一次 `fetch`，界面看起来都完全正常。人工核对守不住——核对过的结论在下一个依赖加进来之后就失效。因此这一项的产出是静态锁
+  - **静态层** `tests/privacy.test.ts`：工作区 `package.json` 的 `dependencies` / `devDependencies` / `optionalDependencies` 不含遥测 SDK（只扫依赖对象的键，不扫 `package-lock.json`、不扫 `peerDependencies`、不把 `@opentelemetry/api` 当遥测）；`appPaths` 每个目录都落在 `dataDir()` 下；控制平面传输是 stdin/stdout 上的 NDJSON；hostapi、egress-proxy、mcp bridge 只监听 `127.0.0.1`；`SkillSearchIndex` 类体不含 `fetch`；`packages/core/src/skills` 里唯一的 `fetch` 是 `createOllamaEmbedder` 的 POST `/api/embed`；`embedderNow` 只在 adapter 为 ollama 且 `baseUrl` 非空时构造嵌入器
+  - 范围外：`usage.ts` / `egress_log` 是本地成本审计，不是遥测；模型适配器与 MCP/连接器的 HTTP 是产品功能本身
+  - 边界说明：这些断言不等于隐私认证。真正的合规判定需要专业人员评审，任何静态检查只能覆盖机械可判的那部分
   - _需求：20.6.1、20.6.2、20.6.3_
