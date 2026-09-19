@@ -306,6 +306,12 @@ export interface RefListItem {
 export const listRefs = (projectId: string) =>
   invoke<{ refs: RefListItem[]; stats: { total: number } }>({ method: 'ref.list', projectId });
 
+export type RefResolveAttempt = {
+  readonly source: string;
+  readonly ok: boolean;
+  readonly reason: string | null;
+};
+
 export type RefResolveOutcome = {
   readonly input: string;
   readonly ok: boolean;
@@ -313,6 +319,7 @@ export type RefResolveOutcome = {
   readonly cite: string | null;
   readonly created: boolean;
   readonly reason: string | null;
+  readonly attempts?: readonly RefResolveAttempt[];
 };
 
 export const resolveRefs = (projectId: string, identifiers: readonly string[]) =>
@@ -364,6 +371,21 @@ export interface ManuscriptListItem {
 
 export const listManuscripts = (projectId: string) =>
   invoke<{ manuscripts: ManuscriptListItem[] }>({ method: 'manuscript.list', projectId });
+
+export type ManuscriptCompileRun = {
+  readonly id: string;
+  readonly errors: number;
+  readonly warnings: number;
+  readonly report: string | null;
+  readonly blinded: boolean;
+  readonly createdAt: number;
+};
+
+export const getManuscript = (projectId: string, manuscriptId: string) =>
+  invoke<{
+    manuscript: ManuscriptListItem & { sourceVersionId: string | null };
+    runs: readonly ManuscriptCompileRun[];
+  }>({ method: 'manuscript.get', projectId, manuscriptId });
 
 export const listArtifactVersions = (projectId: string, artifactId: string) =>
   invoke<{ versions: ArtifactVersionInfo[] }>({

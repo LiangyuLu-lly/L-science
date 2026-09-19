@@ -81,6 +81,10 @@ const api = {
   setReleasesUrl(url: string): Promise<void> {
     return ipcRenderer.invoke(IPC_SHELL, 'set-releases-url', url) as Promise<void>;
   },
+
+  revealPath(path: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_SHELL, 'reveal-path', path) as Promise<void>;
+  },
 } as const;
 
 export type LScienceApi = typeof api;

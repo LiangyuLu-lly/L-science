@@ -42,7 +42,15 @@ export function RefsView({ projectId }: { projectId: string | null }): React.JSX
     setBusy(true);
     try {
       const result = await resolveRefs(projectId, identifiers);
-      const failed = result.outcomes.filter((o) => !o.ok).map((o) => o.reason ?? o.input);
+      const failed = result.outcomes
+        .filter((o) => !o.ok)
+        .map((o) => {
+          const attempts = (o.attempts ?? [])
+            .map((a) => `${a.source}${a.ok ? ' 成功' : `：${a.reason ?? '失败'}`}`)
+            .join('；');
+          const head = o.reason ?? o.input;
+          return attempts === '' ? head : `${head}（${attempts}）`;
+        });
       setRaw('');
       if (failed.length > 0) setError(failed.join('；'));
       else setError(null);

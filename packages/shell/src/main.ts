@@ -396,6 +396,13 @@ function registerIpc(): void {
       writeReleasesUrl(arg);
       return;
     }
+    if (op === 'reveal-path') {
+      if (typeof arg !== 'string' || arg.trim() === '') {
+        throw new Error('path must be a string');
+      }
+      shell.showItemInFolder(arg);
+      return;
+    }
     throw new Error(`unknown shell op: ${String(op)}`);
   });
 }

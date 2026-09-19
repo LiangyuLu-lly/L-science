@@ -62,7 +62,7 @@ describe('cs-eval extras', () => {
   it('exportRepro IPC and committee preview are wired', () => {
     expect(parseRequest({ method: 'artifact.exportRepro', projectId: 'p' }).ok).toBe(true);
     expect(read('packages', 'ui', 'src', 'components', 'RoutingPanel.tsx')).toContain(
-      '对照执行成员',
+      '对照候选（发送只会跑主模型，不会自动连发',
     );
     expect(read('packages', 'ui', 'src', 'components', 'ArtifactsView.tsx')).toContain(
       'exportReproPack',

@@ -282,6 +282,8 @@ export function ArtifactsView({ projectId }: { projectId: string | null }): Reac
             void exportReproPack(projectId)
               .then((pack) => {
                 setError(`已打包 ${String(pack.fileCount)} 个文件到 ${pack.path}`);
+                const reveal = window.lscience?.revealPath;
+                if (reveal !== undefined) void reveal(pack.path);
               })
               .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
           }}

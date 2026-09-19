@@ -25,12 +25,19 @@ describe('paper path navigation', () => {
     expect(APP).toContain('<ManuscriptsView');
   });
 
+  it('empty chat offers DOI and claims next steps', () => {
+    const chat = readFileSync(join('packages', 'ui', 'src', 'components', 'ChatView.tsx'), 'utf8');
+    expect(chat).toContain('去文献贴 DOI');
+    expect(chat).toContain('去断言');
+  });
+
   it('refs view pastes identifiers into ref.resolve', () => {
     const refs = readFileSync(join('packages', 'ui', 'src', 'components', 'RefsView.tsx'), 'utf8');
     expect(refs).toContain('resolveRefs');
     expect(refs).toContain('splitIdentifiers');
     expect(refs).toContain('贴 DOI / PMID / 链接');
     expect(refs).toContain('rows={empty ? 8 : 3}');
+    expect(refs).toContain('attempts');
   });
 
   it('manuscripts view blocks ready-to-submit copy when claims are unresolved', () => {
@@ -40,6 +47,7 @@ describe('paper path navigation', () => {
     );
     expect(ms).toContain('listClaims');
     expect(ms).toContain('不能标为可投稿');
+    expect(ms).toContain('getManuscript');
   });
 });
 

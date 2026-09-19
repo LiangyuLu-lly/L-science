@@ -617,7 +617,8 @@ export function RoutingPanel({
             <DecisionDetail decision={preview.decision} candidates={preview.candidates} />
 
             <p className="panel__hint">
-              对照执行成员（{preview.committee.vendorCount} 家供应商）：{' '}
+              对照候选（发送只会跑主模型，不会自动连发；{preview.committee.vendorCount}{' '}
+              家供应商）：{' '}
               {preview.committee.modelIds.join(' · ') || '无'}
             </p>
             {preview.committee.degradedReason !== null && (

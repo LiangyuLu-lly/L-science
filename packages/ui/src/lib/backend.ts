@@ -134,6 +134,7 @@ interface LScienceApi {
   checkUpdates?: () => Promise<void>;
   getReleasesUrl?: () => Promise<string>;
   setReleasesUrl?: (url: string) => Promise<void>;
+  revealPath?: (path: string) => Promise<void>;
 }
 
 declare global {
