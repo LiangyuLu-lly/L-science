@@ -58,16 +58,22 @@ export function RefsView({ projectId }: { projectId: string | null }): React.JSX
     return <p className="panel__hint">先选择或新建一个项目。</p>;
   }
 
+  const empty = refs !== null && refs.length === 0;
+
   return (
     <section className="view" aria-labelledby="refs-heading">
       <h1 id="refs-heading">文献</h1>
-      <p className="panel__hint">按 DOI 入库，不要凭记忆写标题。共 {total} 条。</p>
+      <p className="panel__hint">
+        {empty
+          ? '库是空的。把 DOI 贴进下面这个框入库，默认只问 Crossref。'
+          : `按 DOI 入库，不要凭记忆写标题。共 ${String(total)} 条。`}
+      </p>
       <form className="refs-resolve" onSubmit={(event) => void onResolve(event)}>
-        <label htmlFor="ref-identifiers">标识（DOI / PMID / 链接）</label>
+        <label htmlFor="ref-identifiers">贴 DOI / PMID / 链接</label>
         <textarea
           id="ref-identifiers"
           className="composer__input"
-          rows={3}
+          rows={empty ? 8 : 3}
           value={raw}
           disabled={busy}
           placeholder="10.1038/… 或 https://doi.org/…"
@@ -86,9 +92,7 @@ export function RefsView({ projectId }: { projectId: string | null }): React.JSX
       )}
       {refs === null ? (
         <p className="panel__hint">加载中…</p>
-      ) : refs.length === 0 ? (
-        <p className="panel__hint">还没有文献。把 DOI 贴到上面入库。</p>
-      ) : (
+      ) : refs.length === 0 ? null : (
         <ul className="ref-list">
           {refs.map((item) => (
             <li key={item.id} className="panel">

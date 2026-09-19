@@ -29,6 +29,8 @@ describe('paper path navigation', () => {
     const refs = readFileSync(join('packages', 'ui', 'src', 'components', 'RefsView.tsx'), 'utf8');
     expect(refs).toContain('resolveRefs');
     expect(refs).toContain('splitIdentifiers');
+    expect(refs).toContain('贴 DOI / PMID / 链接');
+    expect(refs).toContain('rows={empty ? 8 : 3}');
   });
 
   it('manuscripts view blocks ready-to-submit copy when claims are unresolved', () => {

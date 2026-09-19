@@ -1,5 +1,5 @@
 /**
- * 首次运行：环境体检 + 登记 DeepSeek / Ollama。
+ * 首次运行：环境体检 + 登记云端接口 / DeepSeek / Ollama。
  *
  * 可跳过。密钥不回显、提交后立刻清掉。安装包不含 conda 环境，这句话必须原文出现。
  */
@@ -9,11 +9,25 @@ import { useEffect, useState } from 'react';
 import {
   loadEnvDoctor,
   provisionProviders,
+  registerCompatProvider,
   type EnvDoctor,
   type ProvisionProviderResult,
 } from '../lib/api.js';
 import { BackendError } from '../lib/backend.js';
 import { CONDA_ENV_NOTICE } from '../lib/first-run.js';
+
+const FIRST_RUN_PRESETS = [
+  { id: 'openai', name: 'OpenAI', docsUrl: 'https://platform.openai.com/api-keys' },
+  { id: 'groq', name: 'Groq', docsUrl: 'https://console.groq.com/keys' },
+  { id: 'moonshot', name: 'Moonshot（Kimi）', docsUrl: 'https://platform.moonshot.cn/console/api-keys' },
+  { id: 'qwen', name: '通义千问', docsUrl: 'https://help.aliyun.com/zh/model-studio/get-api-key' },
+] as const;
+
+type FirstRunPresetId = (typeof FIRST_RUN_PRESETS)[number]['id'];
+
+function isFirstRunPreset(id: string): id is FirstRunPresetId {
+  return FIRST_RUN_PRESETS.some((preset) => preset.id === id);
+}
 
 const SKIP_REASON_LABEL = {
   missing_key: '未提供密钥',
@@ -184,11 +198,17 @@ export function FirstRunOverlay({
   onDone: () => void;
 }): React.JSX.Element {
   const [deepseekKey, setDeepseekKey] = useState('');
+  const [presetId, setPresetId] = useState<FirstRunPresetId>('openai');
+  const [compatKey, setCompatKey] = useState('');
+  const [compatOk, setCompatOk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<readonly ProvisionProviderResult[] | null>(null);
 
-  const registered = results?.some((item) => item.status === 'registered') ?? false;
+  const registered =
+    compatOk || (results?.some((item) => item.status === 'registered') ?? false);
+  const selectedPreset =
+    FIRST_RUN_PRESETS.find((item) => item.id === presetId) ?? FIRST_RUN_PRESETS[0];
 
   const runProvision = async (input: {
     readonly deepseekKey?: string;
@@ -219,9 +239,73 @@ export function FirstRunOverlay({
           登记模型
         </h2>
         <p className="panel__hint">
-          至少登记一家供应商才能路由。可以现在配 DeepSeek 或检测本机 Ollama，也可以稍后在设置里添加
-          OpenAI、Groq、OpenRouter、Gemini、Kimi、通义、智谱、硅基流动等兼容接口。
+          至少登记一家才能路由。下面直接选 OpenAI、Groq、Kimi 或通义；也可以配 DeepSeek 或检测本机
+          Ollama。更多网关在设置里。
         </p>
+
+        <form
+          className="cred-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (compatKey === '') return;
+            setBusy(true);
+            setError(null);
+            void registerCompatProvider({ presetId, apiKey: compatKey })
+              .then(() => {
+                setCompatKey('');
+                setCompatOk(true);
+              })
+              .catch((err: unknown) => {
+                setError(errorText(err));
+              })
+              .finally(() => {
+                setBusy(false);
+              });
+          }}
+        >
+          <div className="cred-form__field">
+            <label htmlFor="first-run-preset">云端接口</label>
+            <select
+              id="first-run-preset"
+              value={presetId}
+              disabled={busy}
+              onChange={(event) => {
+                const next = event.target.value;
+                if (isFirstRunPreset(next)) setPresetId(next);
+              }}
+            >
+              {FIRST_RUN_PRESETS.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="cred-form__field">
+            <label htmlFor="first-run-compat-key">API 密钥</label>
+            <input
+              id="first-run-compat-key"
+              type="password"
+              value={compatKey}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={busy}
+              onChange={(event) => setCompatKey(event.target.value)}
+            />
+            <span className="cred-form__hint">提交后立刻从界面清除，不会回显。</span>
+            <a
+              className="cred-form__hint"
+              href={selectedPreset.docsUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              获取 {selectedPreset.name} 密钥
+            </a>
+          </div>
+          <button type="submit" className="btn" disabled={busy || compatKey === ''}>
+            登记 {selectedPreset.name}
+          </button>
+        </form>
 
         <form
           className="cred-form"
