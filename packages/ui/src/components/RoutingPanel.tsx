@@ -84,7 +84,7 @@ function ScoreMatrix({
   return (
     <div className="matrix-wrap">
       <table className="matrix">
-        <caption>各候选的得分构成（按总分降序）</caption>
+        <caption>多模型对照：各候选的得分构成（按总分降序）</caption>
         <thead>
           <tr>
             <th scope="col">项</th>
