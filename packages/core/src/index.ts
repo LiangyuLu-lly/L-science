@@ -82,6 +82,11 @@ export type {
 export { registerCompatProvider } from './providers/register-compat.js';
 export type { RegisterCompatInput, RegisterCompatResult } from './providers/register-compat.js';
 
+export { COMPAT_PRESETS, compatProviderIdForUrl, findCompatPreset } from './providers/compat-presets.js';
+export type { CompatPreset } from './providers/compat-presets.js';
+
+export { apiModelName, namespacedModelId } from './providers/api-model-name.js';
+
 export { UsageRepo, classifyFailure, redactError } from './repo/usage.js';
 export type {
   CallStatus,

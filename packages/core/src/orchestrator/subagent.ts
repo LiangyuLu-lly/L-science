@@ -473,7 +473,7 @@ export class SubAgentRunner {
       let step;
       try {
         step = await streamModel({
-          adapter: this.#deps.adapters.get(model.providerId),
+          adapter: this.#deps.adapters.get(ctx.adapterId ?? model.providerId),
           ctx: {
             ...ctx,
             pricing: {

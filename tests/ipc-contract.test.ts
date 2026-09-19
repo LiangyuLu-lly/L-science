@@ -327,4 +327,17 @@ describe('provider.registerCompat 契约', () => {
       expect(res.value.apiKey).toBe(KEY);
     }
   });
+
+  it('provider.registerCompat accepts presetId without URL', () => {
+    const res = parseRequest({
+      method: 'provider.registerCompat',
+      presetId: 'moonshot',
+      apiKey: KEY,
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it('provider.compatPresets has no extra fields', () => {
+    expect(parseRequest({ method: 'provider.compatPresets' }).ok).toBe(true);
+  });
 });

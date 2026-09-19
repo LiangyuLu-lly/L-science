@@ -507,6 +507,8 @@ export const requestSchema = z.discriminatedUnion('method', [
    * 127.0.0.1 / localhost。file: / javascript: / data: 以及非回环 http
    * 一律拒绝，避免把密钥发到调用方指定的任意协议或主机。
    */
+  z.object({ method: z.literal('provider.compatPresets') }),
+
   z.strictObject({
     method: z.literal('provider.registerCompat'),
     baseUrl: z
@@ -515,9 +517,14 @@ export const requestSchema = z.discriminatedUnion('method', [
       .max(2048)
       .refine(isAllowedCompatBaseUrl, {
         message: '基地址必须是 https，或 http 且主机为 127.0.0.1 或 localhost',
-      }),
+      })
+      .optional(),
     apiKey: z.string().min(1).max(8192),
     name: z.string().min(1).max(200).optional(),
+    presetId: z
+      .string()
+      .regex(/^[a-z][a-z0-9-]{0,40}$/u)
+      .optional(),
   }),
 
   z.object({

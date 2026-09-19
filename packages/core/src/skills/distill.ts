@@ -543,7 +543,7 @@ export async function distillSkill(
   const startedAt = Date.now();
   try {
     const collected = await streamModel({
-      adapter: deps.adapters.get(model.providerId),
+      adapter: deps.adapters.get(ctx.adapterId ?? model.providerId),
       ctx: { ...ctx, pricing: model.pricing },
       model,
       history,

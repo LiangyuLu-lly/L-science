@@ -68,6 +68,12 @@ export type StopReason = 'end_turn' | 'max_tokens' | 'tool_use' | 'content_filte
 export interface AdapterContext {
   /** 供应商 API 基地址。本地模型（Ollama/vLLM）也走这条路。 */
   baseUrl: string;
+  /**
+   * 适配器注册表里的 id（如 openai-compat）。
+   *
+   * 与供应商 id 分开：多家网关共用一个适配器实现，但各有各的密钥与基地址。
+   */
+  adapterId?: string;
   /** 由凭据库解密后注入，适配器不自己读磁盘。 */
   apiKey?: string;
   /** 额外请求头，例如各家的组织标识。 */

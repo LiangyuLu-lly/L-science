@@ -579,7 +579,7 @@ export class Orchestrator {
 
       let adapter;
       try {
-        adapter = this.#deps.adapters.get(model.providerId);
+        adapter = this.#deps.adapters.get(ctx.adapterId ?? model.providerId);
       } catch {
         lastError = `供应商 ${model.providerId} 没有对应的适配器`;
         continue;

@@ -131,6 +131,7 @@ import {
   type ProviderRecord,
 } from './repo/registry.js';
 import { provisionKnownProviders } from './providers/provision.js';
+import { COMPAT_PRESETS } from './providers/compat-presets.js';
 import { registerCompatProvider } from './providers/register-compat.js';
 import { buildTaskProfile, route, selectCommittee } from './router/index.js';
 import { writeReproZip } from './artifact/repro-pack.js';
@@ -669,7 +670,9 @@ async function main(): Promise<void> {
    *
    * 返回 null 表示这家供应商还不能用（未登记或没有基地址）。
    */
-  const adapterContextFor = (providerId: string): { baseUrl: string; apiKey?: string } | null => {
+  const adapterContextFor = (
+    providerId: string,
+  ): { baseUrl: string; adapterId: string; apiKey?: string } | null => {
     const provider = modelRegistry.getProvider(providerId);
     if (provider === null || provider.baseUrl === null) return null;
     // 两个条件都要查：库文件不存在时没什么可读，DPAPI 不可用时读会抛错，
@@ -678,7 +681,11 @@ async function main(): Promise<void> {
       provider.credentialRef === null || !vault.available || !vault.exists
         ? undefined
         : (vault.get(provider.credentialRef) ?? undefined);
-    return { baseUrl: provider.baseUrl, ...(apiKey === undefined ? {} : { apiKey }) };
+    return {
+      baseUrl: provider.baseUrl,
+      adapterId: provider.adapter,
+      ...(apiKey === undefined ? {} : { apiKey }),
+    };
   };
 
   /** 路由视图。设置页与试算都要用，凭据存在性的判定必须与编排器一致。 */
@@ -2538,15 +2545,18 @@ async function main(): Promise<void> {
     );
   });
 
+  d.register('provider.compatPresets', async () => ({ presets: COMPAT_PRESETS }));
+
   d.register('provider.registerCompat', async (req) => {
     requireVault();
     try {
       return await registerCompatProvider(
         { vault, registry: modelRegistry, sync: modelSync, adapters },
         {
-          baseUrl: req.baseUrl,
           apiKey: req.apiKey,
+          ...(req.baseUrl === undefined ? {} : { baseUrl: req.baseUrl }),
           ...(req.name === undefined ? {} : { name: req.name }),
+          ...(req.presetId === undefined ? {} : { presetId: req.presetId }),
         },
       );
     } catch (err) {

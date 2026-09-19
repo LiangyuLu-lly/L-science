@@ -12,6 +12,7 @@ import type { ModelDescriptor, ToolOutput, TurnEvent, Usage } from '@l-science/s
 
 import type { ToolCallRepo } from '../repo/conversations.js';
 import { ToolInputError, ToolUnavailableError, type ToolRegistry } from '../tools/registry.js';
+import { apiModelName } from '../providers/api-model-name.js';
 import type { ToolContext } from '../tools/types.js';
 
 /** 输出上限的兜底。模型声明的上限可能极大，全用满没有意义且贵。 */
@@ -63,7 +64,7 @@ export async function streamModel(input: {
   );
 
   const stream = input.adapter.chat(input.ctx, {
-    modelName: input.model.id,
+    modelName: apiModelName(input.model),
     messages: input.history,
     ...(input.toolSchemas.length > 0
       ? {

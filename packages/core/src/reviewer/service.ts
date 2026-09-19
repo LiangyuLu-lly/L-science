@@ -411,7 +411,7 @@ export class ReviewerService {
       if (ctx === null) throw new Error(`供应商 ${picked.model.providerId} 未配置`);
 
       const collected = await streamModel({
-        adapter: this.#deps.adapters.get(picked.model.providerId),
+        adapter: this.#deps.adapters.get(ctx.adapterId ?? picked.model.providerId),
         ctx: { ...ctx, pricing: picked.model.pricing },
         model: picked.model,
         history,
