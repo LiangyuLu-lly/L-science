@@ -10,7 +10,7 @@ Windows 上的本地优先 AI 科研工作台。把文献、断言、手稿和�
 2. 若出现 SmartScreen「Windows 已保护你的电脑」：点 **更多信息 → 仍要运行**。本版未做代码签名，发布者显示为未知是预期行为。
 3. 安装向导可改目录，默认按当前用户安装，不需要管理员。
 
-数据目录默认是 `%LOCALAPPDATA%\L-science`。多开实例请设环境变量 `L_SCIENCE_DATA_DIR` 指向不同文件夹。
+数据目录默认是 `%LOCALAPPDATA%\L-science`。多开实例请设环境变量 `L_SCIENCE_DATA_DIR` 指向不同文件夹。卸载安装包不会删除本机数据目录。
 
 ## 第一次打开
 
