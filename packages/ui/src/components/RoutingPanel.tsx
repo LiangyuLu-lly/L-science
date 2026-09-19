@@ -615,6 +615,26 @@ export function RoutingPanel({
             )}
 
             <DecisionDetail decision={preview.decision} candidates={preview.candidates} />
+
+            <p className="panel__hint">
+              对照执行成员（{preview.committee.vendorCount} 家供应商）：{' '}
+              {preview.committee.modelIds.join(' · ') || '无'}
+            </p>
+            {preview.committee.degradedReason !== null && (
+              <p className="panel__error">{preview.committee.degradedReason}</p>
+            )}
+            <div className="subrow__actions">
+              {preview.committee.modelIds.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className="btn btn--small"
+                  onClick={() => patch({ forcedModelId: id })}
+                >
+                  强制用 {id}
+                </button>
+              ))}
+            </div>
           </section>
         </>
       )}
