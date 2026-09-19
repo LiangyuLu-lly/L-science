@@ -275,9 +275,8 @@ export class SkillManager {
   /**
    * 取一个技能的注入内容（需求 9.5）。
    *
-   * 依赖缺失时**仍然注入**，但把缺失项与安装命令附在开头。不注入会让模型完全
-   * 不知道有这个方法存在，于是自己手写一个方法学上不对的版本；而注入且明确
-   * 告知缺什么，模型可以直接把安装命令交给用户。
+   * 依赖缺失时**不注入操作步骤**。把 SKILL.md 正文塞进去，模型会照着写
+   * `colabfold_batch` 再把失败结果编成结构。只给「本机不能跑 + 缺什么」。
    */
   inject(slug: string): SkillInjection | null {
     const skill = this.#catalog.skills.get(slug);
@@ -290,12 +289,26 @@ export class SkillManager {
     };
     const missing = describeMissing(report);
 
+    if (!report.satisfied) {
+      return {
+        slug,
+        name: skill.manifest.name,
+        content: [
+          `# 技能：${skill.manifest.name}（${slug}）本机不能跑`,
+          missing,
+          '不要按本技能的操作步骤执行，也不要假装已经跑过。',
+          '可以告诉用户缺什么、怎么装；若目标能用公开数据库替代（例如 AlphaFold DB），只允许查询已有结果。',
+        ]
+          .filter((line) => line !== '')
+          .join('\n'),
+        requirements: report,
+        references: [],
+      };
+    }
+
     const header = [
       `# 技能：${skill.manifest.name}（${slug}）`,
       skill.manifest.domain === null ? '' : `领域：${skill.manifest.domain}`,
-      missing === ''
-        ? ''
-        : `> **依赖未满足。** 先把下面的依赖装好再按本技能操作，不要绕过它自己实现：\n> ${missing.replace(/\n/g, '\n> ')}`,
       skill.references.length === 0
         ? ''
         : `参考材料（需要时用 load_skill_reference 加载）：${skill.references.join('、')}`,

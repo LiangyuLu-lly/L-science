@@ -796,8 +796,8 @@ describe('SkillManager', () => {
     expect(record?.enabled).toBe(false);
   });
 
-  it('依赖缺失时仍然注入，但把缺失项与安装命令放在开头', () => {
-    writeSkill(builtinDir, 'needs', { requires: { python: ['nonexistent-pkg'] } }, '正文');
+  it('依赖缺失时不注入操作步骤', () => {
+    writeSkill(builtinDir, 'needs', { requires: { python: ['nonexistent-pkg'] } }, '正文 colabfold_batch');
     const m = new SkillManager({
       builtinDir,
       userDir,
@@ -811,9 +811,8 @@ describe('SkillManager', () => {
     m.reload();
 
     const injection = m.inject('needs');
-    // 不注入会让模型完全不知道有这个方法，于是自己手写一个方法学上不对的版本
-    expect(injection?.content).toContain('正文');
-    expect(injection?.content).toContain('依赖未满足');
+    expect(injection?.content).not.toContain('colabfold_batch');
+    expect(injection?.content).toContain('本机不能跑');
     expect(injection?.content).toContain('pip install nonexistent-pkg');
     expect(injection?.requirements.satisfied).toBe(false);
   });
