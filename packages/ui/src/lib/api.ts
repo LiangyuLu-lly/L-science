@@ -882,10 +882,21 @@ export const provisionProviders = (
     ...(input.detectOllama === undefined ? {} : { detectOllama: input.detectOllama }),
   });
 
-export const registerCompatProvider = (input: {
+export type CompatPreset = {
+  readonly id: string;
+  readonly name: string;
   readonly baseUrl: string;
+  readonly docsUrl: string;
+};
+
+export const listCompatPresets = () =>
+  invoke<{ presets: CompatPreset[] }>({ method: 'provider.compatPresets' });
+
+export const registerCompatProvider = (input: {
   readonly apiKey: string;
+  readonly baseUrl?: string;
   readonly name?: string;
+  readonly presetId?: string;
 }) =>
   invoke<{
     providerId: string;
@@ -896,9 +907,10 @@ export const registerCompatProvider = (input: {
     modelIds: string[];
   }>({
     method: 'provider.registerCompat',
-    baseUrl: input.baseUrl,
     apiKey: input.apiKey,
+    ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }),
     ...(input.name === undefined ? {} : { name: input.name }),
+    ...(input.presetId === undefined ? {} : { presetId: input.presetId }),
   });
 
 export const setProviderEnabled = (providerId: string, enabled: boolean) =>

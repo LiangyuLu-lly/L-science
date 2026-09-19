@@ -20,6 +20,7 @@ import {
   deleteCredential,
   listCredentials,
   listModels,
+  listCompatPresets,
   listProviders,
   registerCompatProvider,
   setCredential,
@@ -30,6 +31,7 @@ import {
   STRENGTH_LABEL,
   type CredentialFingerprint,
   type ModelRecord,
+  type CompatPreset,
   type ProviderView,
   type StrengthKey,
 } from '../lib/api.js';
@@ -588,11 +590,23 @@ function CompatProviderForm({
   available: boolean;
   onChanged: () => void;
 }): React.JSX.Element {
+  const [presets, setPresets] = useState<CompatPreset[]>([]);
+  const [presetId, setPresetId] = useState('openai');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void listCompatPresets()
+      .then((result) => {
+        setPresets(result.presets);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof Error || typeof err === 'object') return;
+      });
+  }, []);
 
   if (!available) {
     return (
@@ -611,7 +625,11 @@ function CompatProviderForm({
     setError(null);
     setNotice(null);
     try {
-      const result = await registerCompatProvider({ baseUrl: baseUrl.trim(), apiKey });
+      const custom = presetId === 'custom';
+      const result = await registerCompatProvider({
+        apiKey,
+        ...(custom ? { baseUrl: baseUrl.trim() } : { presetId }),
+      });
       setNotice(`已登记 ${result.name}，同步 ${String(result.modelIds.length)} 个模型`);
       setApiKey('');
       onChanged();
@@ -624,21 +642,40 @@ function CompatProviderForm({
 
   return (
     <section className="panel" aria-labelledby="compat-heading">
-      <h2 id="compat-heading" className="panel__title">
-        OpenAI 兼容接口
-      </h2>
-      <p className="panel__hint">
-        基地址须为 https，或 http 且主机为 127.0.0.1 / localhost。密钥提交后立刻从界面清除。
-      </p>
-      <form
-        className="cred-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
-      >
-        <div className="cred-form__field">
-          <label htmlFor="compat-base-url">基地址</label>
+        <h2 id="compat-heading" className="panel__title">
+          云端与兼容接口
+        </h2>
+        <p className="panel__hint">
+          可同时登记多家。预设走官方兼容端点；自定义须 https，或 http 回环地址。密钥提交后立刻清除。
+        </p>
+        <form
+          className="cred-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+        >
+          <div className="cred-form__field">
+            <label htmlFor="compat-preset">供应商</label>
+            <select
+              id="compat-preset"
+              value={presetId}
+              disabled={busy}
+              onChange={(event) => {
+                setPresetId(event.target.value);
+              }}
+            >
+              {presets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.name}
+                </option>
+              ))}
+              <option value="custom">自定义 OpenAI 兼容端点</option>
+            </select>
+          </div>
+          {presetId === 'custom' && (
+          <div className="cred-form__field">
+            <label htmlFor="compat-base-url">基地址</label>
           <input
             id="compat-base-url"
             type="text"
@@ -650,6 +687,7 @@ function CompatProviderForm({
             onChange={(e) => setBaseUrl(e.target.value)}
           />
         </div>
+          )}
         <div className="cred-form__field">
           <label htmlFor="compat-api-key">密钥</label>
           <input
@@ -665,7 +703,11 @@ function CompatProviderForm({
         <button
           type="submit"
           className="btn"
-          disabled={busy || baseUrl.trim() === '' || apiKey === ''}
+          disabled={
+            busy ||
+            apiKey === '' ||
+            (presetId === 'custom' && baseUrl.trim() === '')
+          }
         >
           登记
         </button>
