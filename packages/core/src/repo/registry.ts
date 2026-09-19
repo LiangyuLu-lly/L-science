@@ -14,6 +14,7 @@
 import type { ModelDescriptor } from '@l-science/shared';
 
 import type { Db } from '../db.js';
+import { newModelsEnabledByDefault } from '../providers/default-enable.js';
 import type { ModelRuntimeState } from '../router/index.js';
 
 /* ------------------------------------------------------------------ *
@@ -297,6 +298,10 @@ export class RegistrySync {
 
     const added: string[] = [];
     const updated: string[] = [];
+    const enableNew = newModelsEnabledByDefault(
+      providerId,
+      discovered.map((item) => item.id),
+    );
 
     const run = this.#db.transaction(() => {
       for (const descriptor of discovered) {
@@ -306,9 +311,8 @@ export class RegistrySync {
           providerId,
           modelName: descriptor.id,
           descriptor,
-          // 新模型默认启用；已存在的保留用户的选择，不因为一次同步就把
-          // 用户禁用过的模型重新打开
-          enabled: prior?.enabled ?? true,
+          // 已存在的保留用户选择。新模型：目录型网关只开一小撮，其余默认关
+          enabled: prior?.enabled ?? enableNew.has(descriptor.id),
         });
         if (prior === undefined) added.push(descriptor.id);
         else updated.push(descriptor.id);

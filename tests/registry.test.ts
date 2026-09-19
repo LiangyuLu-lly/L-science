@@ -198,6 +198,29 @@ describe('模型同步', () => {
     expect(repo.getModel('ol-a')?.enabled).toBe(true);
   });
 
+  it('openrouter 新模型默认只启用一小撮', () => {
+    repo.upsertProvider(
+      provider({ id: 'openrouter', name: 'OpenRouter', adapter: 'openai-compat' }),
+    );
+    const ids = [
+      'openrouter/openai/gpt-4o-mini',
+      'openrouter/anthropic/claude-sonnet-4',
+      'openrouter/some/obscure-1',
+      'openrouter/some/obscure-2',
+      'openrouter/some/obscure-3',
+    ];
+    sync.sync(
+      'openrouter',
+      ids.map((id) => descriptor(id, { providerId: 'openrouter' })),
+    );
+    expect(repo.getModel('openrouter/openai/gpt-4o-mini')?.enabled).toBe(true);
+    expect(repo.getModel('openrouter/some/obscure-1')?.enabled).toBe(false);
+    const enabled = repo
+      .listModels({ providerId: 'openrouter', includeDisabled: true })
+      .filter((m) => m.enabled);
+    expect(enabled.length).toBeLessThanOrEqual(8);
+  });
+
   it('描述损坏的模型被跳过，不用假数据参与打分', () => {
     sync.sync('deepseek', [descriptor('a'), descriptor('b')]);
     db.prepare("UPDATE models SET descriptor_json = 'broken' WHERE id = ?").run('a');
