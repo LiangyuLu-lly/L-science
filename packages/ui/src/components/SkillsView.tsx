@@ -40,6 +40,11 @@ import {
   type SkillValidateResult,
 } from '../lib/api.js';
 import { BackendError } from '../lib/backend.js';
+import {
+  isFeaturedSkill,
+  skillTraffic,
+  SKILL_TRAFFIC_LABEL,
+} from '../lib/skill-traffic.js';
 
 function errorText(err: unknown): string {
   if (err instanceof BackendError) {
@@ -115,6 +120,11 @@ function StatusBadges({ skill }: { skill: SkillListItem }): React.JSX.Element {
       {!skill.present && (
         <span className="sbadge sbadge--gone" title={`目录已不存在：${skill.path}`}>
           文件已丢失
+        </span>
+      )}
+      {isFeaturedSkill(skill.slug) && (
+        <span className={`sbadge sbadge--${skillTraffic(skill)}`}>
+          {SKILL_TRAFFIC_LABEL[skillTraffic(skill)]}
         </span>
       )}
       {skill.requirementsSatisfied === false && (
