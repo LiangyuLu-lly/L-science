@@ -198,6 +198,7 @@ import {
 } from './tools/capabilities.js';
 import { collectEnvDoctorBlockers } from './tools/env-doctor.js';
 import { createEditFileTool, createReadFileTool } from './tools/files.js';
+import { extractPdfPage } from './tools/pdf-text.js';
 import { collectExecution, createKernelTool, formatExecution } from './tools/kernel-tools.js';
 import { ToolRegistry } from './tools/registry.js';
 import { createShellTool } from './tools/shell.js';
@@ -888,6 +889,7 @@ async function main(): Promise<void> {
       createReadFileTool({
         resolvePath: resolveForRead,
         resolveVersion: (versionId) => artifactStore.versionPath(versionId),
+        extractPdfPage,
       }),
     );
     tools.register(createEditFileTool({ resolvePath: resolveForWrite }));

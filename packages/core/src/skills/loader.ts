@@ -50,10 +50,7 @@ export interface SkillCatalog {
  * 内置技能的目录拒绝名单。skill.json 的 unavailableReason 优先；
  * 这里是防止有人删掉字段后 pdf-explore 又被当成可用技能检索到。
  */
-const CATALOG_UNAVAILABLE: Readonly<Record<string, string>> = {
-  'pdf-explore':
-    'read_file 未接入原生 PDF 抽取。请用 python 工具读取：pypdf 或 pdfplumber。',
-};
+const CATALOG_UNAVAILABLE: Readonly<Record<string, string>> = {};
 
 function catalogUnavailableReason(raw: unknown, slug: string, scope: SkillScope): string | null {
   if (typeof raw === 'object' && raw !== null && !Array.isArray(raw) && 'unavailableReason' in raw) {

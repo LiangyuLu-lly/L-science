@@ -57,6 +57,8 @@ export {
 } from './kernel-tools.js';
 export type { CodeInput, ExecutionCollected, KernelToolOptions } from './kernel-tools.js';
 
+export { extractPdfPage } from './pdf-text.js';
+
 export {
   createEditFileTool,
   createReadFileTool,

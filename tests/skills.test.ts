@@ -657,19 +657,14 @@ describe('内置技能目录（需求 9.7）', () => {
     }
   });
 
-  it('pdf-explore is catalog-unavailable with python remediation and no native pdf dep', () => {
+  it('pdf-explore is in the catalog and still has no pdfjs dependency', () => {
     const catalog = loadSkillCatalog({
       builtinDir: builtinSource,
       userDir: join(root, 'empty-user'),
     });
 
-    expect(catalog.skills.has('pdf-explore')).toBe(false);
-    expect(catalog.broken.some((b) => b.dirName === 'pdf-explore')).toBe(false);
-
-    const entry = catalog.unavailable.find((s) => s.manifest.slug === 'pdf-explore');
-    expect(entry).toBeDefined();
-    expect(entry?.unavailableReason).toMatch(/pypdf/);
-    expect(entry?.unavailableReason).toMatch(/pdfplumber/);
+    expect(catalog.skills.has('pdf-explore')).toBe(true);
+    expect(catalog.unavailable.some((s) => s.manifest.slug === 'pdf-explore')).toBe(false);
 
     const pkgFiles = [
       join(repoRoot, 'package.json'),
