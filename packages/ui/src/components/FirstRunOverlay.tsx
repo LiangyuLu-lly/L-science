@@ -79,16 +79,24 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
         {compact ? '环境体检' : '环境'}
       </h2>
       <p className="panel__hint">{CONDA_ENV_NOTICE}</p>
-      {compact && (
-        <>
-          <pre className="tools__remediation">
-            <code>conda create -n lsci python=3.13</code>
-          </pre>
-          <pre className="tools__remediation">
-            <code>conda create -n lsci-r</code>
-          </pre>
-        </>
-      )}
+      <pre className="tools__remediation">
+        <code>conda create -n lsci python=3.13</code>
+      </pre>
+      <pre className="tools__remediation">
+        <code>conda create -n lsci-r -c conda-forge r-base r-irkernel</code>
+      </pre>
+      <p className="panel__hint">也可在仓库跑 scripts/bootstrap-kernels.ps1（不把 conda 打进安装包）。</p>
+      <button
+        type="button"
+        className="btn btn--small"
+        onClick={() => {
+          void navigator.clipboard.writeText(
+            'conda create -n lsci python=3.13\nconda create -n lsci-r -c conda-forge r-base r-irkernel',
+          );
+        }}
+      >
+        复制 lsci 命令
+      </button>
       {loading && (
         <p className="pcard__busy" role="status">
           正在检查环境…
