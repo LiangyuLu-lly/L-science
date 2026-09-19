@@ -16,6 +16,7 @@ import {
   type ArtifactVersionInfo,
   type LineageNode,
 } from '../lib/api.js';
+import { formatReproManifest } from '../lib/repro-manifest.js';
 
 const KIND_LABEL: Record<string, string> = {
   image: '图像',
@@ -256,6 +257,22 @@ export function ArtifactsView({ projectId }: { projectId: string | null }): Reac
         </label>
         <button type="button" className="btn btn--small" onClick={reload}>
           刷新
+        </button>
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={artifacts === null}
+          onClick={() => {
+            if (artifacts === null) return;
+            const text = formatReproManifest({
+              projectId,
+              exportedAt: Date.now(),
+              artifacts,
+            });
+            void navigator.clipboard.writeText(text);
+          }}
+        >
+          复制可复现清单
         </button>
       </div>
 
