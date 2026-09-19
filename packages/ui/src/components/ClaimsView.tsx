@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { listClaims, type ClaimListItem, type ClaimListSummary } from '../lib/api.js';
+import { rankClaims } from '../lib/claim-rank.js';
 
 const STATUS_LABEL: Record<string, string> = {
   open: '待核验',
@@ -61,7 +62,7 @@ export function ClaimsView({ projectId }: { projectId: string | null }): React.J
         <p className="panel__hint">还没有断言。编译或抽取手稿后会出现在这里，每条必须绑证据。</p>
       ) : (
         <ul className="claim-list">
-          {claims.map((item) => (
+          {rankClaims(claims).map((item) => (
             <li key={item.id} className="panel">
               <p>{item.text}</p>
               <p className="panel__hint">

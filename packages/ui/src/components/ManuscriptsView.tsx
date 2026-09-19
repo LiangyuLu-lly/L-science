@@ -1,10 +1,15 @@
 /**
- * 手稿列表。编译错误的行号在后端；这里先让人找得到手稿本身。
+ * 手稿列表。未关闭断言存在时不得暗示可以投稿。
  */
 
 import { useCallback, useEffect, useState } from 'react';
 
-import { listManuscripts, type ManuscriptListItem } from '../lib/api.js';
+import {
+  listClaims,
+  listManuscripts,
+  type ClaimListSummary,
+  type ManuscriptListItem,
+} from '../lib/api.js';
 
 const STATUS_LABEL: Record<string, string> = {
   drafting: '起草中',
@@ -15,13 +20,15 @@ const STATUS_LABEL: Record<string, string> = {
 
 export function ManuscriptsView({ projectId }: { projectId: string | null }): React.JSX.Element {
   const [rows, setRows] = useState<ManuscriptListItem[] | null>(null);
+  const [summary, setSummary] = useState<ClaimListSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     if (projectId === null) return;
-    void listManuscripts(projectId)
-      .then((result) => {
-        setRows(result.manuscripts);
+    void Promise.all([listManuscripts(projectId), listClaims(projectId)])
+      .then(([manuscripts, claims]) => {
+        setRows(manuscripts.manuscripts);
+        setSummary(claims.summary);
         setError(null);
       })
       .catch((err: unknown) => {
@@ -37,10 +44,17 @@ export function ManuscriptsView({ projectId }: { projectId: string | null }): Re
     return <p className="panel__hint">先选择或新建一个项目。</p>;
   }
 
+  const blocked = summary !== null && summary.unresolved > 0;
+
   return (
     <section className="view" aria-labelledby="manuscripts-heading">
       <h1 id="manuscripts-heading">手稿</h1>
       <p className="panel__hint">正式版与双盲版分列存放。编译前请先核对期刊档案是否过期。</p>
+      {blocked && summary !== null && (
+        <p className="panel__error" role="status">
+          有 {summary.unresolved} 条未关闭断言，不能标为可投稿。
+        </p>
+      )}
       {error !== null && (
         <p className="panel__error" role="alert">
           {error}
