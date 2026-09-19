@@ -130,6 +130,10 @@ interface LScienceApi {
   invoke(request: unknown): Promise<unknown>;
   onEvent(listener: (event: BackendEvent) => void): Unsubscribe;
   onLog(listener: (line: string) => void): Unsubscribe;
+  exportDiagnostics?: () => Promise<void>;
+  checkUpdates?: () => Promise<void>;
+  getReleasesUrl?: () => Promise<string>;
+  setReleasesUrl?: (url: string) => Promise<void>;
 }
 
 declare global {

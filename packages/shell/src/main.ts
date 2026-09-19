@@ -5,8 +5,8 @@
  * 所有业务逻辑都在 @l-science/core 里，跑在独立的系统 Node 进程中（AD-1）。
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -34,6 +34,7 @@ const DEV_SERVER_URL = process.env['L_SCIENCE_DEV_SERVER'];
 const IPC_INVOKE = 'lscience:invoke';
 const IPC_EVENT = 'lscience:event';
 const IPC_LOG = 'lscience:log';
+const IPC_SHELL = 'lscience:shell';
 
 let backend: ChildProcessWithoutNullStreams | null = null;
 let client: BackendClient | null = null;
@@ -42,11 +43,94 @@ let stopping = false;
 let crashDialogShown = false;
 
 const OPEN_LOGS = 0;
+const EXPORT_DIAG = 1;
+
+function userLogDir(): string {
+  const dir = join(app.getPath('userData'), 'logs');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function releasesUrlPath(): string {
+  return join(app.getPath('userData'), 'releases-url.txt');
+}
+
+function readReleasesUrl(): string {
+  const path = releasesUrlPath();
+  if (!existsSync(path)) return '';
+  return readFileSync(path, 'utf8').trim();
+}
+
+function writeReleasesUrl(url: string): void {
+  writeFileSync(releasesUrlPath(), url.trim(), 'utf8');
+}
+
+function isHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
 
 async function openLogDir(): Promise<void> {
-  const logDir = join(app.getPath('userData'), 'logs');
-  mkdirSync(logDir, { recursive: true });
-  await shell.openPath(logDir);
+  await shell.openPath(userLogDir());
+}
+
+async function exportDiagnosticBundle(): Promise<void> {
+  const logDir = userLogDir();
+  writeFileSync(
+    join(logDir, 'meta.json'),
+    `${JSON.stringify(
+      {
+        version: app.getVersion(),
+        exportedAt: new Date().toISOString(),
+        electron: process.versions.electron,
+        chrome: process.versions.chrome,
+        node: process.versions.node,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: '导出诊断包',
+    defaultPath: `l-science-diag-${new Date().toISOString().slice(0, 10)}.zip`,
+    filters: [{ name: 'Zip', extensions: ['zip'] }],
+  });
+  if (canceled || filePath === undefined) return;
+
+  const systemRoot = process.env['SystemRoot'] ?? 'C:\\Windows';
+  const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  execFileSync(
+    powershell,
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Compress-Archive -Path ${JSON.stringify(logDir)} -DestinationPath ${JSON.stringify(filePath)} -Force`,
+    ],
+    { windowsHide: true },
+  );
+}
+
+async function checkForUpdates(): Promise<void> {
+  const url = readReleasesUrl();
+  if (url === '' || !isHttpUrl(url)) {
+    await dialog.showMessageBox({
+      type: 'info',
+      title: '检查更新',
+      message: '尚未配置发布地址',
+      detail: '在设置 → 关于里填写发布页 URL 后再检查更新。不会自动下载或安装。',
+      buttons: ['关闭'],
+      noLink: true,
+    });
+    return;
+  }
+  await shell.openExternal(url);
 }
 
 async function showCrashDialog(detail: string): Promise<void> {
@@ -57,12 +141,14 @@ async function showCrashDialog(detail: string): Promise<void> {
     title: 'L-science 遇到问题',
     message: '应用遇到未处理的错误。',
     detail,
-    buttons: ['打开日志目录', '关闭'],
+    buttons: ['打开日志目录', '导出诊断包', '关闭'],
     defaultId: OPEN_LOGS,
     noLink: true,
   });
   if (response === OPEN_LOGS) {
     await openLogDir();
+  } else if (response === EXPORT_DIAG) {
+    await exportDiagnosticBundle();
   }
 }
 
@@ -99,14 +185,17 @@ async function showAboutDialog(): Promise<void> {
       '不发送遥测。',
       '数据与密钥留在本机。',
       '技能检索不出网（仅本机索引）。',
+      '卸载安装包不会删除本机数据目录。',
     ].join('\n'),
-    buttons: ['打开日志目录', '关闭'],
-    defaultId: 1,
-    cancelId: 1,
+    buttons: ['打开日志目录', '导出诊断包', '关闭'],
+    defaultId: 2,
+    cancelId: 2,
     noLink: true,
   });
   if (response === OPEN_LOGS) {
     await openLogDir();
+  } else if (response === EXPORT_DIAG) {
+    await exportDiagnosticBundle();
   }
 }
 
@@ -124,6 +213,24 @@ function installApplicationMenu(): void {
             label: '关于',
             click: () => {
               void showAboutDialog();
+            },
+          },
+          {
+            label: '检查更新',
+            click: () => {
+              void checkForUpdates();
+            },
+          },
+          {
+            label: '打开日志目录',
+            click: () => {
+              void openLogDir();
+            },
+          },
+          {
+            label: '导出诊断包',
+            click: () => {
+              void exportDiagnosticBundle();
             },
           },
         ],
@@ -268,6 +375,28 @@ function registerIpc(): void {
         ...(envelope.remediation === undefined ? {} : { remediation: envelope.remediation }),
       });
     }
+  });
+
+  ipcMain.handle(IPC_SHELL, async (_event, op: unknown, arg: unknown): Promise<unknown> => {
+    if (op === 'export-diagnostics') {
+      await exportDiagnosticBundle();
+      return;
+    }
+    if (op === 'check-updates') {
+      await checkForUpdates();
+      return;
+    }
+    if (op === 'get-releases-url') {
+      return readReleasesUrl();
+    }
+    if (op === 'set-releases-url') {
+      if (typeof arg !== 'string') {
+        throw new Error('releases url must be a string');
+      }
+      writeReleasesUrl(arg);
+      return;
+    }
+    throw new Error(`unknown shell op: ${String(op)}`);
   });
 }
 

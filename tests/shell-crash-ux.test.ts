@@ -30,4 +30,20 @@ describe('shell crash UX', () => {
     expect(MAIN).toContain('uncaughtException');
     expect(MAIN).toContain('render-process-gone');
   });
+
+  it('crash dialog offers 导出诊断包', () => {
+    expect(MAIN).toContain('导出诊断包');
+    expect(MAIN).toContain('exportDiagnosticBundle');
+    expect(MAIN).toContain('Compress-Archive');
+    expect(MAIN).toContain('meta.json');
+    expect(MAIN).not.toMatch(/sentry/iu);
+  });
+
+  it('help menu can check updates without auto-install', () => {
+    expect(MAIN).toContain('检查更新');
+    expect(MAIN).toContain('尚未配置发布地址');
+    expect(MAIN).toContain('shell.openExternal');
+    expect(MAIN).toContain('releases-url.txt');
+    expect(MAIN).toContain('卸载安装包不会删除本机数据目录。');
+  });
 });

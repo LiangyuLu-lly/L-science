@@ -19,6 +19,7 @@ const { contextBridge, ipcRenderer } = electron;
 const IPC_INVOKE = 'lscience:invoke';
 const IPC_EVENT = 'lscience:event';
 const IPC_LOG = 'lscience:log';
+const IPC_SHELL = 'lscience:shell';
 
 export interface BackendEvent {
   /** 关联的请求 id；广播事件为 null。 */
@@ -63,6 +64,22 @@ const api = {
     return () => {
       ipcRenderer.off(IPC_LOG, wrapped);
     };
+  },
+
+  exportDiagnostics(): Promise<void> {
+    return ipcRenderer.invoke(IPC_SHELL, 'export-diagnostics') as Promise<void>;
+  },
+
+  checkUpdates(): Promise<void> {
+    return ipcRenderer.invoke(IPC_SHELL, 'check-updates') as Promise<void>;
+  },
+
+  getReleasesUrl(): Promise<string> {
+    return ipcRenderer.invoke(IPC_SHELL, 'get-releases-url') as Promise<string>;
+  },
+
+  setReleasesUrl(url: string): Promise<void> {
+    return ipcRenderer.invoke(IPC_SHELL, 'set-releases-url', url) as Promise<void>;
   },
 } as const;
 
