@@ -87,6 +87,7 @@ export type { CompatPreset } from './providers/compat-presets.js';
 
 export { apiModelName, namespacedModelId } from './providers/api-model-name.js';
 export { newModelsEnabledByDefault } from './providers/default-enable.js';
+export { explainCompatFailure } from './providers/compat-error.js';
 
 export { UsageRepo, classifyFailure, redactError } from './repo/usage.js';
 export type {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_DOI_SOURCES, newModelsEnabledByDefault } from '@l-science/core';
+import {
+  DEFAULT_DOI_SOURCES,
+  explainCompatFailure,
+  newModelsEnabledByDefault,
+} from '@l-science/core';
 
 describe('newModelsEnabledByDefault', () => {
   it('enables the whole catalog for small providers', () => {
@@ -29,5 +33,17 @@ describe('newModelsEnabledByDefault', () => {
 describe('DEFAULT_DOI_SOURCES', () => {
   it('is Crossref only', () => {
     expect(DEFAULT_DOI_SOURCES).toEqual(['crossref']);
+  });
+});
+
+describe('explainCompatFailure', () => {
+  it('maps 401 to a key error', () => {
+    const err = explainCompatFailure(new Error('401 Unauthorized'), 'https://api.openai.com/v1');
+    expect(err.message).toContain('密钥被拒绝');
+  });
+
+  it('maps 404 to a base URL hint', () => {
+    const err = explainCompatFailure(new Error('404 Not Found'), 'https://example.com');
+    expect(err.message).toContain('/v1');
   });
 });

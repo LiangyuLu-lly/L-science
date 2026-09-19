@@ -3,9 +3,11 @@
  */
 
 import { OPENAI_COMPAT_ID } from '@l-science/adapters';
+import type { ModelDescriptor } from '@l-science/shared';
 
 import { providerRef } from '../credentials/vault.js';
 import { namespacedModelId } from './api-model-name.js';
+import { explainCompatFailure } from './compat-error.js';
 import {
   compatProviderIdForUrl,
   findCompatPreset,
@@ -53,10 +55,15 @@ export async function registerCompatProvider(
     enabled: true,
   });
 
-  const models = await deps.adapters.get(OPENAI_COMPAT_ID).listModels({
-    baseUrl,
-    apiKey: input.apiKey,
-  });
+  let models: readonly ModelDescriptor[];
+  try {
+    models = await deps.adapters.get(OPENAI_COMPAT_ID).listModels({
+      baseUrl,
+      apiKey: input.apiKey,
+    });
+  } catch (err: unknown) {
+    throw explainCompatFailure(err, baseUrl);
+  }
   const namespaced = models.map((model) => ({
     ...model,
     id: namespacedModelId(providerId, model.id),
