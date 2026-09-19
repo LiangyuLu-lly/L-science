@@ -99,5 +99,18 @@ function pdfStrings(content: string): string {
     const inner = m[0].slice(1, -1);
     parts.push(unescapePdfString(inner));
   }
+  return collapseSpacedLetters(joinPdfParts(parts));
+}
+
+function joinPdfParts(parts: readonly string[]): string {
+  if (parts.length === 0) return '';
+  if (parts.every((part) => [...part].length <= 2)) return parts.join('');
   return parts.join(' ');
+}
+
+/** 把 `A l p h a F o l d` 这类逐字加空格收成词。 */
+export function collapseSpacedLetters(text: string): string {
+  return text.replace(/(?:[\p{L}\p{N}]\s){2,}[\p{L}\p{N}]/gu, (chunk) =>
+    chunk.replace(/\s+/gu, ''),
+  );
 }

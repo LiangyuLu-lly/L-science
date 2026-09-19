@@ -9,7 +9,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { extractPdfPage } from '@l-science/core';
+import { collapseSpacedLetters, extractPdfPage } from '@l-science/core';
 
 /** 生成一页未压缩 PDF，正文是可抽取的 Tj 字符串。 */
 export function uncompressedPdf(text: string): Buffer {
@@ -57,5 +57,9 @@ describe('extractPdfPage', () => {
 
     const result = await extractPdfPage(path, 9);
     expect(result.pageCount).toBe(1);
+  });
+
+  it('collapses per-glyph spaced letters', () => {
+    expect(collapseSpacedLetters('A l p h a F o l d')).toBe('AlphaFold');
   });
 });
