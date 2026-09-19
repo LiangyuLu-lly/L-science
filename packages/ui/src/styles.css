@@ -17,6 +17,17 @@
   --fg: #e6e8ee;
   --fg-dim: #9aa2b1;
   --accent: #6aa9ff;
+  --bg-overlay: rgba(8, 10, 14, 0.55);
+  --shadow-raised: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --radius-control: 6px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --focus-ring: 2px solid var(--accent);
+  --fs-ui: 13px;
+  --fs-body: 14px;
+  --fs-title: 16px;
 
   color-scheme: dark;
   /*
@@ -42,7 +53,7 @@
     'Noto Sans CJK SC',
     'Source Han Sans SC',
     sans-serif;
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.6;
 }
 
@@ -78,6 +89,9 @@ textarea {
  *
  * 用 `:focus-visible` 而不是 `:focus`：后者会让鼠标点击也画出焦点环，那个视觉噪音会让
  * 人想去关掉它，而关掉的方式正是上面那条 `outline: none`。
+ *
+ * 这里写字面量 `2px solid` 而不是 `var(--focus-ring)`：accessibility.test.ts 用源码
+ * 扫兜底规则是否真的画出了环。令牌仍在 `:root`，给其它规则复用。
  */
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -142,7 +156,7 @@ body {
   color: var(--fg);
   background: var(--bg-raised);
   border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: 6px 12px;
   transition: top 120ms ease-out;
 }
@@ -169,6 +183,7 @@ body {
   padding: 12px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
 }
 
 .app__brand {
@@ -224,7 +239,7 @@ body {
 }
 
 .app__main h1 {
-  font-size: 20px;
+  font-size: var(--fs-title);
   font-weight: 600;
   margin-top: 0;
 }
@@ -254,9 +269,10 @@ code {
 
 .panel {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: var(--bg-raised);
-  padding: 16px 18px;
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-3) 18px;
   margin: 20px 0;
 }
 
@@ -329,11 +345,11 @@ code {
 
 .btn {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-ui);
   color: var(--fg);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: 3px 10px;
   cursor: pointer;
 }
@@ -519,6 +535,22 @@ code {
 
 .about-footer .panel__title {
   margin-block-end: 8px;
+}
+
+.about-footer__url {
+  display: block;
+  margin-block-start: var(--space-3);
+  margin-block-end: var(--space-1);
+  color: var(--fg-dim);
+  font-size: var(--fs-ui);
+}
+
+.about-footer .composer__input {
+  width: 100%;
+}
+
+.about-footer .subrow__actions {
+  margin-block-start: var(--space-2);
 }
 
 .view__toolbar {
@@ -4414,12 +4446,15 @@ code {
   inset: 0;
   z-index: 40;
   overflow: auto;
-  background: var(--bg);
+  background: var(--bg-overlay);
 }
 
 .overlay__stack {
-  margin: 24px auto;
+  margin: var(--space-4) auto;
   max-inline-size: 40rem;
-  padding: 0 16px;
+  padding: var(--space-3);
   background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-raised);
 }
