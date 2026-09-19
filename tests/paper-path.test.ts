@@ -24,6 +24,21 @@ describe('paper path navigation', () => {
     expect(APP).toContain('<ClaimsView');
     expect(APP).toContain('<ManuscriptsView');
   });
+
+  it('refs view pastes identifiers into ref.resolve', () => {
+    const refs = readFileSync(join('packages', 'ui', 'src', 'components', 'RefsView.tsx'), 'utf8');
+    expect(refs).toContain('resolveRefs');
+    expect(refs).toContain('splitIdentifiers');
+  });
+
+  it('manuscripts view blocks ready-to-submit copy when claims are unresolved', () => {
+    const ms = readFileSync(
+      join('packages', 'ui', 'src', 'components', 'ManuscriptsView.tsx'),
+      'utf8',
+    );
+    expect(ms).toContain('listClaims');
+    expect(ms).toContain('不能标为可投稿');
+  });
 });
 
 describe('paper path IPC', () => {

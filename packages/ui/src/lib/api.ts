@@ -306,6 +306,27 @@ export interface RefListItem {
 export const listRefs = (projectId: string) =>
   invoke<{ refs: RefListItem[]; stats: { total: number } }>({ method: 'ref.list', projectId });
 
+export type RefResolveOutcome = {
+  readonly input: string;
+  readonly ok: boolean;
+  readonly refId: string | null;
+  readonly cite: string | null;
+  readonly created: boolean;
+  readonly reason: string | null;
+};
+
+export const resolveRefs = (projectId: string, identifiers: readonly string[]) =>
+  invoke<{
+    created: number;
+    duplicates: number;
+    failed: number;
+    outcomes: readonly RefResolveOutcome[];
+  }>({
+    method: 'ref.resolve',
+    projectId,
+    identifiers: [...identifiers],
+  });
+
 export interface ClaimListItem {
   id: string;
   text: string;
