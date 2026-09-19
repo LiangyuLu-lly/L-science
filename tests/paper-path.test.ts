@@ -1,0 +1,36 @@
+/**
+ * 论文主路径：文献 / 断言 / 手稿必须是一等导航，并有 IPC 列表方法。
+ * 后端工具已经存在；缺的是研究者找得到的视图。
+ */
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import { parseRequest } from '@l-science/shared';
+
+const APP = readFileSync(join('packages', 'ui', 'src', 'App.tsx'), 'utf8');
+
+describe('paper path navigation', () => {
+  it('sidebar registers 文献 断言 手稿 as ready views', () => {
+    expect(APP).toContain("id: 'refs'");
+    expect(APP).toContain("label: '文献'");
+    expect(APP).toContain("id: 'claims'");
+    expect(APP).toContain("label: '断言'");
+    expect(APP).toContain("id: 'manuscripts'");
+    expect(APP).toContain("label: '手稿'");
+    expect(APP).toContain('<RefsView');
+    expect(APP).toContain('<ClaimsView');
+    expect(APP).toContain('<ManuscriptsView');
+  });
+});
+
+describe('paper path IPC', () => {
+  it('accepts ref.list, claim.list, manuscript.list', () => {
+    for (const method of ['ref.list', 'claim.list', 'manuscript.list'] as const) {
+      const parsed = parseRequest({ method, projectId: 'p1' });
+      expect(parsed.ok, method).toBe(true);
+    }
+  });
+});

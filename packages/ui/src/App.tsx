@@ -11,7 +11,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApprovalCard } from './components/ApprovalCard.js';
 import { ArtifactsView } from './components/ArtifactsView.js';
 import { ChatView } from './components/ChatView.js';
+import { ClaimsView } from './components/ClaimsView.js';
 import { ConnectorsView } from './components/ConnectorsView.js';
+import { ManuscriptsView } from './components/ManuscriptsView.js';
+import { RefsView } from './components/RefsView.js';
 import { ConversationSidebar } from './components/ConversationSidebar.js';
 import { FirstRunOverlay } from './components/FirstRunOverlay.js';
 import { ProjectHeader } from './components/ProjectHeader.js';
@@ -45,10 +48,23 @@ import { useBackend } from './lib/useBackend.js';
 import { useTurn } from './lib/useTurn.js';
 
 type ViewId =
-  'chat' | 'artifacts' | 'routing' | 'usage' | 'tools' | 'skills' | 'connectors' | 'settings';
+  | 'chat'
+  | 'refs'
+  | 'claims'
+  | 'manuscripts'
+  | 'artifacts'
+  | 'routing'
+  | 'usage'
+  | 'tools'
+  | 'skills'
+  | 'connectors'
+  | 'settings';
 
 const VIEWS: ReadonlyArray<{ id: ViewId; label: string; ready: boolean }> = [
   { id: 'chat', label: '会话', ready: true },
+  { id: 'refs', label: '文献', ready: true },
+  { id: 'claims', label: '断言', ready: true },
+  { id: 'manuscripts', label: '手稿', ready: true },
   { id: 'artifacts', label: '制品', ready: true },
   { id: 'routing', label: '模型路由', ready: true },
   { id: 'usage', label: '用量与成本', ready: true },
@@ -678,6 +694,10 @@ export function App(): React.JSX.Element {
               />
             </div>
           )}
+
+          {view === 'refs' && <RefsView projectId={projectId} />}
+          {view === 'claims' && <ClaimsView projectId={projectId} />}
+          {view === 'manuscripts' && <ManuscriptsView projectId={projectId} />}
 
           {view === 'artifacts' && <ArtifactsView projectId={projectId} />}
 

@@ -286,6 +286,64 @@ export interface DeleteCandidate {
 export const listArtifacts = (projectId: string, includeDeleted = false) =>
   invoke<{ artifacts: ArtifactSummary[] }>({ method: 'artifact.list', projectId, includeDeleted });
 
+/* ------------------------------------------------------------------ *
+ * 论文主路径：文献 / 断言 / 手稿（IPC 已有，视图此前没接）
+ * ------------------------------------------------------------------ */
+
+export interface RefListItem {
+  id: string;
+  doi: string | null;
+  cite: string;
+  title: string | null;
+  year: number | null;
+  container: string | null;
+  firstAuthor: string | null;
+  oaStatus: string | null;
+  fulltextArtifactId: string | null;
+  retracted: boolean;
+}
+
+export const listRefs = (projectId: string) =>
+  invoke<{ refs: RefListItem[]; stats: { total: number } }>({ method: 'ref.list', projectId });
+
+export interface ClaimListItem {
+  id: string;
+  text: string;
+  status: string;
+  kind: string;
+  origin: string;
+  unsupported: boolean;
+  verifiedCount: number;
+  locator: string | null;
+  section: string | null;
+}
+
+export interface ClaimListSummary {
+  total: number;
+  unresolved: number;
+  unsupported: number;
+  refuted: number;
+  supported: number;
+}
+
+export const listClaims = (projectId: string) =>
+  invoke<{ claims: ClaimListItem[]; summary: ClaimListSummary }>({
+    method: 'claim.list',
+    projectId,
+    status: 'all',
+  });
+
+export interface ManuscriptListItem {
+  id: string;
+  title: string | null;
+  status: string;
+  targetJournal: string | null;
+  updatedAt: number | null;
+}
+
+export const listManuscripts = (projectId: string) =>
+  invoke<{ manuscripts: ManuscriptListItem[] }>({ method: 'manuscript.list', projectId });
+
 export const listArtifactVersions = (projectId: string, artifactId: string) =>
   invoke<{ versions: ArtifactVersionInfo[] }>({
     method: 'artifact.versions',
