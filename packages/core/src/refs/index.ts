@@ -94,6 +94,7 @@ export type {
   SniffedIdentifier,
 } from './resolver.js';
 export {
+  ALL_DOI_SOURCES,
   DEFAULT_DOI_SOURCES,
   DEFAULT_SEARCH_SOURCES,
   resolveByArxiv,

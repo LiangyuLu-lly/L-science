@@ -52,7 +52,10 @@ import {
   protectAcronyms,
   pubmedSummaryToCsl,
   rebuildInvertedAbstract,
+  ALL_DOI_SOURCES,
+  DEFAULT_DOI_SOURCES,
   resolveByDoi,
+  type ResolveOptions,
   sanitizeKey,
   semanticScholarToCsl,
   sniffIdentifier,
@@ -788,12 +791,14 @@ describe('文献库服务', () => {
     overrides: {
       authorizeHosts?: (h: readonly string[]) => Promise<readonly string[]>;
       fetchImpl?: FetchImpl;
+      http?: Pick<ResolveOptions, 'sources' | 'firstOnly'>;
     } = {},
   ): RefLibrary {
     return new RefLibrary({
       repo: new RefsRepo(project.db),
       http: {
         ...(overrides.fetchImpl === undefined ? {} : { fetchImpl: overrides.fetchImpl }),
+        ...(overrides.http ?? {}),
         maxRetries: 0,
       },
       ...(overrides.authorizeHosts === undefined
@@ -868,13 +873,13 @@ describe('文献库服务', () => {
     const outcome = await lib.addByIdentifier('10.1000/x');
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toContain('未获批准');
-    // 每一家都要在 attempts 里出现，否则「为什么没结果」不可解释
-    expect(outcome.attempts.length).toBeGreaterThanOrEqual(6);
+    expect(outcome.attempts.length).toBe(DEFAULT_DOI_SOURCES.length);
     expect(outcome.attempts.every((a) => !a.ok)).toBe(true);
   });
 
   it('批准门只放行部分主机时，未获批的上游在 attempts 里留痕', async () => {
     const lib = library({
+      http: { sources: ALL_DOI_SOURCES, firstOnly: false },
       authorizeHosts: async () => ['api.crossref.org'],
       fetchImpl: stubFetch({
         'https://api.crossref.org/works/': {
@@ -894,6 +899,19 @@ describe('文献库服务', () => {
     expect(outcome.ref?.csl.title).toBe('Only Crossref answered');
     const denied = outcome.attempts.filter((a) => a.reason?.includes('未获批准') === true);
     expect(denied.length).toBe(5);
+  });
+
+  it('默认只向批准门询问 Crossref', async () => {
+    let asked: string[] = [];
+    const lib = library({
+      authorizeHosts: async (hosts) => {
+        asked = [...hosts];
+        return hosts;
+      },
+      fetchImpl: stubFetch({}),
+    });
+    await lib.addByIdentifier('10.1000/x');
+    expect(asked).toEqual(['api.crossref.org']);
   });
 
   it('批准门只问一次，并发调用共用同一次询问', async () => {
@@ -1092,6 +1110,7 @@ describe('HTTP 层', () => {
 
   it('resolveByDoi 并行取六家并合并，最终 DOI 是请求的那个', async () => {
     const report = await resolveByDoi('10.1000/x', {
+      sources: ALL_DOI_SOURCES,
       maxRetries: 0,
       fetchImpl: stubFetch({
         'https://api.crossref.org/works/': {

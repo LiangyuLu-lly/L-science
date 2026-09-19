@@ -66,8 +66,8 @@ export interface AddOutcome {
  * 每家上游会访问的主机。
  *
  * 显式列出来而不是从 URL 里现推：域名批准门要在**发请求之前**知道会连哪些主机，
- * 才能把六家合成一张审批卡片。边发边问会在一次 DOI 解析里弹出三张卡片，用户根本
- * 不知道自己在批准什么。
+   * 才能按实际要用的上游合成一张审批卡片。边发边问会在一次 DOI 解析里弹出多张卡片，用户根本
+   * 不知道自己在批准什么。
  *
  * 这几个主机与连接器目录里的域名有重叠（`api.openalex.org`、
  * `eutils.ncbi.nlm.nih.gov`、`www.ebi.ac.uk` 已由 OpenAlex / PubMed / ChEMBL 连接器
@@ -242,7 +242,9 @@ export class RefLibrary {
 
     if (this.#allowedHosts === null) {
       if (this.#authorizing === null) {
-        const hosts = [...new Set(Object.values(REF_SOURCE_HOSTS).flat())];
+        const hosts = [
+          ...new Set(wanted.flatMap((source) => REF_SOURCE_HOSTS[source] ?? [])),
+        ];
         const gate = this.#authorizeHosts;
         this.#authorizing = gate(hosts)
           .then((granted) => new Set(granted))
@@ -425,7 +427,7 @@ export class RefLibrary {
   /**
    * 按标识（DOI/PMID/PMCID/arXiv）解析并入库。
    *
-   * 入库前**先查库**：库里已有时省掉六次网络请求。这不只是省流量——批量导入
+     * 入库前**先查库**：库里已有时省掉上游请求。这不只是省流量——批量导入
    * 一份两百条的参考文献列表时，其中大半通常已经在库里，跳过它们把一次几分钟
    * 的操作变成几秒。
    *
@@ -475,7 +477,7 @@ export class RefLibrary {
       }
     }
 
-    const http = { ...this.#http, ...(options.http ?? {}) };
+    const http = { firstOnly: true, ...this.#http, ...(options.http ?? {}) };
     const wanted = http.sources ?? DEFAULT_DOI_SOURCES;
     const { allowed, denied } = await this.#allowedSources(wanted);
 

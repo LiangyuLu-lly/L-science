@@ -44,7 +44,8 @@ import {
  * 「字段最规范的在前」：Crossref 是 DOI 的注册机构之一，它的书目字段是权威的；
  * DataCite 排最后是因为绝大多数期刊 DOI 不在它那里，它主要救数据集与软件。
  */
-export const DEFAULT_DOI_SOURCES: readonly RefSourceId[] = [
+/** 需要补全字段或对照多家时显式传入。日常入库默认只走 Crossref。 */
+export const ALL_DOI_SOURCES: readonly RefSourceId[] = [
   'crossref',
   'openalex',
   'europepmc',
@@ -52,6 +53,8 @@ export const DEFAULT_DOI_SOURCES: readonly RefSourceId[] = [
   'pubmed',
   'datacite',
 ];
+
+export const DEFAULT_DOI_SOURCES: readonly RefSourceId[] = ['crossref'];
 
 export interface ResolveOptions extends PubmedOptions {
   /** 尝试哪些上游。省略用 `DEFAULT_DOI_SOURCES`。 */

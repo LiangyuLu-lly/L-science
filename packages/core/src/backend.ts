@@ -1528,28 +1528,26 @@ async function main(): Promise<void> {
             missing.map((h) => `· ${h}`).join('\n') +
             '\n\n发出去的内容是 DOI、PMID 或标题检索词。这些服务不接收工作区里的数据。',
           impact:
-            '批准后文献库可以查询这些服务。它们返回的元数据（标题、作者、摘要）会存进项目库。',
+            '批准后文献库可以查询这些服务。它们返回的元数据（标题、作者、摘要）会存进项目库。下次解析同一批域名不再询问。',
           reversible: true,
           undoHint: '在设置的授权列表里撤销这些域名。',
-          scopeOptions: ['once', 'project', 'always'],
+          scopeOptions: ['project', 'always'],
           payload: { hosts: missing },
         });
 
         if (result.state !== 'approved') return allowed;
 
-        if (result.scope !== 'once') {
-          for (const host of missing) {
-            try {
-              grants.allowDomain({
-                domain: host,
-                mode: 'rw',
-                scope: result.scope,
-                scopeId: result.scope === 'project' ? projectId : null,
-                reason: `用户为文献库在项目 ${projectId} 内批准`,
-              });
-            } catch (err) {
-              log(`文献库域名授权写入失败：${err instanceof Error ? err.message : String(err)}`);
-            }
+        for (const host of missing) {
+          try {
+            grants.allowDomain({
+              domain: host,
+              mode: 'rw',
+              scope: result.scope === 'always' ? 'always' : 'project',
+              scopeId: result.scope === 'always' ? null : projectId,
+              reason: `用户为文献库在项目 ${projectId} 内批准`,
+            });
+          } catch (err) {
+            log(`文献库域名授权写入失败：${err instanceof Error ? err.message : String(err)}`);
           }
         }
         return [...allowed, ...missing];
