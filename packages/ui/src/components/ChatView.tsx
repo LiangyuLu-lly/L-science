@@ -156,6 +156,8 @@ export interface ChatViewProps {
   blocked: boolean;
   blockedReason: string | null;
   onRegisterModels?: () => void;
+  onGoRefs?: () => void;
+  onGoClaims?: () => void;
 }
 
 export function ChatView(props: ChatViewProps): React.JSX.Element {
@@ -187,12 +189,26 @@ export function ChatView(props: ChatViewProps): React.JSX.Element {
           <p className="chat__empty">
             {props.blocked
               ? (props.blockedReason ?? '还没有消息。')
-              : '还没有消息。在下方输入框里说点什么。'}
+              : '还没有消息。可以贴 DOI 入库，或从文献抽断言。'}
           </p>
           {props.blocked && props.onRegisterModels !== undefined && (
             <button type="button" className="btn btn--small" onClick={props.onRegisterModels}>
               去登记模型
             </button>
+          )}
+          {!props.blocked && (
+            <div className="pcard__actions">
+              {props.onGoRefs !== undefined && (
+                <button type="button" className="btn btn--small" onClick={props.onGoRefs}>
+                  去文献贴 DOI
+                </button>
+              )}
+              {props.onGoClaims !== undefined && (
+                <button type="button" className="btn btn--small" onClick={props.onGoClaims}>
+                  去断言
+                </button>
+              )}
+            </div>
           )}
         </>
       )}

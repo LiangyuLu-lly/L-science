@@ -463,7 +463,8 @@ export function App(): React.JSX.Element {
 
   const showFirstRun =
     overlayForced ||
-    (providerCount !== null && shouldShowFirstRun({ providerCount, skippedThisSession }));
+    (providerCount !== null &&
+      shouldShowFirstRun({ providerCount, skippedThisSession, view }));
 
   /** 输入区不可用时的真实原因。写死一个理由会让用户去排查不存在的问题。 */
   const composerBlock = composerBlockedReason({
@@ -650,6 +651,12 @@ export function App(): React.JSX.Element {
                   {...(composerBlock?.code === 'no-model'
                     ? { onRegisterModels: openRegisterModels }
                     : {})}
+                  onGoRefs={() => {
+                    setView('refs');
+                  }}
+                  onGoClaims={() => {
+                    setView('claims');
+                  }}
                 />
                 {/*
                 有覆盖在生效时必须在输入区旁边说出来。藏在路由面板里的话，
@@ -736,6 +743,7 @@ export function App(): React.JSX.Element {
         onSkip={() => {
           setSkippedThisSession(true);
           setOverlayForced(false);
+          setView('settings');
           refreshProviderCount();
         }}
         onDone={() => {
