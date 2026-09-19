@@ -57,3 +57,15 @@ describe('cs-eval 10 scenarios', () => {
     expect(read('packages', 'ui', 'src', 'lib', 'skill-traffic.ts')).toContain('alphafold2');
   });
 });
+
+describe('cs-eval extras', () => {
+  it('exportRepro IPC and committee preview are wired', () => {
+    expect(parseRequest({ method: 'artifact.exportRepro', projectId: 'p' }).ok).toBe(true);
+    expect(read('packages', 'ui', 'src', 'components', 'RoutingPanel.tsx')).toContain(
+      '对照执行成员',
+    );
+    expect(read('packages', 'ui', 'src', 'components', 'ArtifactsView.tsx')).toContain(
+      'exportReproPack',
+    );
+  });
+});
