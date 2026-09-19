@@ -389,6 +389,12 @@ export const describeDeletion = (projectId: string, artifactIds: string[]) =>
 export const restoreArtifact = (projectId: string, artifactId: string) =>
   invoke<{ restored: boolean }>({ method: 'artifact.restore', projectId, artifactId });
 
+export const exportReproPack = (projectId: string) =>
+  invoke<{ path: string; fileCount: number; irreproducible: number }>({
+    method: 'artifact.exportRepro',
+    projectId,
+  });
+
 /* ------------------------------------------------------------------ *
  * 环境
  * ------------------------------------------------------------------ */
@@ -984,6 +990,11 @@ export interface RoutingPreview {
   emptyReport: string | null;
   /** 本次生效的权重表。用户据此看清没覆盖的维度默认是多少。 */
   weights: Partial<Record<StrengthKey, number>>;
+  committee: {
+    modelIds: string[];
+    vendorCount: number;
+    degradedReason: string | null;
+  };
 }
 
 export const previewRouting = (input: {

@@ -132,7 +132,8 @@ import {
 } from './repo/registry.js';
 import { provisionKnownProviders } from './providers/provision.js';
 import { registerCompatProvider } from './providers/register-compat.js';
-import { buildTaskProfile, route } from './router/index.js';
+import { buildTaskProfile, route, selectCommittee } from './router/index.js';
+import { writeReproZip } from './artifact/repro-pack.js';
 import { FindingsRepo, type FindingStatus, type ReviewerTrigger } from './repo/findings.js';
 import {
   ReviewerService,
@@ -2114,6 +2115,34 @@ async function main(): Promise<void> {
     restored: artifactStoreFor(req.projectId).restore(req.artifactId),
   }));
 
+  d.register('artifact.exportRepro', async (req) => {
+    const project = openProject(store, req.projectId);
+    const artifacts = artifactStoreFor(req.projectId);
+    const records = artifacts.listArtifacts({});
+    const irreproducibleIds = new Set(artifacts.irreproducible().map((v) => v.artifactId));
+    const files: Array<{ name: string; src: string; reproducible: boolean }> = [];
+    for (const record of records) {
+      if (record.deletedAt !== null || record.latestVersionId === null) continue;
+      const src = artifacts.versionPath(record.latestVersionId);
+      if (src === null) continue;
+      files.push({
+        name: record.filename,
+        src,
+        reproducible: !irreproducibleIds.has(record.id),
+      });
+    }
+    const stamp = String(Date.now());
+    const stageDir = joinPath(project.paths.root, 'export', `repro-${stamp}`);
+    const zipPath = `${stageDir}.zip`;
+    const result = writeReproZip({
+      projectId: req.projectId,
+      stageDir,
+      zipPath,
+      files,
+    });
+    return { path: zipPath, ...result };
+  });
+
   /* --- 环境与能力（任务 9.4）--- */
 
   /*
@@ -2308,6 +2337,14 @@ async function main(): Promise<void> {
       emptyReport: result.emptyReport,
       // 把生效的权重回传，用户才能看清「我没覆盖的维度默认是多少」
       weights: profile.weights,
+      committee: (() => {
+        const picked = selectCommittee(result.ranked, 2);
+        return {
+          modelIds: picked.members.map((m) => m.id),
+          vendorCount: picked.vendorCount,
+          degradedReason: picked.degradedReason,
+        };
+      })(),
     };
   });
 

@@ -29,6 +29,9 @@ export type {
 export { escapePath, findMarkers, formatRejections, resolveMarkers } from './marker.js';
 export type { MarkerOccurrence, ResolveMarkersOptions, ResolveMarkersResult } from './marker.js';
 
+export { writeReproZip } from './repro-pack.js';
+export type { ReproFile } from './repro-pack.js';
+
 export { createDeleteArtifactsTool, createSaveArtifactsTool, humanBytes } from './tools.js';
 export type {
   DeleteArtifactsInput,

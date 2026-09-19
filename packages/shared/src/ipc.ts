@@ -359,6 +359,12 @@ export const requestSchema = z.discriminatedUnion('method', [
     artifactId: idSchema,
   }),
 
+  /** 把当前制品 blob 打成本地 zip（含 MANIFEST.md）。不出网。 */
+  z.object({
+    method: z.literal('artifact.exportRepro'),
+    projectId: idSchema,
+  }),
+
   /* --- 环境与能力（任务 9.4，需求 2.5、2.6）--- */
 
   /**

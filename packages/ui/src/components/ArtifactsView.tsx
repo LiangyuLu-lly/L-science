@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import {
+  exportReproPack,
   listArtifactVersions,
   listArtifacts,
   loadLineage,
@@ -273,6 +274,19 @@ export function ArtifactsView({ projectId }: { projectId: string | null }): Reac
           }}
         >
           复制可复现清单
+        </button>
+        <button
+          type="button"
+          className="btn btn--small"
+          onClick={() => {
+            void exportReproPack(projectId)
+              .then((pack) => {
+                setError(`已打包 ${String(pack.fileCount)} 个文件到 ${pack.path}`);
+              })
+              .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+          }}
+        >
+          导出可复现 zip
         </button>
       </div>
 
