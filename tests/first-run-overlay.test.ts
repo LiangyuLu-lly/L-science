@@ -75,5 +75,7 @@ describe('FirstRunOverlay source', () => {
     );
     expect(section).toContain('conda create -n lsci python=3.13');
     expect(section).toContain('conda create -n lsci-r');
+    expect(section).toContain('一键安装 Python / R 内核');
+    expect(section).toContain('bootstrapKernels');
   });
 });

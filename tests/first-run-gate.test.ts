@@ -35,7 +35,9 @@ describe('shouldShowFirstRun', () => {
   });
 
   it('keeps CONDA_ENV_NOTICE exact and session-skip semantics', () => {
-    expect(CONDA_ENV_NOTICE).toBe('安装包不包含 conda 环境 lsci / lsci-r，需自行创建');
+    expect(CONDA_ENV_NOTICE).toBe(
+      '安装包不包含 conda 环境 lsci / lsci-r。可在本页一键下载 micromamba 并创建。',
+    );
     expect(shouldShowFirstRun({ providerCount: 0, skippedThisSession: true, view: 'settings' })).toBe(
       false,
     );

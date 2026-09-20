@@ -7,9 +7,12 @@
 import { useEffect, useState } from 'react';
 
 import {
+  bootstrapKernels,
+  bootstrapKernelsStatus,
   loadEnvDoctor,
   provisionProviders,
   registerCompatProvider,
+  type BootstrapKernelsReport,
   type EnvDoctor,
   type ProvisionProviderResult,
 } from '../lib/api.js';
@@ -66,6 +69,7 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
   const [doctor, setDoctor] = useState<EnvDoctor | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [boot, setBoot] = useState<BootstrapKernelsReport | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -87,12 +91,61 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
     };
   }, []);
 
+  useEffect(() => {
+    if (boot?.running !== true) return;
+    const timer = setInterval(() => {
+      void bootstrapKernelsStatus()
+        .then((report) => {
+          setBoot(report);
+          if (!report.running) {
+            void loadEnvDoctor(true).then((doc) => {
+              setDoctor(doc);
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          setError(errorText(err));
+        });
+    }, 3000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [boot?.running]);
+
   return (
     <section className="panel" aria-labelledby="env-doctor-heading">
       <h2 id="env-doctor-heading" className="panel__title">
         {compact ? '环境体检' : '环境'}
       </h2>
       <p className="panel__hint">{CONDA_ENV_NOTICE}</p>
+      <button
+        type="button"
+        className="btn"
+        disabled={boot?.running === true}
+        onClick={() => {
+          setError(null);
+          void bootstrapKernels()
+            .then((report) => {
+              setBoot(report);
+            })
+            .catch((err: unknown) => {
+              setError(errorText(err));
+            });
+        }}
+      >
+        一键安装 Python / R 内核
+      </button>
+      {boot !== null && (
+        <p className="panel__hint" role="status">
+          Python：{boot.python}　R：{boot.r}
+          {boot.error !== null ? `　${boot.error}` : ''}
+        </p>
+      )}
+      {boot !== null && boot.log.length > 0 && (
+        <pre className="tools__remediation">
+          <code>{boot.log.slice(-8).join('\n')}</code>
+        </pre>
+      )}
       <pre className="tools__remediation">
         <code>conda create -n lsci python=3.13</code>
       </pre>

@@ -6,7 +6,7 @@
  */
 
 export const CONDA_ENV_NOTICE =
-  '安装包不包含 conda 环境 lsci / lsci-r，需自行创建' as const;
+  '安装包不包含 conda 环境 lsci / lsci-r。可在本页一键下载 micromamba 并创建。' as const;
 
 export type FirstRunGate = {
   readonly providerCount: number;

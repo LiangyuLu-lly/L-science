@@ -497,6 +497,21 @@ export type EnvDoctor = {
 export const loadEnvDoctor = (refresh = false) =>
   invoke<EnvDoctor>({ method: 'env.doctor', refresh });
 
+export type BootstrapKernelsReport = {
+  readonly running: boolean;
+  readonly python: 'exists' | 'created' | 'failed' | 'running';
+  readonly r: 'exists' | 'created' | 'failed' | 'running';
+  readonly log: readonly string[];
+  readonly error: string | null;
+  readonly commands: readonly string[];
+};
+
+export const bootstrapKernels = () =>
+  invoke<BootstrapKernelsReport>({ method: 'env.bootstrapKernels' });
+
+export const bootstrapKernelsStatus = () =>
+  invoke<BootstrapKernelsReport>({ method: 'env.bootstrapStatus' });
+
 /* ------------------------------------------------------------------ *
  * 回合事件
  * ------------------------------------------------------------------ */
