@@ -85,3 +85,11 @@ export { EnvService, MemoryEnvGrantStore } from './service.js';
 
 export type { EnvAction, EnvToolInput, EnvToolOptions } from './tools.js';
 export { createManageEnvironmentsTool } from './tools.js';
+
+export { MICROMAMBA_URLS, ensureMicromamba, micromambaExe, micromambaRoot } from './micromamba.js';
+export type { BootstrapReport, BootstrapStep } from './bootstrap-kernels.js';
+export {
+  bootstrapKernelsStatus,
+  resetBootstrapState,
+  startBootstrapKernels,
+} from './bootstrap-kernels.js';

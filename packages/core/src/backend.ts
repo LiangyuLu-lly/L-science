@@ -334,6 +334,20 @@ async function main(): Promise<void> {
     danglingProjects: dangling.length,
   }));
 
+  d.register('env.bootstrapKernels', async () => {
+    const { startBootstrapKernels } = await import('./envs/bootstrap-kernels.js');
+    return startBootstrapKernels({
+      log: (line) => {
+        process.stderr.write(`${line}\n`);
+      },
+    });
+  });
+
+  d.register('env.bootstrapStatus', async () => {
+    const { bootstrapKernelsStatus } = await import('./envs/bootstrap-kernels.js');
+    return bootstrapKernelsStatus();
+  });
+
   d.register('env.doctor', async (req) => {
     if (req.refresh) resetCapabilityCache();
     const caps = detectCapabilities();
@@ -518,6 +532,14 @@ async function main(): Promise<void> {
    * 声明位置提到这里是因为连接器的域名联动要用它，而那发生在启动路径上。
    */
   const grants = new GrantRepo(store.db);
+  if (!grants.isDomainAllowed({ domain: 'api.crossref.org' }).allowed) {
+    grants.allowDomain({
+      domain: 'api.crossref.org',
+      mode: 'rw',
+      scope: 'always',
+      reason: '文献入库默认元数据服务，可在设置里撤销',
+    });
+  }
 
   /* --- 连接器（任务 12.13、12.14，需求 14.1、14.2）------------------- */
 

@@ -180,6 +180,8 @@ function isAllowedCompatBaseUrl(raw: string): boolean {
 export const requestSchema = z.discriminatedUnion('method', [
   z.object({ method: z.literal('app.status') }),
   z.object({ method: z.literal('env.doctor'), refresh: z.boolean().default(false) }),
+  z.object({ method: z.literal('env.bootstrapKernels') }),
+  z.object({ method: z.literal('env.bootstrapStatus') }),
 
   z.object({ method: z.literal('project.list'), includeArchived: z.boolean().default(false) }),
   z.object({

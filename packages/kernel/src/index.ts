@@ -54,6 +54,7 @@ export {
   MANAGED_R_ENV,
   detectKernels,
   listCondaEnvs,
+  micromambaEnvPrefix,
   pythonLaunchSpec,
   rLaunchSpec,
   rEnvAt,

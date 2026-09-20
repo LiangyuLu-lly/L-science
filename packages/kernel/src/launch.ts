@@ -101,6 +101,20 @@ function findEnvPrefix(envs: readonly string[], name: string): string | null {
   return envs.find((p) => p.replace(/[\\/]+$/, '').endsWith(name)) ?? null;
 }
 
+/** 首次引导下载的 micromamba 环境，不依赖本机 conda。 */
+export function micromambaEnvPrefix(name: string): string | null {
+  const candidates: string[] = [];
+  const data = process.env['L_SCIENCE_DATA_DIR'];
+  if (data !== undefined && data !== '') {
+    candidates.push(join(data, 'micromamba', 'envs', name));
+  }
+  const local = process.env['LOCALAPPDATA'];
+  if (local !== undefined && local !== '') {
+    candidates.push(join(local, 'L-science', 'micromamba', 'envs', name));
+  }
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
 export interface PythonEnv {
   prefix: string;
   executable: string;
@@ -112,7 +126,7 @@ export function resolvePythonEnv(envs: readonly string[] = listCondaEnvs()): Pyt
     return { prefix: dirname(override), executable: override };
   }
 
-  const prefix = findEnvPrefix(envs, MANAGED_PYTHON_ENV);
+  const prefix = findEnvPrefix(envs, MANAGED_PYTHON_ENV) ?? micromambaEnvPrefix(MANAGED_PYTHON_ENV);
   if (prefix === null) return null;
 
   const win = join(prefix, 'python.exe');
@@ -158,7 +172,7 @@ export function rEnvAt(prefix: string): REnv | null {
 }
 
 export function resolveREnv(envs: readonly string[] = listCondaEnvs()): REnv | null {
-  const prefix = findEnvPrefix(envs, MANAGED_R_ENV);
+  const prefix = findEnvPrefix(envs, MANAGED_R_ENV) ?? micromambaEnvPrefix(MANAGED_R_ENV);
   return prefix === null ? null : rEnvAt(prefix);
 }
 
