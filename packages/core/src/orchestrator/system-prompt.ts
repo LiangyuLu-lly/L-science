@@ -120,6 +120,11 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
         '如实提到。改完用 `mark_finding_addressed` 说明改了什么。',
     );
   }
+  if (has(tools, 'manage_claims')) {
+    workflow.push(
+      '- **用户消息若以【当前文献】开头，抽断言必须绑该 DOI。** 用 `manage_claims` 的 register 与 bind（evidenceKind=doi）。不要编造页码，也不要换成记忆里的另一篇。',
+    );
+  }
   if (has(tools, 'remember')) {
     workflow.push(
       '- **跨会话仍然成立的知识用 `remember` 记下来**：术语约定、数据布局、既定的方法选择及理由。' +
