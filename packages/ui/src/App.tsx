@@ -60,18 +60,22 @@ type ViewId =
   | 'connectors'
   | 'settings';
 
-const VIEWS: ReadonlyArray<{ id: ViewId; label: string; ready: boolean }> = [
-  { id: 'chat', label: '会话', ready: true },
-  { id: 'refs', label: '文献', ready: true },
-  { id: 'claims', label: '断言', ready: true },
-  { id: 'manuscripts', label: '手稿', ready: true },
-  { id: 'artifacts', label: '制品', ready: true },
-  { id: 'routing', label: '模型路由', ready: true },
-  { id: 'usage', label: '用量与成本', ready: true },
-  { id: 'tools', label: '工具与环境', ready: true },
-  { id: 'skills', label: '技能', ready: true },
-  { id: 'connectors', label: '连接器', ready: true },
-  { id: 'settings', label: '设置', ready: true },
+const PRIMARY_NAV: ReadonlyArray<{ id: ViewId; label: string }> = [
+  { id: 'refs', label: '文献' },
+  { id: 'claims', label: '断言' },
+  { id: 'manuscripts', label: '手稿' },
+];
+
+const ASSISTANT_NAV = { label: '助手' } as const;
+
+const STUDIO_NAV: ReadonlyArray<{ id: ViewId; label: string }> = [
+  { id: 'artifacts', label: '制品' },
+  { id: 'skills', label: '技能' },
+  { id: 'connectors', label: '连接器' },
+  { id: 'routing', label: '模型路由' },
+  { id: 'usage', label: '用量与成本' },
+  { id: 'tools', label: '工具与环境' },
+  { id: 'settings', label: '设置' },
 ];
 
 const STATE_LABEL: Record<string, string> = {
@@ -427,7 +431,8 @@ function BackendPanel(): React.JSX.Element {
 }
 
 export function App(): React.JSX.Element {
-  const [view, setView] = useState<ViewId>('chat');
+  const [view, setView] = useState<ViewId>('refs');
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -560,24 +565,46 @@ export function App(): React.JSX.Element {
           verify:ui 报告可聚焦元素 0 个——依赖键盘的用户无法切换视图
         */}
         <nav className="app__nav" aria-label="主导航">
+          <p className="nav__group">论文</p>
           <ul>
-            {VIEWS.map((v) => (
+            {PRIMARY_NAV.map((v) => (
               <li key={v.id}>
                 <button
                   type="button"
-                  className={`nav__item ${view === v.id ? 'is-current' : ''} ${v.ready ? '' : 'is-pending'}`}
+                  className={`nav__item ${view === v.id ? 'is-current' : ''}`}
                   aria-current={view === v.id ? 'page' : undefined}
-                  disabled={!v.ready}
                   onClick={() => setView(v.id)}
                 >
                   {v.label}
-                  {!v.ready && <span className="nav__pending">（待实现）</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className={`nav__item ${assistantOpen ? 'is-current' : ''}`}
+            aria-pressed={assistantOpen}
+            onClick={() => setAssistantOpen((open) => !open)}
+          >
+            {ASSISTANT_NAV.label}
+          </button>
+          <p className="nav__group">工作室</p>
+          <ul>
+            {STUDIO_NAV.map((v) => (
+              <li key={v.id}>
+                <button
+                  type="button"
+                  className={`nav__item ${view === v.id ? 'is-current' : ''}`}
+                  aria-current={view === v.id ? 'page' : undefined}
+                  onClick={() => setView(v.id)}
+                >
+                  {v.label}
                 </button>
               </li>
             ))}
           </ul>
 
-          {view === 'chat' && (
+          {assistantOpen && (
             <div className="nav__conversations">
               <div className="nav__section-head">
                 <h2>会话</h2>
@@ -633,7 +660,7 @@ export function App(): React.JSX.Element {
             />
           ))}
 
-          {view === 'chat' && (
+          {assistantOpen && (
             <div className="chat__layout">
               <div className="chat__stream">
                 {turn.error !== null && (
@@ -658,47 +685,12 @@ export function App(): React.JSX.Element {
                     setView('claims');
                   }}
                 />
-                {/*
-                有覆盖在生效时必须在输入区旁边说出来。藏在路由面板里的话，
-                用户设完切回会话，会以为路由还是自动的——然后对结果感到莫名
-              */}
-                <TaskTypeChips
-                  selected={routingOverride.taskType}
-                  onSelect={(taskType) => setRoutingOverride({ ...routingOverride, taskType })}
-                />
-                <OverrideBar
-                  override={routingOverride}
-                  onClear={() => setRoutingOverride({})}
-                  onOpenSettings={() => setView('routing')}
-                />
-                {/* 本轮累计用量常驻在输入区上方（需求 18.4） */}
-                <TurnUsageBar usage={turn.lastUsage} />
-                <Composer
-                  disabled={composerBlock !== null}
-                  disabledReason={composerBlock?.message ?? null}
-                  running={turn.running}
-                  onSend={(text, skills) => {
-                    void turn.send(text, routingOverride, skills);
-                    // 覆盖是一次性的，发出去就清掉
-                    if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
-                  }}
-                  onInterrupt={() => void turn.interrupt()}
-                  {...(composerBlock?.code === 'no-model'
-                    ? { onRegisterModels: openRegisterModels }
-                    : {})}
+                <ConversationSidebar
+                  projectId={projectId}
+                  conversationId={conversationId}
+                  onOpenConversation={(id) => setConversationId(id)}
                 />
               </div>
-
-              {/*
-                计划、审查、子 agent 挂在聊天区旁边而不是各占一个顶层导航项：
-                它们是会话内的上下文，需要与聊天内容对照着看——一条阻断级发现指的是
-                刚才那段分析。侧栏可折叠，折叠后靠徽章提醒。
-              */}
-              <ConversationSidebar
-                projectId={projectId}
-                conversationId={conversationId}
-                onOpenConversation={(id) => setConversationId(id)}
-              />
             </div>
           )}
 
@@ -737,6 +729,34 @@ export function App(): React.JSX.Element {
           )}
         </main>
       </div>
+      {(view === 'refs' || view === 'claims' || view === 'manuscripts') && (
+        <div className="app__dock">
+          <TaskTypeChips
+            selected={routingOverride.taskType}
+            onSelect={(taskType) => setRoutingOverride({ ...routingOverride, taskType })}
+          />
+          <OverrideBar
+            override={routingOverride}
+            onClear={() => setRoutingOverride({})}
+            onOpenSettings={() => setView('routing')}
+          />
+          <TurnUsageBar usage={turn.lastUsage} />
+          <Composer
+            disabled={composerBlock !== null}
+            disabledReason={composerBlock?.message ?? null}
+            running={turn.running}
+            onSend={(text, skills) => {
+              void turn.send(text, routingOverride, skills);
+              if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
+              setAssistantOpen(true);
+            }}
+            onInterrupt={() => void turn.interrupt()}
+            {...(composerBlock?.code === 'no-model'
+              ? { onRegisterModels: openRegisterModels }
+              : {})}
+          />
+        </div>
+      )}
     </div>
     {showFirstRun && (
       <FirstRunOverlay

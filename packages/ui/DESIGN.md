@@ -61,3 +61,13 @@ Skip-link, `:focus-visible`, `forced-colors`, 3:1 control borders, Chinese `aria
 - No Inter.
 - Window chrome is Electron’s; we only style the renderer.
 - Dense BEM class names remain; tokens change, class names do not.
+
+## 8. Information architecture
+
+- Home view is **文献** (`refs`), not chat.
+- Primary nav: 文献 → 断言 → 手稿.
+- **助手** toggles the transcript without leaving the workbench.
+- Composer docks in `.app__dock` on paper views so DOI and talk share one screen.
+- 工作室: 制品、技能、连接器、路由、用量、工具、设置.
+
+Scroll: header + dock fixed; `.app__body` / `.app__main` own overflow (`min-block-size: 0`).

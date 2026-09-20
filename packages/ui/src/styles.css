@@ -135,9 +135,10 @@ body {
 }
 
 .app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-block-size: 100dvb;
+  height: 100dvh;
 }
 
 /*
@@ -199,7 +200,25 @@ body {
 .app__body {
   display: flex;
   flex: 1;
+  min-block-size: 0;
   min-height: 0;
+  overflow: hidden;
+}
+
+.app__dock {
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-2) var(--space-3);
+}
+
+.nav__group {
+  margin: var(--space-3) 0 var(--space-1);
+  padding: 0 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
 }
 
 .app__nav {

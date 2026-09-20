@@ -13,6 +13,14 @@ import { parseRequest } from '@l-science/shared';
 const APP = readFileSync(join('packages', 'ui', 'src', 'App.tsx'), 'utf8');
 
 describe('paper path navigation', () => {
+  it('home is 文献 and composer docks on the paper path', () => {
+    expect(APP).toContain("useState<ViewId>('refs')");
+    expect(APP).toContain('PRIMARY_NAV');
+    expect(APP).toContain('app__dock');
+    expect(APP).toContain("label: '助手'");
+    expect(APP).toContain('nav__group');
+  });
+
   it('sidebar registers 文献 断言 手稿 as ready views', () => {
     expect(APP).toContain("id: 'refs'");
     expect(APP).toContain("label: '文献'");

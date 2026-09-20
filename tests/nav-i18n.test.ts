@@ -15,8 +15,8 @@ const MAP = join('packages', 'ui', 'src', 'lib', 'conversation-status.ts');
 
 describe('nav i18n', () => {
   it('nav artifacts label is 制品', () => {
-    // Given: VIEWS 是主导航的唯一标签源
-    const start = APP.indexOf('const VIEWS');
+    // Given: STUDIO_NAV 是工作室导航的标签源
+    const start = APP.indexOf('const STUDIO_NAV');
     const block = APP.slice(start, APP.indexOf('];', start));
     // When: 取出 artifacts 项的 label
     const label = /id:\s*'artifacts',\s*label:\s*'([^']+)'/u.exec(block)?.[1];
