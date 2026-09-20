@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720" role="img" aria-label="L-science first-run overlay: paste API key">
+  <rect width="1280" height="720" fill="#111318"/>
+  <rect width="1280" height="720" fill="rgba(8,10,14,0.55)"/>
+  <rect x="340" y="120" width="600" height="480" rx="8" fill="#181b22" stroke="#262b36"/>
+  <text x="372" y="168" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="18" font-weight="600">开始使用</text>
+  <text x="372" y="198" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">把密钥贴进去就能对话。计算环境在后台安装，不用等。</text>
+  <text x="372" y="240" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">云端接口</text>
+  <rect x="372" y="250" width="536" height="36" rx="6" fill="#111318" stroke="#666e7e"/>
+  <text x="388" y="274" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">Moonshot（Kimi）</text>
+  <text x="372" y="320" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">API 密钥</text>
+  <rect x="372" y="330" width="536" height="36" rx="6" fill="#111318" stroke="#666e7e"/>
+  <text x="388" y="354" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">••••••••••••</text>
+  <rect x="372" y="390" width="120" height="36" rx="6" fill="#181b22" stroke="#666e7e"/>
+  <text x="396" y="413" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">开始使用</text>
+  <text x="372" y="460" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">正在准备计算环境… Python / R 内核后台安装</text>
+  <text x="372" y="520" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">其他方式（DeepSeek / Ollama）</text>
+  <text x="372" y="552" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">本次跳过，可在设置里再打开</text>
+</svg>

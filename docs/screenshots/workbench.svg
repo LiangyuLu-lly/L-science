@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720" role="img" aria-label="L-science workbench: literature home with docked composer">
+  <rect width="1280" height="720" fill="#111318"/>
+  <rect x="0" y="0" width="1280" height="48" fill="#181b22"/>
+  <rect x="0" y="48" width="1280" height="1" fill="#262b36"/>
+  <text x="20" y="31" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="15" font-weight="600">L-science</text>
+  <text x="118" y="31" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">本地优先科研工作台</text>
+  <text x="1120" y="31" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">项目 · 未命名</text>
+  <rect x="0" y="48" width="220" height="672" fill="#111318"/>
+  <rect x="220" y="48" width="1" height="672" fill="#262b36"/>
+  <text x="20" y="78" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="11" font-weight="600" letter-spacing="1.2">论文</text>
+  <rect x="0" y="90" width="220" height="36" fill="#181b22"/>
+  <rect x="0" y="90" width="3" height="36" fill="#6aa9ff"/>
+  <text x="20" y="113" fill="#6aa9ff" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14">文献</text>
+  <text x="20" y="149" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14">断言</text>
+  <text x="20" y="185" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14">手稿</text>
+  <text x="20" y="229" fill="#6aa9ff" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="14">助手</text>
+  <text x="20" y="268" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="11" font-weight="600" letter-spacing="1.2">工作室</text>
+  <text x="20" y="300" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">制品</text>
+  <text x="20" y="328" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">技能</text>
+  <text x="20" y="356" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">设置</text>
+  <text x="252" y="88" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="18" font-weight="600">文献</text>
+  <text x="252" y="114" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">库是空的。把 DOI 贴进下面这个框入库，默认只问 Crossref。</text>
+  <rect x="252" y="132" width="980" height="168" rx="6" fill="#181b22" stroke="#666e7e"/>
+  <text x="268" y="158" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">10.1038/… 或 https://doi.org/…</text>
+  <rect x="252" y="316" width="72" height="32" rx="6" fill="#181b22" stroke="#666e7e"/>
+  <text x="272" y="337" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">入库</text>
+  <rect x="0" y="600" width="1280" height="120" fill="#181b22"/>
+  <rect x="0" y="600" width="1280" height="1" fill="#262b36"/>
+  <text x="252" y="628" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">发送给助手</text>
+  <rect x="252" y="640" width="860" height="48" rx="6" fill="#111318" stroke="#666e7e"/>
+  <text x="268" y="669" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">说说要做什么。Enter 发送，/ 插入技能。</text>
+  <rect x="1130" y="648" width="64" height="32" rx="6" fill="#181b22" stroke="#666e7e"/>
+  <text x="1146" y="669" fill="#e6e8ee" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">发送</text>
+</svg>

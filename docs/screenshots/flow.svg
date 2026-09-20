@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 220" width="960" height="220" role="img" aria-label="Paper path: DOI, claims, manuscript, assistant">
+  <rect width="960" height="220" fill="#111318"/>
+  <rect x="24" y="48" width="180" height="88" rx="8" fill="#181b22" stroke="#262b36"/>
+  <text x="114" y="88" text-anchor="middle" fill="#6aa9ff" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="15" font-weight="600">文献</text>
+  <text x="114" y="112" text-anchor="middle" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">Paste DOI</text>
+  <path d="M214 92 H246" stroke="#666e7e" stroke-width="2"/>
+  <polygon points="246,86 258,92 246,98" fill="#666e7e"/>
+  <rect x="268" y="48" width="180" height="88" rx="8" fill="#181b22" stroke="#262b36"/>
+  <text x="358" y="88" text-anchor="middle" fill="#6aa9ff" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="15" font-weight="600">断言</text>
+  <text x="358" y="112" text-anchor="middle" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">Claims + evidence</text>
+  <path d="M458 92 H490" stroke="#666e7e" stroke-width="2"/>
+  <polygon points="490,86 502,92 490,98" fill="#666e7e"/>
+  <rect x="512" y="48" width="180" height="88" rx="8" fill="#181b22" stroke="#262b36"/>
+  <text x="602" y="88" text-anchor="middle" fill="#6aa9ff" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="15" font-weight="600">手稿</text>
+  <text x="602" y="112" text-anchor="middle" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">Compile report</text>
+  <path d="M702 92 H734" stroke="#666e7e" stroke-width="2"/>
+  <polygon points="734,86 746,92 734,98" fill="#666e7e"/>
+  <rect x="756" y="48" width="180" height="88" rx="8" fill="#181b22" stroke="#262b36"/>
+  <text x="846" y="88" text-anchor="middle" fill="#6aa9ff" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="15" font-weight="600">助手</text>
+  <text x="846" y="112" text-anchor="middle" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="12">Docked composer</text>
+  <text x="480" y="180" text-anchor="middle" fill="#9aa2b1" font-family="Segoe UI, Microsoft YaHei UI, sans-serif" font-size="13">论文主路径始终可见 · Paper path stays on screen while you talk</text>
+</svg>
