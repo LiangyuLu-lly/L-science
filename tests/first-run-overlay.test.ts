@@ -39,6 +39,15 @@ describe('FirstRunOverlay source', () => {
     expect(SRC).toContain('https://platform.deepseek.com');
   });
 
+  it('auto-starts kernel bootstrap without a required click', () => {
+    const section = SRC.slice(
+      SRC.indexOf('export function EnvDoctorSection'),
+      SRC.indexOf('export function FirstRunOverlay'),
+    );
+    expect(section).toContain('void bootstrapKernels()');
+    expect(section).toContain('正在准备计算环境');
+  });
+
   it('lets first-run register OpenAI Groq Kimi or 通义', () => {
     expect(SRC).toContain("id: 'openai'");
     expect(SRC).toContain("id: 'groq'");

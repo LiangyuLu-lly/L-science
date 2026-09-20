@@ -1,5 +1,5 @@
 /**
- * 首次运行：环境体检 + 登记云端接口 / DeepSeek / Ollama。
+ * 首次运行：贴密钥就能进。计算环境后台装。DeepSeek / Ollama / conda 命令折在高级里。
  *
  * 可跳过。密钥不回显、提交后立刻清掉。安装包不含 conda 环境，这句话必须原文出现。
  */
@@ -86,6 +86,13 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
       .finally(() => {
         if (!disposed) setLoading(false);
       });
+    void bootstrapKernels()
+      .then((report) => {
+        if (!disposed) setBoot(report);
+      })
+      .catch((err: unknown) => {
+        if (!disposed) setError(errorText(err));
+      });
     return () => {
       disposed = true;
     };
@@ -118,9 +125,18 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
         {compact ? '环境体检' : '环境'}
       </h2>
       <p className="panel__hint">{CONDA_ENV_NOTICE}</p>
+      <p className="panel__hint" role="status">
+        {boot === null
+          ? '正在准备计算环境…'
+          : boot.running
+            ? `正在安装内核（Python ${boot.python} / R ${boot.r}），可先去贴密钥。`
+            : boot.error !== null
+              ? `环境未装完：${boot.error}`
+              : '计算环境已就绪。'}
+      </p>
       <button
         type="button"
-        className="btn"
+        className="btn btn--small"
         disabled={boot?.running === true}
         onClick={() => {
           setError(null);
@@ -135,35 +151,32 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
       >
         一键安装 Python / R 内核
       </button>
-      {boot !== null && (
-        <p className="panel__hint" role="status">
-          Python：{boot.python}　R：{boot.r}
-          {boot.error !== null ? `　${boot.error}` : ''}
-        </p>
-      )}
       {boot !== null && boot.log.length > 0 && (
         <pre className="tools__remediation">
           <code>{boot.log.slice(-8).join('\n')}</code>
         </pre>
       )}
-      <pre className="tools__remediation">
-        <code>conda create -n lsci python=3.13</code>
-      </pre>
-      <pre className="tools__remediation">
-        <code>conda create -n lsci-r -c conda-forge r-base r-irkernel</code>
-      </pre>
-      <p className="panel__hint">也可在仓库跑 scripts/bootstrap-kernels.ps1（不把 conda 打进安装包）。</p>
-      <button
-        type="button"
-        className="btn btn--small"
-        onClick={() => {
-          void navigator.clipboard.writeText(
-            'conda create -n lsci python=3.13\nconda create -n lsci-r -c conda-forge r-base r-irkernel',
-          );
-        }}
-      >
-        复制 lsci 命令
-      </button>
+      <details>
+        <summary>手动命令</summary>
+        <pre className="tools__remediation">
+          <code>conda create -n lsci python=3.13</code>
+        </pre>
+        <pre className="tools__remediation">
+          <code>conda create -n lsci-r -c conda-forge r-base r-irkernel</code>
+        </pre>
+        <p className="panel__hint">也可在仓库跑 scripts/bootstrap-kernels.ps1（不把 conda 打进安装包）。</p>
+        <button
+          type="button"
+          className="btn btn--small"
+          onClick={() => {
+            void navigator.clipboard.writeText(
+              'conda create -n lsci python=3.13\nconda create -n lsci-r -c conda-forge r-base r-irkernel',
+            );
+          }}
+        >
+          复制 lsci 命令
+        </button>
+      </details>
       {loading && (
         <p className="pcard__busy" role="status">
           正在检查环境…
@@ -251,7 +264,7 @@ export function FirstRunOverlay({
   onDone: () => void;
 }): React.JSX.Element {
   const [deepseekKey, setDeepseekKey] = useState('');
-  const [presetId, setPresetId] = useState<FirstRunPresetId>('openai');
+  const [presetId, setPresetId] = useState<FirstRunPresetId>('moonshot');
   const [compatKey, setCompatKey] = useState('');
   const [compatOk, setCompatOk] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -284,16 +297,25 @@ export function FirstRunOverlay({
     }
   };
 
+  useEffect(() => {
+    void provisionProviders({ detectOllama: true })
+      .then((outcome) => {
+        setResults(outcome.providers);
+      })
+      .catch(() => {
+        // 本机没有 Ollama 时不必报错
+      });
+  }, []);
+
   return (
     <div className="overlay" role="dialog" aria-modal="true" aria-labelledby="first-run-title">
       <div className="overlay__stack">
       <section className="panel">
         <h2 id="first-run-title" className="panel__title">
-          登记模型
+          开始使用
         </h2>
         <p className="panel__hint">
-          至少登记一家才能路由。下面直接选 OpenAI、Groq、Kimi 或通义；也可以配 DeepSeek 或检测本机
-          Ollama。更多网关在设置里。
+          把密钥贴进去就能对话。计算环境在后台安装，不用等。默认 Kimi，也可改通义 / OpenAI / Groq。
         </p>
 
         <form
@@ -307,6 +329,7 @@ export function FirstRunOverlay({
               .then(() => {
                 setCompatKey('');
                 setCompatOk(true);
+                onDone();
               })
               .catch((err: unknown) => {
                 setError(errorText(err));
@@ -356,10 +379,12 @@ export function FirstRunOverlay({
             </a>
           </div>
           <button type="submit" className="btn" disabled={busy || compatKey === ''}>
-            登记 {selectedPreset.name}
+            开始使用
           </button>
         </form>
 
+        <details>
+          <summary>其他方式（DeepSeek / Ollama）</summary>
         <form
           className="cred-form"
           onSubmit={(event) => {
@@ -393,8 +418,6 @@ export function FirstRunOverlay({
             登记 DeepSeek
           </button>
         </form>
-
-        <div className="pcard__actions">
           <button
             type="button"
             className="btn btn--small"
@@ -403,6 +426,8 @@ export function FirstRunOverlay({
           >
             检测本机 Ollama
           </button>
+        </details>
+        <div className="pcard__actions">
           <button type="button" className="btn btn--small" disabled={busy} onClick={onSkip}>
             本次跳过，可在设置里再打开
           </button>
