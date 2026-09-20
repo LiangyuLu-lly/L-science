@@ -46,6 +46,7 @@ describe('paper path navigation', () => {
     expect(refs).toContain('贴 DOI / PMID / 链接');
     expect(refs).toContain('rows={empty ? 8 : 3}');
     expect(refs).toContain('attempts');
+    expect(refs).toContain('从本篇抽断言');
   });
 
   it('manuscripts view blocks ready-to-submit copy when claims are unresolved', () => {

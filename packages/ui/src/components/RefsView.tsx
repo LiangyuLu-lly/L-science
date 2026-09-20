@@ -6,8 +6,19 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { listRefs, resolveRefs, type RefListItem } from '../lib/api.js';
 import { splitIdentifiers } from '../lib/claim-rank.js';
+import type { PaperFocus } from '../lib/paper-context.js';
 
-export function RefsView({ projectId }: { projectId: string | null }): React.JSX.Element {
+export function RefsView({
+  projectId,
+  selectedId,
+  onSelect,
+  onExtractClaims,
+}: {
+  projectId: string | null;
+  selectedId: string | null;
+  onSelect: (ref: PaperFocus) => void;
+  onExtractClaims: (ref: PaperFocus) => void;
+}): React.JSX.Element {
   const [refs, setRefs] = useState<RefListItem[] | null>(null);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -103,14 +114,43 @@ export function RefsView({ projectId }: { projectId: string | null }): React.JSX
       ) : refs.length === 0 ? null : (
         <ul className="ref-list">
           {refs.map((item) => (
-            <li key={item.id} className="panel">
-              <p className="panel__title">{item.title ?? item.cite}</p>
+            <li key={item.id} className={`panel ${selectedId === item.id ? 'is-current' : ''}`}>
+              <button
+                type="button"
+                className="btn btn--small"
+                onClick={() => {
+                  onSelect({
+                    id: item.id,
+                    doi: item.doi,
+                    cite: item.cite,
+                    title: item.title,
+                  });
+                }}
+              >
+                {item.title ?? item.cite}
+              </button>
               <p className="panel__hint">
                 {[item.firstAuthor, item.year, item.container].filter(Boolean).join(' · ')}
               </p>
               {item.doi !== null && <code>{item.doi}</code>}
               {item.retracted && <span className="artifact__warn">已撤稿</span>}
               {item.fulltextArtifactId !== null && <span className="panel__hint">已抓全文</span>}
+              {selectedId === item.id && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    onExtractClaims({
+                      id: item.id,
+                      doi: item.doi,
+                      cite: item.cite,
+                      title: item.title,
+                    });
+                  }}
+                >
+                  从本篇抽断言
+                </button>
+              )}
             </li>
           ))}
         </ul>

@@ -59,7 +59,9 @@ export function ClaimsView({ projectId }: { projectId: string | null }): React.J
       {claims === null ? (
         <p className="panel__hint">加载中…</p>
       ) : claims.length === 0 ? (
-        <p className="panel__hint">还没有断言。编译或抽取手稿后会出现在这里，每条必须绑证据。</p>
+        <p className="panel__hint">
+          还没有断言。在文献里选一篇，点「从本篇抽断言」。每条必须绑 DOI 或页码，不要凭记忆写。
+        </p>
       ) : (
         <ul className="claim-list">
           {rankClaims(claims).map((item) => (

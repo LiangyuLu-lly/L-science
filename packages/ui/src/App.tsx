@@ -44,6 +44,11 @@ import { hasBackend } from './lib/backend.js';
 import { composerBlockedReason } from './lib/composer-gate.js';
 import { conversationStatusLabel } from './lib/conversation-status.js';
 import { shouldShowFirstRun } from './lib/first-run.js';
+import {
+  EXTRACT_CLAIMS_PROMPT,
+  withPaperContext,
+  type PaperFocus,
+} from './lib/paper-context.js';
 import { useBackend } from './lib/useBackend.js';
 import { useTurn } from './lib/useTurn.js';
 
@@ -433,6 +438,7 @@ function BackendPanel(): React.JSX.Element {
 export function App(): React.JSX.Element {
   const [view, setView] = useState<ViewId>('refs');
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [focusRef, setFocusRef] = useState<PaperFocus | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -694,7 +700,22 @@ export function App(): React.JSX.Element {
             </div>
           )}
 
-          {view === 'refs' && <RefsView projectId={projectId} />}
+          {view === 'refs' && (
+            <RefsView
+              projectId={projectId}
+              selectedId={focusRef?.id ?? null}
+              onSelect={setFocusRef}
+              onExtractClaims={(ref) => {
+                setFocusRef(ref);
+                setAssistantOpen(true);
+                void turn.send(
+                  withPaperContext(EXTRACT_CLAIMS_PROMPT, ref),
+                  routingOverride,
+                );
+                if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
+              }}
+            />
+          )}
           {view === 'claims' && <ClaimsView projectId={projectId} />}
           {view === 'manuscripts' && <ManuscriptsView projectId={projectId} />}
 
@@ -731,6 +752,9 @@ export function App(): React.JSX.Element {
       </div>
       {(view === 'refs' || view === 'claims' || view === 'manuscripts') && (
         <div className="app__dock">
+          {focusRef !== null && (
+            <p className="panel__hint">当前文献：{focusRef.cite}</p>
+          )}
           <TaskTypeChips
             selected={routingOverride.taskType}
             onSelect={(taskType) => setRoutingOverride({ ...routingOverride, taskType })}
@@ -746,7 +770,7 @@ export function App(): React.JSX.Element {
             disabledReason={composerBlock?.message ?? null}
             running={turn.running}
             onSend={(text, skills) => {
-              void turn.send(text, routingOverride, skills);
+              void turn.send(withPaperContext(text, focusRef), routingOverride, skills);
               if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
               setAssistantOpen(true);
             }}
