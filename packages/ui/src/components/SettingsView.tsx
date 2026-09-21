@@ -19,10 +19,12 @@ import {
   checkProviderHealth,
   deleteCredential,
   listCredentials,
+  listGrants,
   listModels,
   listCompatPresets,
   listProviders,
   registerCompatProvider,
+  revokeGrant,
   setCredential,
   setModelEnabled,
   setProviderCredentialRef,
@@ -30,6 +32,10 @@ import {
   syncProvider,
   STRENGTH_LABEL,
   type CredentialFingerprint,
+  type DomainGrantView,
+  type GrantMode,
+  type GrantScope,
+  type HostGrantView,
   type ModelRecord,
   type CompatPreset,
   type ProviderView,
@@ -72,6 +78,232 @@ function contextText(n: number): string {
 function fingerprintText(fp: CredentialFingerprint | null): string {
   if (fp === null) return '（读不出）';
   return `${String(fp.length)} 字符，末四位 ${fp.tail}`;
+}
+
+const GRANT_SCOPE_LABEL = {
+  once: '仅这一次',
+  session: '本次会话内',
+  project: '本项目内',
+  always: '始终允许',
+} as const satisfies Record<GrantScope, string>;
+
+const GRANT_MODE_LABEL = {
+  ro: '只读',
+  rw: '读写',
+} as const satisfies Record<GrantMode, string>;
+
+type GrantStatus = 'active' | 'expired' | 'revoked';
+
+const GRANT_STATUS_LABEL = {
+  active: '有效',
+  expired: '已过期',
+  revoked: '已撤销',
+} as const satisfies Record<GrantStatus, string>;
+
+function hostGrantStatus(grant: HostGrantView, now: number): GrantStatus {
+  if (grant.revokedAt !== null) return 'revoked';
+  if (grant.expiresAt !== null && grant.expiresAt <= now) return 'expired';
+  return 'active';
+}
+
+function formatGrantTime(ms: number): string {
+  return new Date(ms).toLocaleString('zh-CN', { hour12: false });
+}
+
+function grantScopeText(scope: GrantScope, scopeId: string | null): string {
+  const label = GRANT_SCOPE_LABEL[scope];
+  if (scope === 'project' && scopeId !== null) return `${label}（项目 ${scopeId}）`;
+  if (scope === 'session' && scopeId !== null) return `${label}（会话 ${scopeId}）`;
+  return label;
+}
+
+type GrantRowView = {
+  readonly id: string;
+  readonly kindLabel: string;
+  readonly subjectLabel: string;
+  readonly subject: string;
+  readonly mode: GrantMode;
+  readonly scope: GrantScope;
+  readonly scopeId: string | null;
+  readonly grantedAt: number;
+  readonly expiresAt: number | null;
+  readonly extraLabel: string | null;
+  readonly extraValue: string | null;
+  readonly status: GrantStatus;
+};
+
+function toGrantRows(
+  hostPaths: readonly HostGrantView[],
+  domains: readonly DomainGrantView[],
+  now: number,
+): readonly GrantRowView[] {
+  const hosts: GrantRowView[] = hostPaths.map((grant) => ({
+    id: grant.id,
+    kindLabel: '宿主路径',
+    subjectLabel: '路径',
+    subject: grant.hostPath,
+    mode: grant.mode,
+    scope: grant.scope,
+    scopeId: grant.scopeId,
+    grantedAt: grant.grantedAt,
+    expiresAt: grant.expiresAt,
+    extraLabel:
+      grant.guestPath !== null && grant.guestPath !== grant.hostPath ? '沙箱内' : null,
+    extraValue:
+      grant.guestPath !== null && grant.guestPath !== grant.hostPath ? grant.guestPath : null,
+    status: hostGrantStatus(grant, now),
+  }));
+  const domainRows: GrantRowView[] = domains.map((grant) => ({
+    id: grant.id,
+    kindLabel: '域名',
+    subjectLabel: '域名',
+    subject: grant.domain,
+    mode: grant.mode,
+    scope: grant.scope,
+    scopeId: grant.scopeId,
+    grantedAt: grant.addedAt,
+    expiresAt: null,
+    extraLabel: grant.reason !== null ? '原因' : null,
+    extraValue: grant.reason,
+    status: 'active',
+  }));
+  return [...hosts, ...domainRows].sort((a, b) => b.grantedAt - a.grantedAt);
+}
+
+function GrantsSection(): React.JSX.Element {
+  const [hostPaths, setHostPaths] = useState<readonly HostGrantView[]>([]);
+  const [domains, setDomains] = useState<readonly DomainGrantView[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingRevokeId, setPendingRevokeId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reloadGrants = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    void listGrants(true)
+      .then((result) => {
+        setHostPaths(result.hostPaths);
+        setDomains(result.domains);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        setError(errorText(err));
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, []);
+
+  useEffect(reloadGrants, [reloadGrants]);
+
+  const rows = toGrantRows(hostPaths, domains, Date.now());
+  const empty = !loading && error === null && rows.length === 0;
+
+  const confirmRevoke = async (grantId: string): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      await revokeGrant(grantId);
+      setPendingRevokeId(null);
+      reloadGrants();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel" aria-labelledby="grants-heading">
+      <h2 id="grants-heading" className="panel__title">
+        授权
+      </h2>
+      <div className="view__toolbar">
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={loading || busy}
+          onClick={reloadGrants}
+        >
+          刷新
+        </button>
+      </div>
+      {loading && (
+        <p className="panel__hint" role="status">
+          正在读取授权…
+        </p>
+      )}
+      {error !== null && (
+        <p className="panel__error" role="alert">
+          {error}
+        </p>
+      )}
+      {empty && (
+        <p className="panel__hint">
+          授权是工具第一次需要访问宿主路径或域名时，经你同意后留下的放行记录。
+        </p>
+      )}
+      {rows.map((row) => (
+        <dl key={row.id} className="kv">
+          <dt>类型</dt>
+          <dd>{row.kindLabel}</dd>
+          <dt>{row.subjectLabel}</dt>
+          <dd>
+            <code>{row.subject}</code>
+          </dd>
+          {row.extraLabel !== null && row.extraValue !== null && (
+            <>
+              <dt>{row.extraLabel}</dt>
+              <dd>{row.extraValue}</dd>
+            </>
+          )}
+          <dt>权限</dt>
+          <dd>{GRANT_MODE_LABEL[row.mode]}</dd>
+          <dt>作用域</dt>
+          <dd>{grantScopeText(row.scope, row.scopeId)}</dd>
+          <dt>授权时间</dt>
+          <dd>{formatGrantTime(row.grantedAt)}</dd>
+          {row.expiresAt !== null && (
+            <>
+              <dt>过期时间</dt>
+              <dd>{formatGrantTime(row.expiresAt)}</dd>
+            </>
+          )}
+          <dt>状态</dt>
+          <dd>{GRANT_STATUS_LABEL[row.status]}</dd>
+          {row.status === 'active' && (
+            <>
+              <dt>操作</dt>
+              <dd>
+                {pendingRevokeId === row.id ? (
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    disabled={busy}
+                    onClick={() => void confirmRevoke(row.id)}
+                  >
+                    确认撤销
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    disabled={busy}
+                    onClick={() => {
+                      setPendingRevokeId(row.id);
+                    }}
+                  >
+                    撤销
+                  </button>
+                )}
+              </dd>
+            </>
+          )}
+        </dl>
+      ))}
+    </section>
+  );
 }
 
 /** Same convention as core `providerRef`. UI must not import the vault module. */
@@ -773,6 +1005,8 @@ export function SettingsView({ onRegisterModels }: { onRegisterModels: () => voi
           登记模型
         </button>
       </div>
+
+      <GrantsSection />
 
       <CredentialSection
         available={vaultAvailable}
