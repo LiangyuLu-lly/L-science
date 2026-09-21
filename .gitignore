@@ -29,3 +29,7 @@ Thumbs.db
 # verify:ui 的截图产物，每次运行都会覆盖
 ui-shot.png
 
+# Playwright MCP 的临时快照/截图/控制台日志（本地调试产物，不入库）
+/.playwright-mcp/
+
+
