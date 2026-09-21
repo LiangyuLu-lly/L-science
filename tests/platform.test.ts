@@ -500,6 +500,33 @@ describe('env.doctor blockers', () => {
       }),
     );
   });
+
+  it('numba/numpy 不兼容时先指一键安装再给 conda 命令', () => {
+    // Given: Python 内核在，但 numba 0.60 撑不住 numpy 2.2
+    const snapshot = {
+      available: new Set([CAPABILITY.filesystem, CAPABILITY.kernelPython]),
+      pythonEnv: 'lsci',
+      rEnv: null,
+    };
+
+    // When
+    const blockers = collectEnvDoctorBlockers(snapshot, null, {
+      numba: '0.60.0',
+      numpy: '2.2.0',
+    });
+
+    // Then: 阻塞项带上已装版本对；一键安装在 conda 之前
+    const numba = blockers.find((b) => b.id === 'numba-numpy');
+    expect(numba).toBeDefined();
+    const combined = `${numba?.consequence ?? ''}\n${numba?.command ?? ''}`;
+    expect(combined).toContain('0.60.0');
+    expect(combined).toContain('2.2.0');
+    const ctaAt = combined.indexOf('一键安装');
+    const condaAt = combined.indexOf('conda');
+    expect(ctaAt).toBeGreaterThan(-1);
+    expect(condaAt).toBeGreaterThan(-1);
+    expect(ctaAt).toBeLessThan(condaAt);
+  });
 });
 
 /* ------------------------------------------------------------------ *
