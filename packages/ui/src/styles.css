@@ -4581,3 +4581,132 @@ code {
   border-radius: var(--radius-control);
   box-shadow: var(--shadow-raised);
 }
+
+/* 断言账本（DESIGN.md §4 .ledger）：行 = 断言，右栏 = 证据，空栏把动作放进去 -- */
+
+.ledger {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  min-height: 0;
+}
+
+@media (max-width: 900px) {
+  .ledger {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ledger__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ledger__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-raised);
+}
+
+.ledger__row.is-selected {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.ledger__select {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.ledger__select:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.ledger__text {
+  margin: 0;
+  font-size: var(--fs-body);
+}
+
+.ledger__meta,
+.ledger__evidence {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ledger__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.ledger__pane {
+  position: sticky;
+  top: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-raised);
+}
+
+.ledger__evidence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ledger__evidence-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ledger__quote {
+  margin: 0;
+  padding-inline-start: var(--space-2);
+  border-inline-start: 2px solid var(--border-control);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+/* 空面板把动作放进来，而不是只留一句提示 ---------------------------- */
+
+.ledger__empty,
+.empty-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px dashed var(--border-control);
+  border-radius: var(--radius-control);
+}
+
+.ledger__empty .panel__hint,
+.empty-action .panel__hint {
+  margin: 0;
+}
