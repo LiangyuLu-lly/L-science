@@ -8,8 +8,17 @@
 import type { ToolCallView } from '../lib/useTurn.js';
 import { RichOutput } from './RichOutput.js';
 
+type ToolCallCard = ToolCallView & {
+  readonly status?: 'running' | 'ok' | 'error' | 'denied' | 'interrupted' | 'aborted';
+};
+
+type StatusTone = 'running' | 'ok' | 'error' | 'aborted';
+
 /** 状态既有文字也有颜色。只靠颜色的话色盲用户与高对比模式下都读不出来。 */
-function statusOf(call: ToolCallView): { label: string; tone: 'running' | 'ok' | 'error' } {
+function statusOf(call: ToolCallCard): { label: string; tone: StatusTone } {
+  if (call.status === 'aborted') {
+    return { label: '已中止（应用上次退出时未完成）', tone: 'aborted' };
+  }
   if (call.output === null) return { label: '执行中', tone: 'running' };
   if (call.output.kind === 'error') return { label: '出错', tone: 'error' };
   return { label: '完成', tone: 'ok' };
@@ -71,7 +80,7 @@ function InputBody({ input }: { input: unknown }): React.JSX.Element {
   return <pre className="tool__input">（无参数）</pre>;
 }
 
-export function ToolCard({ call }: { call: ToolCallView }): React.JSX.Element {
+export function ToolCard({ call }: { call: ToolCallCard }): React.JSX.Element {
   const status = statusOf(call);
 
   return (
