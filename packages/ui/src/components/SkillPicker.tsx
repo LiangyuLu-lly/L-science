@@ -26,6 +26,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { searchSkills, type SkillSearchHitView } from '../lib/api.js';
 import { BackendError } from '../lib/backend.js';
+import { skillTraffic } from '../lib/skill-traffic.js';
 
 export interface SkillPickerProps {
   /** 当前查询（`/` 之后的部分）。为 null 表示不显示。 */
@@ -39,6 +40,22 @@ export interface SkillPickerProps {
 function errorText(err: unknown): string {
   if (err instanceof BackendError) return err.message;
   return err instanceof Error ? err.message : String(err);
+}
+
+function hitTraffic(hit: SkillSearchHitView): ReturnType<typeof skillTraffic> {
+  return skillTraffic({
+    enabled: true,
+    present: true,
+    requirementsSatisfied: hit.requirementsSatisfied,
+    missing: hit.missingSummary === null ? [] : [hit.missingSummary],
+    probeFailures: [],
+  });
+}
+
+function refusedReason(hit: SkillSearchHitView): string {
+  return hit.missingSummary === null
+    ? '⚠ 缺少依赖，本机不能跑。'
+    : `⚠ 缺少依赖，本机不能跑：${hit.missingSummary}`;
 }
 
 export function SkillPicker({
@@ -118,7 +135,7 @@ export function SkillPicker({
         if (hit !== undefined) {
           e.preventDefault();
           e.stopPropagation();
-          onPick(hit);
+          if (hitTraffic(hit) !== 'red') onPick(hit);
         }
       } else if (e.key === 'Escape') {
         e.preventDefault();
@@ -162,6 +179,7 @@ export function SkillPicker({
       <ul className="skillpicker__list" ref={listRef}>
         {hits.map((hit, index) => {
           const already = selected.includes(hit.slug);
+          const traffic = hitTraffic(hit);
           return (
             <li key={hit.slug}>
               <button
@@ -169,9 +187,13 @@ export function SkillPicker({
                 className={`skillpicker__item ${index === cursor ? 'is-current' : ''} ${already ? 'is-selected' : ''}`}
                 data-current={index === cursor ? 'true' : 'false'}
                 aria-current={index === cursor ? 'true' : undefined}
+                disabled={traffic === 'red'}
                 // 鼠标移入即改游标，键盘与鼠标不会各有一套「当前项」
                 onMouseEnter={() => setCursor(index)}
-                onClick={() => onPick(hit)}
+                onClick={() => {
+                  if (traffic === 'red') return;
+                  onPick(hit);
+                }}
               >
                 <span className="skillpicker__name">
                   {hit.name}
@@ -186,10 +208,15 @@ export function SkillPicker({
                 <span className="skillpicker__desc">{hit.description}</span>
                 {/*
                   依赖缺失不隐藏也不过滤：用户需要知道「这个方法存在但环境没装好」。
-                  过滤掉的话他会以为平台没有这个能力。
+                  过滤掉的话他会以为平台没有这个能力。红灯不可插入，黄灯仍可插入。
                 */}
-                {!hit.requirementsSatisfied && hit.missingSummary !== null && (
-                  <span className="skillpicker__missing">⚠ 依赖未满足：{hit.missingSummary}</span>
+                {traffic === 'red' ? (
+                  <span className="skillpicker__missing">{refusedReason(hit)}</span>
+                ) : (
+                  !hit.requirementsSatisfied &&
+                  hit.missingSummary !== null && (
+                    <span className="skillpicker__missing">⚠ 依赖未满足：{hit.missingSummary}</span>
+                  )
                 )}
               </button>
             </li>
