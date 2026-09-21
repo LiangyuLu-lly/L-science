@@ -227,6 +227,16 @@ function notFound(message: string, remediation?: string): DispatchError {
 }
 
 /**
+ * 本进程已经对哪些项目跑过遗留 running 清理。
+ *
+ * `ToolCallRepo.abortStale` 的过滤是 `WHERE status = 'running'`，不看 started_at，
+ * 也不区分「上个进程留下的」和「当前回合正在跑的」。每次打开项目都调用会把
+ * 活着的工具调用标成 aborted。只在本进程首次打开该项目时清一次：崩溃重启后
+ * 缓存是空的，遗留行会被收掉；当前进程里工具调用发生在这次打开之后，不会被误杀。
+ */
+const staleAborted = new Set<string>();
+
+/**
  * 打开项目库，把「项目不存在」翻译成 not_found 而不是 internal。
  * 区分这两者对 UI 有意义：前者该提示用户，后者该报 bug。
  */
@@ -234,11 +244,17 @@ function openProject(store: AppStore, projectId: string): ProjectStore {
   if (store.projects.get(projectId) === null) {
     throw notFound(`项目不存在：${projectId}`);
   }
+  let project: ProjectStore;
   try {
-    return store.openProject(projectId);
+    project = store.openProject(projectId);
   } catch (err) {
     throw notFound(`项目库无法打开：${projectId}`, err instanceof Error ? err.message : undefined);
   }
+  if (!staleAborted.has(projectId)) {
+    project.toolCalls.abortStale();
+    staleAborted.add(projectId);
+  }
+  return project;
 }
 
 async function main(): Promise<void> {

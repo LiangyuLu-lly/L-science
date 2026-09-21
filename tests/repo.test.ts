@@ -6,7 +6,7 @@
  * 而不是注册表指向一个打不开的项目。
  */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -373,15 +373,33 @@ describe('工具调用', () => {
   });
 
   it('遗留的 running 记录可被批量标为 aborted', () => {
-    project.toolCalls.start({ messageId, toolName: 'python', input: null });
-    project.toolCalls.start({ messageId, toolName: 'bash', input: null });
+    const python = project.toolCalls.start({ messageId, toolName: 'python', input: null });
+    const bash = project.toolCalls.start({ messageId, toolName: 'bash', input: null });
     const finished = project.toolCalls.start({ messageId, toolName: 'r', input: null });
     project.toolCalls.finish(finished.id, { status: 'ok' });
 
     expect(project.toolCalls.listRunning()).toHaveLength(2);
     expect(project.toolCalls.abortStale()).toBe(2);
     expect(project.toolCalls.listRunning()).toHaveLength(0);
+    expect(project.toolCalls.get(python.id)?.status).toBe('aborted');
+    expect(project.toolCalls.get(bash.id)?.status).toBe('aborted');
+    expect(project.toolCalls.get(python.id)?.endedAt).not.toBeNull();
     // 已完成的不受影响
     expect(project.toolCalls.get(finished.id)?.status).toBe('ok');
+  });
+});
+
+describe('abortStale 调用点', () => {
+  it('backend openProject 在本进程首次打开项目时调用 abortStale', () => {
+    // Given: abortStale 会无差别把所有 running 标成 aborted，不能每次取库都跑
+    const src = readFileSync(join('packages', 'core', 'src', 'backend.ts'), 'utf8');
+    const start = src.indexOf('function openProject');
+    const end = src.indexOf('async function main');
+    const openProject = src.slice(start, end);
+
+    // When / Then: 调用点钉在 per-project 打开函数里，且有「本进程已清理过」的门闩
+    expect(start).toBeGreaterThan(-1);
+    expect(openProject).toContain('toolCalls.abortStale()');
+    expect(openProject).toMatch(/!\w+\.has\(projectId\)/u);
   });
 });
