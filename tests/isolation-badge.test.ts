@@ -35,4 +35,11 @@ describe('IsolationBadge collapsed copy', () => {
     expect(BADGE).toContain('隔离强度未知（请通过桌面外壳启动）');
     expect(BADGE).toContain('if (!hasBackend())');
   });
+
+  it('BACKEND_LABEL 不含 docker', () => {
+    // Given: docker 不是沙箱后端
+    // When: 读徽章标签表
+    // Then: 不再把 Docker 容器当成可展示的后端名
+    expect(BADGE).not.toMatch(/docker:\s*'Docker 容器'/u);
+  });
 });

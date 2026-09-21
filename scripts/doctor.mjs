@@ -343,7 +343,7 @@ const report = {
   installed: existsSync(resolve(repoRoot, 'node_modules')),
 };
 
-/** 沙箱后端可行性结论，直接对应设计文档 AD-3 的三种后端。 */
+/** 沙箱后端可行性结论。只有 native 与 wsl2；Docker 不是后端。 */
 report.sandbox = {
   native: {
     usable: true,
@@ -362,14 +362,9 @@ report.sandbox = {
       ? '可用'
       : 'WSL2 已装但无发行版，需 wsl --install -d <Distro>（管理员 + 重启）',
   },
-  docker: {
-    usable: report.docker.daemon,
-    isolation: 'strong',
-    note: report.docker.daemon ? '可用' : 'Docker Desktop 未运行，需手动启动以重建 WSL 后端',
-  },
 };
 
-report.recommendedSandbox = report.wsl.usable ? 'wsl2' : report.docker.daemon ? 'docker' : 'native';
+report.recommendedSandbox = report.wsl.usable ? 'wsl2' : 'native';
 
 if (asJson) {
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

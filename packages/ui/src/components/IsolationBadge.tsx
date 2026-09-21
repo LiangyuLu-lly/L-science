@@ -23,7 +23,6 @@ const STRENGTH_LABEL: Record<'strong' | 'weak', string> = {
 const BACKEND_LABEL: Record<string, string> = {
   native: '原生（Windows 作业对象）',
   wsl2: 'WSL2（命名空间）',
-  docker: 'Docker 容器',
 };
 
 const FILESYSTEM_LABEL: Record<string, string> = {

@@ -41,19 +41,22 @@ export interface SelectBackendOptions extends NativeBackendOptions {
 
 export interface BackendSelection {
   backend: SandboxBackend;
-  /** 被跳过的候选及原因，供 UI 说明「为什么没用更强的隔离」。 */
-  skipped: Array<{ id: SandboxBackendId; reason: string }>;
+  /** 被跳过的候选及原因，供 UI 说明「为什么没用更强的隔离」。id 可以是未实现的名字。 */
+  skipped: Array<{ id: string; reason: string }>;
 }
 
 /**
  * 选择沙箱后端。
  *
- * 顺序是 wsl2 > native。docker 暂不实现：它的后端本身就依赖 WSL2，
- * 在已有 WSL2 的前提下多一层容器带来的隔离增益，不值得为其引入
- * Docker Desktop 的常驻开销。
+ * 顺序是 wsl2 > native。Docker 不在后端联合类型里，只作为 skipped 说明出现。
  */
 export async function selectBackend(opts: SelectBackendOptions = {}): Promise<BackendSelection> {
-  const skipped: BackendSelection['skipped'] = [];
+  const skipped: BackendSelection['skipped'] = [
+    {
+      id: 'docker',
+      reason: 'Docker 未实现，实际可用的是 native（Windows 作业对象）与 WSL2。',
+    },
+  ];
 
   if (opts.prefer === 'native') {
     return { backend: new NativeBackend({ ...opts, wslAvailable: false }), skipped };

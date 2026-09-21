@@ -6,7 +6,7 @@
  * 一条都等于边界失效。
  */
 
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -403,10 +403,30 @@ describe('wsl2 路径翻译', () => {
 });
 
 describe('后端选择', () => {
+  it('SandboxBackendId 不含 docker', () => {
+    // Given: docker 从未实现，类型里留下它就是幽灵承诺
+    // When: 读后端 id 联合类型
+    // Then: 只有 native 与 wsl2
+    const src = readFileSync(join('packages', 'core', 'src', 'sandbox', 'backend.ts'), 'utf8');
+    expect(src).toMatch(/export type SandboxBackendId = 'native' \| 'wsl2';/u);
+    expect(src).not.toContain("'docker'");
+  });
+
   it('强制 native 时不探测 WSL', async () => {
     const { backend, skipped } = await selectBackend({ prefer: 'native' });
     expect(backend.id).toBe('native');
-    expect(skipped).toEqual([]);
+    expect(skipped.some((s) => s.id === 'wsl2')).toBe(false);
+  }, 30_000);
+
+  it('skipped 说明 Docker 未实现以及实际后端', async () => {
+    // Given: Docker 不是可选后端
+    // When: 选择后端（含强制 native，避免本机 WSL 探测干扰）
+    // Then: skipped 用一条中文说明未实现，以及实际是 native / WSL2
+    const { skipped } = await selectBackend({ prefer: 'native' });
+    expect(skipped).toContainEqual({
+      id: 'docker',
+      reason: 'Docker 未实现，实际可用的是 native（Windows 作业对象）与 WSL2。',
+    });
   }, 30_000);
 
   it('自动选择时给出被跳过的候选及原因', async () => {

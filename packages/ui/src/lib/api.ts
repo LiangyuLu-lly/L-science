@@ -1207,7 +1207,7 @@ export const exportReproPack = (projectId: string) =>
  * ------------------------------------------------------------------ */
 
 export interface IsolationInfo {
-  backend: 'native' | 'wsl2' | 'docker';
+  backend: 'native' | 'wsl2';
   isolation: {
     backend: string;
     filesystem: 'namespace' | 'acl' | 'advisory';

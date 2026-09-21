@@ -404,7 +404,7 @@ export type TurnEvent =
  * 沙箱隔离报告
  * ------------------------------------------------------------------ */
 
-export type SandboxBackendId = 'native' | 'wsl2' | 'docker';
+export type SandboxBackendId = 'native' | 'wsl2';
 
 /**
  * 隔离强度报告。`caveats` 必须在 UI 上原文展示——设计目标里的「诚实降级」

@@ -1,12 +1,12 @@
 /**
  * 沙箱后端抽象。
  *
- * 三种实现的隔离强度差异很大，因此 `IsolationReport.caveats` 不是装饰——
+ * 两种实现（native / wsl2）的隔离强度差异很大，因此 `IsolationReport.caveats` 不是装饰——
  * 设计目标里的「诚实降级」要求它原文透出到 UI。任何在传递过程中裁剪或美化
  * caveats 的做法都违背这条。
  */
 
-export type SandboxBackendId = 'native' | 'wsl2' | 'docker';
+export type SandboxBackendId = 'native' | 'wsl2';
 
 export type FilesystemIsolation =
   /** 独立命名空间，越界在内核层被阻止 */
