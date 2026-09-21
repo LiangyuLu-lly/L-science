@@ -43,6 +43,17 @@ export async function registerCompatProvider(
   const providerId = preset?.id ?? compatProviderIdForUrl(baseUrl);
   const name = input.name ?? preset?.name ?? 'OpenAI 兼容';
   const ref = providerRef(providerId);
+
+  let models: readonly ModelDescriptor[];
+  try {
+    models = await deps.adapters.get(OPENAI_COMPAT_ID).listModels({
+      baseUrl,
+      apiKey: input.apiKey,
+    });
+  } catch (err: unknown) {
+    throw explainCompatFailure(err, baseUrl);
+  }
+
   deps.vault.set(ref, input.apiKey);
 
   deps.registry.upsertProvider({
@@ -55,15 +66,6 @@ export async function registerCompatProvider(
     enabled: true,
   });
 
-  let models: readonly ModelDescriptor[];
-  try {
-    models = await deps.adapters.get(OPENAI_COMPAT_ID).listModels({
-      baseUrl,
-      apiKey: input.apiKey,
-    });
-  } catch (err: unknown) {
-    throw explainCompatFailure(err, baseUrl);
-  }
   const namespaced = models.map((model) => ({
     ...model,
     id: namespacedModelId(providerId, model.id),

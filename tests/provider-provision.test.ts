@@ -12,7 +12,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { AdapterRegistry, type ProviderAdapter } from '@l-science/adapters';
+import { AdapterRegistry, OPENAI_COMPAT_ID, type ProviderAdapter } from '@l-science/adapters';
 import {
   AppStore,
   CredentialVault,
@@ -22,6 +22,7 @@ import {
   dpapiAvailable,
   providerRef,
   provisionKnownProviders,
+  registerCompatProvider,
 } from '@l-science/core';
 import type { ModelDescriptor } from '@l-science/shared';
 
@@ -79,6 +80,7 @@ function fakeAdapter(spec: {
   healthOk: boolean;
   healthDetail?: string;
   models?: readonly ModelDescriptor[];
+  listModels?: ProviderAdapter['listModels'];
 }): ProviderAdapter {
   return {
     id: spec.id,
@@ -90,11 +92,27 @@ function fakeAdapter(spec: {
         ...(spec.healthDetail === undefined ? {} : { detail: spec.healthDetail }),
       };
     },
-    async listModels() {
+    async listModels(ctx) {
+      if (spec.listModels !== undefined) return spec.listModels(ctx);
       return spec.models ?? [descriptor(`${spec.id}-m1`, spec.id)];
     },
     async *chat() {
       return;
+    },
+  };
+}
+
+function memoryVault() {
+  const entries = new Map<string, string>();
+  return {
+    set(ref: string, secret: string): void {
+      entries.set(ref, secret);
+    },
+    get(ref: string): string | null {
+      return entries.get(ref) ?? null;
+    },
+    has(ref: string): boolean {
+      return entries.has(ref);
     },
   };
 }
@@ -232,5 +250,78 @@ describe('provisionKnownProviders', () => {
 
     const ollama = result.providers.find((p) => p.id === 'ollama');
     expect(ollama?.status).toBe('registered');
+  });
+});
+
+describe('registerCompatProvider', () => {
+  const BAD_KEY = 'sk-FAKE-BAD-compat-key';
+  const GOOD_KEY = 'sk-FAKE-GOOD-compat-key';
+  const openaiRef = providerRef('openai');
+
+  it('密钥探测失败时不写入 vault 也不登记供应商', async () => {
+    const vault = memoryVault();
+    let probedWhileVaultEmpty = false;
+    const adapters = adaptersOf(
+      fakeAdapter({
+        id: OPENAI_COMPAT_ID,
+        healthOk: true,
+        async listModels(ctx) {
+          probedWhileVaultEmpty = !vault.has(openaiRef);
+          expect(ctx.apiKey).toBe(BAD_KEY);
+          throw new Error('401 Unauthorized');
+        },
+      }),
+    );
+
+    await expect(
+      registerCompatProvider(
+        { vault, registry, sync, adapters },
+        { presetId: 'openai', apiKey: BAD_KEY },
+      ),
+    ).rejects.toThrow(/密钥被拒绝/);
+
+    expect(probedWhileVaultEmpty).toBe(true);
+    expect(vault.has(openaiRef)).toBe(false);
+    expect(registry.getProvider('openai')).toBeNull();
+    expect(registry.listModels({ providerId: 'openai', includeDisabled: true })).toEqual([]);
+  });
+
+  it('密钥探测成功后才写入 vault 并登记模型', async () => {
+    const vault = memoryVault();
+    let probedWhileVaultEmpty = false;
+    const adapters = adaptersOf(
+      fakeAdapter({
+        id: OPENAI_COMPAT_ID,
+        healthOk: true,
+        async listModels(ctx) {
+          probedWhileVaultEmpty = !vault.has(openaiRef);
+          expect(ctx.apiKey).toBe(GOOD_KEY);
+          return [descriptor('gpt-4o-mini', 'openai')];
+        },
+      }),
+    );
+
+    const result = await registerCompatProvider(
+      { vault, registry, sync, adapters },
+      { presetId: 'openai', apiKey: GOOD_KEY },
+    );
+
+    expect(probedWhileVaultEmpty).toBe(true);
+    expect(vault.has(openaiRef)).toBe(true);
+    expect(vault.get(openaiRef)).toBe(GOOD_KEY);
+    expect(registry.getProvider('openai')).toMatchObject({
+      id: 'openai',
+      adapter: OPENAI_COMPAT_ID,
+      credentialRef: openaiRef,
+      enabled: true,
+    });
+    expect(registry.listModels({ providerId: 'openai' }).map((m) => m.id)).toEqual([
+      'openai/gpt-4o-mini',
+    ]);
+    expect(result).toMatchObject({
+      providerId: 'openai',
+      added: ['openai/gpt-4o-mini'],
+      modelIds: ['openai/gpt-4o-mini'],
+    });
   });
 });
