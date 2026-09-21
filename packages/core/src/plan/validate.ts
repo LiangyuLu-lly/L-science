@@ -202,7 +202,7 @@ export function validatePlan(input: ValidatePlanInput): readonly PlanIssue[] {
             severity: 'warning',
             code: 'skill-requirements-missing',
             stepRef: step.ref,
-            message: `步骤 ${step.ref} 绑定的技能 ${step.skillSlug} 的依赖尚未满足`,
+            message: `步骤 ${step.ref} 绑定的技能 ${step.skillSlug} 的依赖尚未满足：${missing.trim()}`,
             remediation: `执行到这一步之前先补齐依赖：\n${missing}`,
           });
         }

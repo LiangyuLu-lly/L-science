@@ -180,6 +180,7 @@ describe('计划校验（需求 10.2）', () => {
     });
     expect(issues[0]).toMatchObject({ severity: 'warning', code: 'skill-requirements-missing' });
     expect(issues[0]?.remediation).toContain('pip install yasa');
+    expect(issues[0]?.message).toContain('yasa');
   });
 
   it('声明未注册的工具是错误', () => {
