@@ -315,7 +315,7 @@ type TurnEvent =
 | `r` | 持久 R 会话 | 走标准 Jupyter 协议（`IRkernel`）；运行时探测，R 未安装时不注册该工具并引导安装 |
 | `repl` | 控制面 stdlib-only 内核，注入 `host` 全局 | 同构，`host` 表面更大 |
 | `save_artifacts` | 工作区文件提升为 artifact，抽取代码血缘 | 图像类强制要求可复现血缘 |
-| `read_file` | 按 artifact version_id 或绝对路径读取；PDF 按页读 | 同构 |
+| `read_file` | 按 artifact version_id 或绝对路径读取；PDF 按页读 | 同构。**当前产品线没有阅读 shell / PDF 画布：** 全文以文本提供（文献「已抓全文」+ `ref.fulltextText` 抽字；agent 用本工具按页）。 |
 | `edit_file` | 全文写入或精确替换；受保护路径拒写 | 受保护路径表适配 Windows（`.ssh`、`.git\config`、`.vscode`、PowerShell profile 等） |
 | `manage_environments` | conda 环境增删查 + 注册用户 venv | 复用本机 `E:\anaconda`；创建新环境时默认 Python 3.13 |
 | `manage_packages` | 环境内包管理 | 优先用 `uv`（本机已有 0.11.16），回退 pip/conda |
@@ -561,7 +561,7 @@ Claude Science 提供了通用科研骨架，但没有针对论文产出的专�
 
 **Claim Ledger**（`packages/core/src/manuscript/{extract,ledger}.ts` + `repo/claims.ts`，迁移 v7-v8）：断言识别用**确定性规则**而非让模型读一遍（模型会漏，漏掉的可能正是编造的数字；抽取要可复现）。识别数值结论、比较陈述、因果陈述、引文支撑陈述四类。每条断言登记后必须绑定至少一条证据，证据类型 artifact 版本 / ref / DOI / compute / quote / message，**绑定时校验被指向的对象真的存在**。断言状态由证据的核验结论推导，不由调用方写入——一条 `contradicts` 压倒任意多条 `supports`。执行模型标识从 `ToolContext.modelId` 取而不让模型自报。Reviewer 对 `origin='asserted'` 且无证据的断言开 FAIL，`origin='extracted'` 只开 WARN（收紧规则会漏掉真正编造的数字，而 FAIL 里塞满误抽会让用户关掉审查）。引文核实（`manuscript/{citations,verify}.ts`）**由后端做检索，模型拿不到写结论的权限**：工具签名里没有 verdict 参数、ledger 拒绝无检索记录的 supports、审查层兜底扫编造嫌疑——提示词写「不要凭记忆」只会让它在幻觉之外多加一句「我已核实」。纯引用标记（`[12]`）拒绝检索而不是当标题去查。期刊名比对用 ISO 4 前缀 + 子序列而非字符串相似度。`not-found` 与 `unverifiable` 分开记（混成一档会把网络故障说成学术不端）。
 
-**Manuscript Compiler**（`packages/core/src/manuscript/{frontmatter,document,journals,compile}.ts` + `repo/manuscripts.ts`，迁移 v9）：从结构化手稿（Markdown + front matter）编译为目标期刊格式，处理引用样式、字数限制、图表编号与格式规范。**只检查不自动改**，唯一例外是引用重编号（自动删字毁论证，自动重排打乱交叉引用）。front matter 另写嵌套解析器而不复用平铺版也不引 YAML 库：平铺表达不了「作者带机构」，而 YAML 的隐式转换在此是纯陷阱——`no` 不变 false，`1.10` 不变 1.1，重复键报错而不是覆盖。元数据按 `identifying` / `statements` 两组分，让「哪些算身份信息」出现在类型上。**双盲送审版**只删结构化字段、**正文一个字不改**（正文正则替换会命中同名的被引作者、会破坏「Smith-Waterman」，且改动无法审阅），移除项逐条列出。自引身份泄露要求两个条件同时成立（正文自我指代措辞 + 该引用作者与本文作者有交集），上下文按段落取而非按行。期刊档案是数据且每条带 note 说明数值来源。编译报告与输出文件**同时**载明：这是基于结构化元数据的规则处理，对正文里的隐式身份线索无保证。`compile_runs` 单独一张表，因为「上次报告是什么」与「问题数在收敛还是发散」是两个问题。
+**Manuscript Compiler**（`packages/core/src/manuscript/{frontmatter,document,journals,compile}.ts` + `repo/manuscripts.ts`，迁移 v9）：从结构化手稿（Markdown + front matter）编译为目标期刊格式，处理引用样式、字数限制、图表编号与格式规范。**当前产品线不是 camera-ready 导出：** 编译产出检查报告与 Markdown（正式版 / 双盲版），不是投稿 PDF 或 LaTeX 包。**只检查不自动改**，唯一例外是引用重编号（自动删字毁论证，自动重排打乱交叉引用）。front matter 另写嵌套解析器而不复用平铺版也不引 YAML 库：平铺表达不了「作者带机构」，而 YAML 的隐式转换在此是纯陷阱——`no` 不变 false，`1.10` 不变 1.1，重复键报错而不是覆盖。元数据按 `identifying` / `statements` 两组分，让「哪些算身份信息」出现在类型上。**双盲送审版**只删结构化字段、**正文一个字不改**（正文正则替换会命中同名的被引作者、会破坏「Smith-Waterman」，且改动无法审阅），移除项逐条列出。自引身份泄露要求两个条件同时成立（正文自我指代措辞 + 该引用作者与本文作者有交集），上下文按段落取而非按行。期刊档案是数据且每条带 note 说明数值来源。编译报告与输出文件**同时**载明：这是基于结构化元数据的规则处理，对正文里的隐式身份线索无保证。`compile_runs` 单独一张表，因为「上次报告是什么」与「问题数在收敛还是发散」是两个问题。
 
 ### 8. Connectors 与 Compute
 
@@ -573,7 +573,7 @@ stdio 传输**不继承 `process.env`**，只按白名单放行 `PATH` / `System
 
 内置目录 52 个连接器 / 17 组 / 106 个工具，经声明式 REST→MCP 桥提供（见 AD-12）。授权门的顺序是刻意的：已有有效授权 → 服务端声明只读且非破坏性 → 有审批通道则发卡片阻塞等待 → 没有审批通道则**拒绝**。其中 `readOnlyHint` 只用来决定「默认要不要问用户」，不能用来跳过授权检查本身——那个提示由服务端自己填，没有任何强制机制。拒绝以返回值 `denied: true` 表达而不抛异常：需求 17.3 要求拒绝后不得重试同一请求，用异常表达会让调用方 catch 之后继续，那正是审批要防的事。
 
-**Compute**（`packages/core/src/compute/`，应用库 v4 + 项目库 v10）：`local`（本机含 GPU）、`ssh`（HPC 集群，Slurm/PBS/无调度器）、`byoc`（用户自带云算力）。
+**Compute**（`packages/core/src/compute/`，应用库 v4 + 项目库 v10）：`local`（本机含 GPU）、`ssh`（HPC 集群，Slurm/PBS/无调度器）、`byoc`（用户自带云算力）。**当前产品线没有算力工作室，也没有环境工作室：** `compute.*` / `env.*` IPC 未接 UI；侧栏「工具与环境」是工具清单 + doctor。登记、探测、作业、装包走助手工具。
 
 SSH 走**系统的 `ssh` 二进制**而不是 JS SSH 库：实验室集群的接入方式几乎从不是「主机名 + 端口 + 私钥」——跳板机、按主机匹配的私钥、ssh-agent、硬件密钥这些用户在 `~/.ssh/config` 里早就配好了，引库等于重新实现一遍而实现不全的表现是「终端里能连上、平台里连不上」。三条不能改的选项：`BatchMode=yes`（不加则需要交互时永久挂住等一个不存在的 TTY）、`StrictHostKeyChecking=yes`、`PasswordAuthentication=no`。用户自定义选项过白名单——一个 `-o StrictHostKeyChecking=no` 就能把最重要的一条撤掉。主机公钥分三步确认（ssh-keyscan 取回 → 审批卡片展示指纹 → 写 known_hosts），因为首次连接自动信任恰好是中间人唯一需要的窗口；指纹变了时平台不覆盖。远程命令一律 base64 传输：ssh 把 argv 交给远端登录 shell 二次解析，而作业脚本里引号、`$`、反引号、换行是常态。
 
@@ -583,7 +583,7 @@ SSH 走**系统的 `ssh` 二进制**而不是 JS SSH 库：实验室集群的接
 
 ### 9. Memory Service
 
-三层作用域：`global`（跨项目的用户偏好与工作习惯）、`project`（项目背景、术语约定、数据说明、既定决策）、`compute`（算力环境笔记）。写入需明确理由，UI 可审查与编辑全部记忆条目。
+三层作用域：`global`（跨项目的用户偏好与工作习惯）、`project`（项目背景、术语约定、数据说明、既定决策）、`compute`（算力环境笔记）。写入需明确理由，UI 可审查与编辑全部记忆条目。**当前产品线没有记忆视图：** 无 Memory 页；查看 / 编辑 / 删除走助手工具 `remember` / `recall_memory`，不是侧栏工作室。
 
 算力环境笔记（需求 14.5）复用 compute 作用域而不另开一张表：跨项目共享、条数上限、必须给理由、按目标隔离都已经在这一层。内容限制靠两步判定——先挡永远不会用来描述一台机器的研究内容标记（研究问题/实验设计/干预组/量表/投稿），再要求存在环境信号（路径、分区、调度器命令、环境激活方式、运维安排）。第二步比黑名单强：「这台机器很好用」一个禁用词都没有却同样不该进。刻意不按「提到了被试」就拒——`/scratch/proj 下每个被试一个子目录` 是文件系统布局，是环境知识里最有用的一类。注入只带本会话真的碰过的目标，因为记忆注入有字符预算而无关目标的笔记会把相关内容挤出去。
 

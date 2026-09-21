@@ -8,6 +8,7 @@
 - 原生依赖一律用 prebuilt，禁止引入需要 node-gyp 现场编译的包（需求 20.1）。
 - 后端包的相对导入写 `.js` 后缀；UI 包走 bundler 解析用无扩展名。
 - 新增或修改行为时同步补测试，测试与实现在同一条任务内完成。
+- `[x]` 表示该项后端与测试已落地。界面够不着的能力另标 `[~] 后端有，UI 未接线`，不把 `[x]` 改回空白（那会抹掉已完成的后端史）。清册见 `ipc-coverage.md`。审计：`node scripts/audit-ipc-callsites.mjs`。
 
 ---
 
@@ -74,6 +75,7 @@
   - _需求：19.1、19.2、19.3_
 - [x] 3.1 项目仓储
   - 创建、重命名、归档（可逆、幂等）、删除项目
+  - [~] 后端有，UI 未接线：`project.archive` 未包装。顶栏能显示「已归档」标签，没有归档按钮（`ProjectHeader.tsx:41`）。
   - 创建与删除跨越数据库与文件系统，无法单事务。顺序刻意选定：创建先建目录与库、最后写注册表行；删除先删注册表行、再关句柄、最后删目录。两个方向的中途失败都只留下可被 `danglingProjects()` 发现的孤儿目录，不会出现「注册表里有但打不开」
   - 删目录前必须关闭数据库句柄：Windows 上打开的 SQLite 文件被锁，直接删会 `EPERM` 并留下残缺目录
   - 测试：删除后注册表与目录都消失；归档项目不出现在默认列表；目录被外部删除时能被识别为悬挂
@@ -178,6 +180,7 @@
   - _需求：5.4_
 - [x] 5.5 宿主路径授权
   - `request_host_access` / `list_host_grants`；区分只读与读写；支持撤销与有效期
+  - [~] 后端有，UI 未接线：`host.requestAccess` 未包装。授权走审批卡片事件，没有独立「申请宿主路径」控件。
   - 测试：只读授权下写入被拒；撤销后立即失效
   - _需求：5.5、5.6、5.7、17.5_
 - [x] 5.6 出口代理与域名白名单
@@ -283,6 +286,7 @@
   - _需求：3.6、3.8_
 - [x] 9.3 Artifacts 视图
   - 列表、版本历史、血缘图、删除入口
+  - [~] 后端有，UI 未接线：制品页无删除按钮（`ArtifactsView.tsx` 只展示 `deletedAt`）。删除走 agent 工具 `delete_artifacts` → 审批卡片；`artifact.describeDeletion` 包装无人调用。需求 6.7 写的是「当 agent 请求删除」，不是制品页上的删除入口。
   - _需求：6.2、6.4_
 - [x] 9.4 隔离徽章与审批卡片
   - 持续展示当前后端隔离强度与 `caveats` 原文；审批卡片交互
@@ -389,6 +393,7 @@
   - _需求：9.7_
 - [x] 12.5 Plan Engine
   - 结构化计划生成、技能绑定校验、避免硬编码可检索数值、UI 审阅与修改
+  - [~] 后端有，UI 未接线：`plan.get` / `loadPlan` 包装无人调用。PlanPanel 用 `plan.list`（`PlanPanel.tsx:265`），列表项已是完整 `PlanView`。
   - error 级校验不落库直接退回模型：落库让用户发现的话，他批准的会是一个做不到的承诺
   - 批准是 IPC 方法而不是工具——模型能自己批准自己的计划的话「可审阅」只是说法
   - _需求：10.1、10.2、10.3、10.4_
@@ -439,6 +444,7 @@
   - _需求：11.1-11.8_
 - [x] 12.9 Memory Service
   - 三层作用域、写入需理由、可审查编辑、不写入一次性细节
+  - [~] 后端有，UI 未接线：无记忆视图。`memory.list` / `memory.upsert` / `memory.delete` 未包装。写入与召回走 agent 工具 `remember` / `recall_memory`（`backend.ts:1509-1510`）。「可审查编辑」不是侧栏工作室。
   - 全局与算力作用域在应用库、项目作用域在项目库；一个 `MemoryRepo` 封装两种表形状，避免「写进了应用库但从项目库里查」这种查不出来也不报错的情况
   - **需求 16.4 靠确定性规则守**，不靠提示词：时间指代、完成陈述、具体统计结果、一次性对象 id 全部拦掉，每条拒绝都带改写建议（只说「不许写」会让模型放弃使用记忆）
   - 条数上限 + 注入预算 6000 字符；注入按类别优先级排序而不是纯按时间——否则一条刚写的「图表用深色主题」会把「本项目统一用混合效应模型」挤出预算
@@ -494,6 +500,7 @@
   - 测试：`tests/skill-authoring.test.ts` 66 项（含三组安全防护与原子性回退）；`verify:skills` 新增一节用 PowerShell `Compress-Archive` 与系统 `tar` 造真实归档（含中文文件名）走完整导入路径；`verify:backend` 新增 10 项端到端（含「写完立刻可检索」——写进磁盘但没重扫的话技能存在却搜不到，单元测试看不见）
   - _需求：9.6_
 - [x] 12.16 用户侧技能选择器与连接器设置界面
+  - [~] 后端有，UI 未接线：技能详情列出 `references` 文件名但不能打开（`SkillsView.tsx:1019-1023`），`skill.reference` 包装无人调用。`connector.upsert` / `connector.delete` 未包装；连接器页只能开关已有项。
   - composer 里 `/` **真注入**而不是加提示：`conversation.send` 新增 `skills`，orchestrator 新增 `explicitSkills`。「显式」的全部意义在于保证生效——只加提示的话模型可能判断用不上而跳过，用户点了技能却什么也没发生，而界面上看不出区别
   - 注入排在 user 消息之前（先给方法再给任务）；内容明说「以它为准」；找不到的 slug 如实告知模型而不静默过滤；每次注入记 `reason='explicit'` 的审计
   - `/` 只在行首或空白之后触发。句子中间的斜杠是路径、日期与单位，全当命令会让输入框在正常打字时不停弹窗
@@ -523,6 +530,7 @@
 ## M4 论文流水线
 
 - [x] 13.1 文献元数据解析与去重
+  - [~] 后端有，UI 未接线：`ref.get` 包装无人调用（RefsView 点选只做论文焦点，不打开单条+BibTeX，`RefsView.tsx:476`）。`ref.search` 未包装；检索走 agent `manage_references action=search`（`refs/tools.ts:310`）。
   - Crossref / OpenAlex / Semantic Scholar / PubMed / Europe PMC / arXiv **六家并行**后按完备度合并，而不是依次尝试取第一个成功：串行最坏是六个 20s 超时叠成两分钟；取第一个会让记录质量取决于谁先响应（随机），同一个 DOI 两次入库可能一次有摘要一次没有
   - 去重分**三档**（same / likely / distinct），两个不同 DOI **永不自动合并**：preprint 与正式版是两个真实注册对象，合并掉一个之后「当初引的是 preprint」这件事无法恢复。likely 只提示不动手
   - 标题相似度同时用**编辑距离与词包含率**两个指标：副标题缺失时编辑距离只有 0.6 会漏掉真重复；包含率单独用则任何短标题都「包含」在长标题里，故要求作者姓与年份同时成立才升档
@@ -547,6 +555,7 @@
   - 新增 `refs/export.ts`；`bibtexKeyFor` 移进 `bibtex.ts` 解开 library ↔ export 的循环依赖
   - _需求：12.5_
 - [x] 13.4 Claim Ledger
+  - [~] 后端有，UI 未接线：`claim.register` 包装无人调用。界面抽取走 `extractClaims`（`App.tsx:760`）。断言页有「用户登记」来源标签（`ClaimsView.tsx:35`）但没有手动登记控件。agent `manage_claims action=register` 写入的 origin 是 `model`（`manuscript/tools.ts:366`）。
   - 断言识别用**确定性规则**而非让模型读一遍：模型会漏，而漏掉的可能正是编造的那个数字；抽取要可复现（同一份稿子两次跑结果相同）；规则便宜到每次保存都能跑
   - 接受误抽，用 `origin='extracted'` 只报 WARN，`origin='asserted'` 才报 FAIL：收紧规则会漏掉真正编造的数字，而那是这套机制存在的唯一理由；FAIL 里塞满误抽会让用户直接关掉审查
   - 绑定证据时**校验被指向的东西真的存在**（artifact / ref / compute 逐类查）：否则断言在计数上「有证据」、FAIL 检查放过、用户点开是空的
@@ -556,6 +565,7 @@
   - 新增 `manuscript/{extract,ledger,tools,index}.ts` + `repo/claims.ts`；项目库迁移 **v7**；`FindingCategory` 新增 `'claim'`（同步四处：shared、reviewer/tools.ts、reviewer/parse.ts 的 CATEGORIES、ui/api.ts）
   - _需求：13.1、13.2、13.3、13.4_
 - [x] 13.5 引文核实
+  - [~] 后端有，UI 未接线：`citation.parse` / `citation.checks` 包装无人调用。「核对引用」芯片已调 `verifyCitations` / `citation.verify`（`TaskTypeChips.tsx:149`），不调 parse/checks。列表与解析仍无独立控件。
   - **检索由后端做，模型拿不到写结论的权限**，而不是在提示词里写「不要凭记忆」：提示词只会让它在幻觉之外多加一句「我已核实」。三道封堵——工具签名里没有 verdict 参数、ledger 拒绝没有检索记录的 supports、审查层兜底扫 `fabricationSuspects`
   - 纯引用标记（`[12]`、`(见上)`）**必须拒绝检索**而不是当标题去查：当标题查会返回一堆无关文献，其中最相似的被判成命中，于是编造的引文「核实通过」——这是最坏的失败方向
   - 期刊名比对用 **ISO 4 前缀 + 子序列**，不用字符串相似度：`J Sleep Res` 对 `Journal of Sleep Research` 相似度只有 0.44，任何门槛要么让这一档失效要么把 Nature 和 Neuron 判成相同。`Natl`→`National` 是缩合不是前缀，故需子序列；加首字母约束防单字母缩写乱匹配
@@ -563,6 +573,7 @@
   - 新增 `manuscript/{citations,verify,verify-tools}.ts`；项目库迁移 **v8**（`citation_checks`）
   - _需求：13.9_
 - [x] 13.6 Manuscript Compiler
+  - [~] 后端有，UI 未接线：`manuscript.delete` 包装无人调用，手稿页无删除。`manuscript.history` 包装无人调用；历史来自 `manuscript.get().runs`（`ManuscriptsView.tsx:98`）。编译产出报告与 Markdown，不是 camera-ready 投稿文件。
   - 编译**只检查不自动改**，唯一例外是引用重编号：自动删字毁论证，自动重排打乱交叉引用
   - 双盲**正文一个字不改**，只删结构化字段：正文正则替换会命中同名的被引作者、会破坏「Smith-Waterman」这类术语，而且改动无法审阅
   - 移除清单**逐项列出**（删了哪个作者、哪条致谢、哪个基金号），不是「已移除作者信息」：后者核对不了任何东西
@@ -584,6 +595,7 @@
   - 提前做的原因：模型技能（12.11）里大量步骤第一步就是查公共库，连接器不到位那些技能只能写「请手动查」
   - _需求：14.1、14.2_
 - [x] 14.2 算力目标管理
+  - [~] 后端有，UI 未接线：`compute.*` 22 个方法全部未包装。无算力工作室。能力走 agent 工具 `manage_compute` / `run_remote_command` / `submit_compute_job`（`backend.ts:1919-1921`）。
   - SSH 走**系统的 `ssh` 二进制**，不引 JS SSH 库：实验室集群的接入方式几乎从不是「主机名 + 端口 + 私钥」——跳板机、按主机匹配的私钥、ssh-agent、硬件密钥这些用户在 `~/.ssh/config` 里早就配好了。引库等于重新实现一遍，而实现不全的表现是「终端里能连上、平台里连不上，且看不出为什么」。用系统 ssh 的规则很好解释：**你在终端能上去，平台就能上去**。附带好处是不引 native 依赖
   - 三条不能改的 ssh 选项：`BatchMode=yes`（不加则需要交互时永久挂住等一个不存在的 TTY）、`StrictHostKeyChecking=yes`（`no` 与 `accept-new` 都等于对中间人不设防）、`PasswordAuthentication=no`（不排除时报的是含糊的 `Permission denied (publickey,password)`，排除后报的是「没有可用的公钥」——那才是用户要看到的）。用户自定义选项过白名单：一个 `-o StrictHostKeyChecking=no` 就能把最重要的一条撤掉，而配置里多一行谁都不会注意到
   - 主机公钥**分三步**（ssh-keyscan 取回 → 审批卡片展示指纹 → 写 known_hosts）：首次连接自动信任恰好是中间人唯一需要的窗口。指纹变了时平台**不覆盖**，报出来让人分辨——那要么是主机重装了系统，要么就是中间人
@@ -598,6 +610,7 @@
   - 顺带修一个真 bug：backend 里两处把 `grants.isDomainAllowed(...)` 当布尔用，而它返回对象。对象恒为真，因此 M4 文献库的两道域名门此前**从不触发审批**
   - _需求：14.3、14.4、14.6、14.7_
 - [x] 14.3 算力环境笔记
+  - [~] 后端有，UI 未接线：算力笔记无独立界面，复用 memory compute 作用域，由 agent 工具写入。
   - **不开新表**：`memory_notes` 的 compute 作用域已经在应用库里，因此「跨项目共享」是现成的；准入规则、条数上限、必须给理由、按目标隔离也都在那一层。自己开一张笔记表意味着把这些逐条重新实现一遍，而重新实现的那份迟早与记忆那份分叉
   - 结构性门已成立：`KIND_SCOPES` 里只有 `environment` 类允许 compute 作用域，因此「把项目背景写成算力笔记」在类型层就被挡住
   - 新增的内容门**两步判定**：先挡永远不会用来描述一台机器的研究内容标记（研究问题/实验设计/自变量/干预组/量表/伦理审查/投稿/显著性），再要求存在**环境信号**。第二步比黑名单强得多——「这台机器很好用」一个禁用词都没有却同样不该进。顺序刻意如此：第一档的措辞具体（直接说该换哪个作用域）
@@ -607,6 +620,7 @@
   - 又踩了一次同一个坑：中文词不能放进 `\b...\b`（`经跳板机` 里没有 word 边界，`/\b跳板机/` 永远匹配不上）。这个坑在 `STAT_RESULT` 的 `/\b均值/` 上踩过第一次
   - _需求：14.5_
 - [x] 14.4 环境与包管理工具
+  - [~] 后端有，UI 未接线：`env.*` 16 个方法全部未包装。侧栏「工具与环境」是工具清单 + doctor（`ToolsPanel.tsx`），不是环境工作室。能力走 agent 工具 `manage_environments`（`backend.ts:1822`）。
   - **conda / pip 混装门**是这一组的核心（需求 15.4）。需求里那句「防版本约束冲突导致导入失败」，实际发生的事更具体：conda 的 numpy 链接环境里那份 MKL/OpenBLAS，PyPI 的 wheel 自带一份，两份都在一个进程里时符号来自哪一份取决于加载顺序，结果是 ImportError（最好的一种，至少报错了）、进程崩、或者**算出错误的数值而完全不报错**。第三种是这道门真正要防的：它的代价不是「程序挂了」，是「结论错了而没人知道」
   - 判定按**共享的原生库分组**而不是按包名：只比对同名包会漏掉最常见的一类——conda 装了 scipy，然后 pip 装 numpy，包名不同但冲突照样成立。九个组（BLAS、HDF5、LLVM、Arrow、地理空间、CUDA、OpenCV、Qt、神经影像），每组写明共享哪个原生库与混装后的具体表现。只收**链接原生库**的包：纯 Python 包混装不会有这个问题，列进来只会让这道门在无害的情况下反复挡人，而那会让用户去找绕过它的办法
   - 权威来源是**探测而不是我们的安装记录**：`conda list --json` 把 pip 装的包标成 `channel: "pypi"`。用户可以在环境里自己跑 pip，那时我们的记录会漏而 conda 不会。conda list 不可用时退回 pip list 会让所有包看起来都是 pypi 装的（检查永远不触发），因此那种情况要在探测结果里显式报出来
@@ -623,6 +637,7 @@
   - 顺带修一个真 bug：`execFile` 会**同步抛**一部分错误（零字节 python.exe 让 libuv 报 EFTYPE）。不接住的话一个用户损坏的 venv 会让整个环境列表页崩掉，而崩掉的位置在「探测版本号」这种看起来无害的地方
   - _需求：15.1-15.7_
 - [x] 14.5 其余审批类型
+  - [~] 后端有，UI 未接线：`approval.pending` / `approval.history` / `approval.forgetDenial` 包装无人调用。审批卡片只吃 `approval.request` 事件（`useTurn.ts:290`）。刷新后恢复待批、审计历史、撤销拒绝记忆都没有控件。
   - 需求 17.1 点名的五类此前已全部有门（制品删除、宿主路径、远程命令、算力凭据、域名白名单），因此这一项做的是把机制的三个缺口补上
   - **装包缺一道门** → 新增 `package-install`。需求 17.1 没点名它，但它属于同一类：`pip install` 会执行包自带的构建脚本，也就是任意代码执行，在用户自己的机器上、用他的权限。第二个理由是影响范围——装包改动的是环境，而环境被此后所有会话的内核共用。卡片给出命令原文（用户能判断的是命令，不是「安装 3 个包」）、明说这是任意代码执行、标 `reversible: false`（装错的包可以卸，但构建脚本已经跑过了）。作用域最宽到 project：环境是全局资源，一条 always 等于把所有项目的环境都交出去了。审批门排在混装检查**之后**——让用户为一个注定被拒的请求点一次同意是纯粹的骚扰
   - **有效期此前是死代码** → `SCOPE_DURATION_MS` 里除 once 外全是 null，`expiresAt` 恒为 null，而两个 grants repo 的 check 都会看它。现在 `ApprovalRequest` 加 `expiryOptions`、`decide` 加 `expiresInMs`。与作用域分成两个字段：作用域回答「在哪些上下文里生效」，有效期回答「生效多久」，合成一个下拉框会让选项数量变成两者的乘积
