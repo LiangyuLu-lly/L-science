@@ -129,16 +129,19 @@ export function TaskTypeChips({
 
   const runCitationCheck = async (): Promise<void> => {
     if (projectId === null) {
-      setCheckUi({ kind: 'cannot', message: '当前没有项目，无法核对引用' });
+      setCheckUi({ kind: 'cannot', message: '同时跳过一次实际核对：当前没有项目' });
       return;
     }
     if (focusRef === null) {
-      setCheckUi({ kind: 'cannot', message: '先在文献里选一篇，再点核对引用' });
+      setCheckUi({ kind: 'cannot', message: '同时跳过一次实际核对：先在文献里选一篇，再点核对引用' });
       return;
     }
     const raw = citationQuery(focusRef);
     if (raw === '') {
-      setCheckUi({ kind: 'cannot', message: '这篇文献没有可核对的题录或 DOI' });
+      setCheckUi({
+        kind: 'cannot',
+        message: '同时跳过一次实际核对：这篇文献没有可核对的题录或 DOI',
+      });
       return;
     }
     setCheckUi({ kind: 'running' });

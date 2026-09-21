@@ -114,4 +114,13 @@ describe('核对引用 chip performs a real check', () => {
     expect(CHIPS).not.toContain('✓');
     expect(CHIPS).not.toContain('核对通过');
   });
+
+  it('says the actual check was skipped when it only set the routing hint', () => {
+    // Given: 没选文献 / 没项目时芯片仍会按下一条消息的路由
+    // When: 读跳过核对的可见文案
+    // Then: 不让人以为已经核对过
+    expect(CHIPS).toContain('同时跳过一次实际核对：先在文献里选一篇，再点核对引用');
+    expect(CHIPS).toContain('同时跳过一次实际核对：当前没有项目');
+    expect(CHIPS).toContain('同时跳过一次实际核对：这篇文献没有可核对的题录或 DOI');
+  });
 });
