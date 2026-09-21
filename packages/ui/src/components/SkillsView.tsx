@@ -28,6 +28,7 @@ import {
   listCredentials,
   listSkills,
   loadSkillAudit,
+  loadSkillReferenceFile,
   loadSkillSource,
   reloadSkills,
   setSkillEnabled,
@@ -136,6 +137,87 @@ function StatusBadges({ skill }: { skill: SkillListItem }): React.JSX.Element {
         </span>
       )}
     </span>
+  );
+}
+
+/** 与 skill.write 里 references 正文上限对齐（ipc.ts：z.string().max(512_000)）。 */
+const SKILL_REFERENCE_CONTENT_MAX = 512_000;
+
+type RefFileView =
+  | { readonly status: 'loading' }
+  | { readonly status: 'ready'; readonly content: string; readonly truncated: boolean }
+  | { readonly status: 'error'; readonly message: string };
+
+function SkillReferences({
+  slug,
+  names,
+}: {
+  slug: string;
+  names: readonly string[];
+}): React.JSX.Element {
+  const [views, setViews] = useState<Readonly<Record<string, RefFileView>>>({});
+
+  const open = async (name: string): Promise<void> => {
+    setViews((prev) => ({ ...prev, [name]: { status: 'loading' } }));
+    try {
+      const result = await loadSkillReferenceFile(slug, name);
+      const truncated = result.content.length > SKILL_REFERENCE_CONTENT_MAX;
+      setViews((prev) => ({
+        ...prev,
+        [name]: {
+          status: 'ready',
+          content: truncated
+            ? result.content.slice(0, SKILL_REFERENCE_CONTENT_MAX)
+            : result.content,
+          truncated,
+        },
+      }));
+    } catch (err) {
+      setViews((prev) => ({
+        ...prev,
+        [name]: { status: 'error', message: errorText(err) },
+      }));
+    }
+  };
+
+  return (
+    <>
+      <dt>参考材料</dt>
+      <dd>
+        <ul className="skillrow__triggers">
+          {names.map((name) => {
+            const view = views[name];
+            const loading = view?.status === 'loading';
+            return (
+              <li key={name} aria-busy={loading}>
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  disabled={loading}
+                  aria-label={`打开参考材料 ${name}`}
+                  onClick={() => void open(name)}
+                >
+                  {loading ? '读取中…' : name}
+                </button>
+                {view?.status === 'error' && (
+                  <pre className="skilleditor__error" role="alert">
+                    {view.message}
+                  </pre>
+                )}
+                {view?.status === 'ready' && view.truncated && (
+                  <p className="skillrow__note">
+                    正文超过 512000 字符上限，以下为截断后的前缀。
+                  </p>
+                )}
+                {view?.status === 'ready' && (
+                  <pre className="skilleditor__code">{view.content}</pre>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </dd>
+    </>
   );
 }
 
@@ -1017,10 +1099,7 @@ export function SkillsView({ projectId, conversationId }: SkillsViewProps): Reac
                         </>
                       )}
                       {skill.references.length > 0 && (
-                        <>
-                          <dt>参考材料</dt>
-                          <dd>{skill.references.join('、')}</dd>
-                        </>
+                        <SkillReferences slug={skill.slug} names={skill.references} />
                       )}
                       {skill.scripts.length > 0 && (
                         <>
