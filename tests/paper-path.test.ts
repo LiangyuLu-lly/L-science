@@ -150,6 +150,7 @@ describe('paper path IPC', () => {
       'ref.duplicates',
       'ref.fetchFulltext',
       'ref.assets',
+      'ref.attachFulltext',
       'ref.export',
       'manuscript.profiles',
       'manuscript.parse',
@@ -164,6 +165,15 @@ describe('paper path IPC', () => {
     for (const method of methods) {
       expect(api, method).toContain(`method: '${method}'`);
     }
+  });
+
+  it('bindClaim wrapper accepts quote evidence with locator', () => {
+    const api = readFileSync(join('packages', 'ui', 'src', 'lib', 'api.ts'), 'utf8');
+    const start = api.indexOf('export const bindClaim');
+    const end = api.indexOf('export const', start + 1);
+    const bind = api.slice(start, end);
+    expect(bind).toContain("'quote'");
+    expect(bind).toContain('locator');
   });
 });
 

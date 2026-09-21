@@ -54,7 +54,7 @@ export interface ToolCallRecord {
   id: string;
   messageId: string;
   toolName: string;
-  status: 'running' | 'ok' | 'error' | 'denied' | 'interrupted';
+  status: 'running' | 'ok' | 'error' | 'denied' | 'interrupted' | 'aborted';
   input: unknown;
   output: unknown;
   startedAt: number;
@@ -542,6 +542,24 @@ export const listRefAssets = (projectId: string, refId: string) =>
     oaStatus: string | null;
   }>({ method: 'ref.assets', projectId, refId });
 
+export const attachFulltext = (
+  projectId: string,
+  refId: string,
+  input: {
+    readonly fileName: string;
+    readonly contentBase64: string;
+    readonly note?: string;
+  },
+) =>
+  invoke<{ artifactId: string | null; versionId: string | null }>({
+    method: 'ref.attachFulltext',
+    projectId,
+    refId,
+    fileName: input.fileName,
+    contentBase64: input.contentBase64,
+    ...(input.note === undefined ? {} : { note: input.note }),
+  });
+
 export const exportRefs = (
   projectId: string,
   input: {
@@ -619,7 +637,13 @@ export const extractClaims = (
 export const bindClaim = (
   projectId: string,
   claimId: string,
-  evidence: { readonly evidenceKind: 'doi' | 'ref'; readonly evidenceRef: string },
+  evidence: {
+    readonly evidenceKind: 'artifact-version' | 'ref' | 'doi' | 'compute' | 'quote' | 'message';
+    readonly evidenceRef: string;
+    readonly locator?: string;
+    readonly quote?: string;
+    readonly note?: string;
+  },
 ) =>
   invoke<{ claim: ClaimListItem | null; advice: string | null }>({
     method: 'claim.bind',
@@ -627,6 +651,9 @@ export const bindClaim = (
     claimId,
     evidenceKind: evidence.evidenceKind,
     evidenceRef: evidence.evidenceRef,
+    ...(evidence.locator === undefined ? {} : { locator: evidence.locator }),
+    ...(evidence.quote === undefined ? {} : { quote: evidence.quote }),
+    ...(evidence.note === undefined ? {} : { note: evidence.note }),
   });
 
 export const listClaims = (projectId: string) =>
@@ -807,6 +834,8 @@ export const getManuscript = (projectId: string, manuscriptId: string) =>
 export type ManuscriptCompileOutput = {
   readonly blinded: boolean;
   readonly filename: string;
+  readonly artifactId: string;
+  readonly versionId: string;
   readonly report: string;
   readonly issues: readonly { severity: string; message: string; line: number | null }[];
 };
