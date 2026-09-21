@@ -13,7 +13,7 @@
     "序列模型 跨个体 个体化表达预测 能不能做"
   ],
   "requires": {
-    "python": ["torch", "numpy", "pandas", "matplotlib", "pysam"],
+    "python": ["torch", "numpy", "pandas", "matplotlib", "pysam", "borzoi"],
     "capabilities": ["kernel:python"]
   },
   "tools": ["python", "save_artifacts", "read_file"]

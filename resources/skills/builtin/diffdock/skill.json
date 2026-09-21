@@ -13,7 +13,7 @@
     "虚拟筛选 对接 与 Vina 比较"
   ],
   "requires": {
-    "python": ["torch", "rdkit", "numpy", "pandas", "posebusters"],
+    "python": ["torch", "rdkit", "numpy", "pandas", "posebusters", "diffdock"],
     "capabilities": ["kernel:python"]
   },
   "tools": ["python", "bash", "save_artifacts", "read_file"]

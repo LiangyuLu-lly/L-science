@@ -14,6 +14,7 @@
   ],
   "requires": {
     "python": ["torch", "numpy", "pandas", "Bio"],
+    "commands": ["protein_mpnn_run.py"],
     "capabilities": ["kernel:python"]
   },
   "tools": ["python", "bash", "save_artifacts", "read_file"]

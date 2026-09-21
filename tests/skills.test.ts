@@ -629,6 +629,50 @@ describe('内置技能目录（需求 9.7）', () => {
     expect(unknown, unknown.join(', ')).toEqual([]);
   });
 
+  it('proteinmpnn / diffdock / borzoi 必须声明技能自身的依赖，只有共享库时不能算可跑', () => {
+    const catalog = loadSkillCatalog({
+      builtinDir: builtinSource,
+      userDir: join(root, 'empty-user'),
+    });
+
+    const specific: Readonly<Record<string, string>> = {
+      proteinmpnn: 'protein_mpnn_run.py',
+      diffdock: 'diffdock',
+      borzoi: 'borzoi',
+    };
+    const sharedPython = new Set([
+      'torch',
+      'numpy',
+      'pandas',
+      'Bio',
+      'rdkit',
+      'posebusters',
+      'matplotlib',
+      'pysam',
+    ]);
+    const probes: RequirementProbes = {
+      python: (mods) => ({
+        present: new Map(mods.map((m) => [m, sharedPython.has(m)])),
+        failure: null,
+      }),
+      r: (pkgs) => ({ present: new Map(pkgs.map((p) => [p, false])), failure: null }),
+      commands: (names) => ({ present: new Map(names.map((n) => [n, false])), failure: null }),
+      connectors: () => new Set(),
+      capabilities: () => new Set(['kernel:python']),
+    };
+
+    for (const [slug, token] of Object.entries(specific)) {
+      const skill = catalog.skills.get(slug);
+      expect(skill, slug).toBeDefined();
+      const requires = skill?.manifest.requires ?? {};
+      const named = [...(requires.python ?? []), ...(requires.commands ?? [])];
+      expect(named, slug).toContain(token);
+
+      const report = checkRequirements({ requires, probes });
+      expect(report.satisfied, slug).toBe(false);
+    }
+  });
+
   it('关键技能的典型说法能被检索命中', () => {
     const catalog = loadSkillCatalog({
       builtinDir: builtinSource,
