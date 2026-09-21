@@ -9,6 +9,9 @@
  * - committee 与 Reviewer 的异厂商约束真的生效，不满足时明确降级
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { ModelDescriptor, ModelStrengths } from '@l-science/shared';
@@ -1294,5 +1297,18 @@ describe('本地偏好的边界（preferLocal 是偏好而非强制）', () => {
       forcedModelId: 'local-toy',
     });
     expect(result.decision.chosenModelId).toBe('local-toy');
+  });
+});
+
+describe('发送路径诚实性', () => {
+  it('UI 与路由注释都不声称委员会会在发送时执行', () => {
+    // Given: 发送只会跑主模型；committee / escalation 不是执行策略
+    // When: 读 RoutingPanel 文案与 router 模块注释
+    // Then: UI 仍写明不会自动连发；注释用「仅预览」钉住 planner-only
+    const panel = readFileSync(join('packages', 'ui', 'src', 'components', 'RoutingPanel.tsx'), 'utf8');
+    const router = readFileSync(join('packages', 'core', 'src', 'router', 'index.ts'), 'utf8');
+    expect(panel).toContain('不会自动连发');
+    expect(router).toContain('仅预览');
+    expect(router).not.toContain('三种执行策略');
   });
 });

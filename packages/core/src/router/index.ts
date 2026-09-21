@@ -1,11 +1,7 @@
 /**
  * 多模型能力路由（需求 7）。
  *
- * 三段结构：硬过滤决定「能不能做」，打分决定「谁做最合适」，编排层把两者
- * 组装成可解释的决策并提供降级、committee、escalation 三种执行策略。
- *
- * 整个路由不发起网络请求：健康与速率信息由调用方注入。这既让它可以被纯函数式
- * 测试，也避免在「选哪个模型」这一步引入额外延迟。
+ * 硬过滤决定能不能做，打分决定谁做最合适，编排层组装可解释决策。发送路径只执行降级（failover）；selectCommittee 仅预览候选 id，planEscalation 与 compareCommitteeAnswers 不在发送路径上调用。路由本身不发起网络请求，健康与速率由调用方注入。
  */
 
 export { TASK_WEIGHTS, TASK_REQUIREMENTS, TASK_SENSITIVITY, buildTaskProfile } from './weights.js';
