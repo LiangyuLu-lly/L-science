@@ -11,13 +11,12 @@ export const CONDA_ENV_NOTICE =
 export type FirstRunGate = {
   readonly providerCount: number;
   readonly skippedThisSession: boolean;
-  /** 当前主视图。会话在无模型时必须继续挡住。 */
+  /** 当前主视图。跳过后只在设置页隐藏，其它视图继续挡住。 */
   readonly view: string;
 };
 
 export function shouldShowFirstRun(input: FirstRunGate): boolean {
   if (input.providerCount > 0) return false;
   if (input.view === 'settings') return false;
-  if (input.skippedThisSession && input.view !== 'chat') return false;
   return true;
 }
