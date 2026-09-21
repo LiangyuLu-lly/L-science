@@ -179,7 +179,8 @@ body {
 
 .app__header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--border);
@@ -210,6 +211,27 @@ body {
   background: var(--bg-raised);
   box-shadow: var(--shadow-raised);
   padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dock-paper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
+  background: var(--bg);
+}
+
+.dock-paper__cite {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg);
+  overflow-wrap: anywhere;
 }
 
 .nav__group {
@@ -396,6 +418,14 @@ code {
   align-items: center;
 }
 
+.app__status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .app__project {
   display: flex;
   align-items: center;
@@ -548,6 +578,68 @@ code {
 
 .panel.is-current {
   border-color: var(--accent);
+}
+
+.ref-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ref-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-raised);
+}
+
+.ref-card.is-current {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.ref-card__select {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.ref-card__select:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.ref-card__title {
+  font-weight: 600;
+  font-size: var(--fs-body);
+}
+
+.ref-card__meta,
+.ref-card__doi {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.ref-card__flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .about-footer {

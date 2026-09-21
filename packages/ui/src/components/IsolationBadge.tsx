@@ -68,6 +68,14 @@ export function IsolationBadge(): React.JSX.Element {
     };
   }, []);
 
+  if (!hasBackend()) {
+    return (
+      <span className="isolation isolation--unknown" role="status">
+        隔离强度未知（请通过桌面外壳启动）
+      </span>
+    );
+  }
+
   if (error !== null) {
     return (
       <span className="isolation isolation--unknown" role="status">

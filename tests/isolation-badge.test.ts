@@ -30,4 +30,9 @@ describe('IsolationBadge collapsed copy', () => {
   it('PROCESS_LABEL includes container', () => {
     expect(BADGE).toMatch(/container:\s*'容器隔离'/u);
   });
+
+  it('no-bridge copy does not spin on 正在探测', () => {
+    expect(BADGE).toContain('隔离强度未知（请通过桌面外壳启动）');
+    expect(BADGE).toContain('if (!hasBackend())');
+  });
 });

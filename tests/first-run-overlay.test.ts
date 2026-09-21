@@ -55,6 +55,7 @@ describe('FirstRunOverlay source', () => {
     expect(SRC).toContain("id: 'qwen'");
     expect(SRC).toContain('registerCompatProvider');
     expect(SRC).toContain('first-run-preset');
+    expect(SRC).toContain('autoFocus');
   });
 
   it('EnvDoctorSection retries with refresh true', () => {

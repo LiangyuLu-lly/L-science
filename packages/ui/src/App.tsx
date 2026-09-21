@@ -48,6 +48,7 @@ import { conversationStatusLabel } from './lib/conversation-status.js';
 import { shouldShowFirstRun } from './lib/first-run.js';
 import {
   EXTRACT_CLAIMS_PROMPT,
+  composerPlaceholder,
   literatureMarkdown,
   withPaperContext,
   type PaperFocus,
@@ -199,6 +200,7 @@ function Composer({
   disabled,
   disabledReason,
   running,
+  placeholder,
   onSend,
   onInterrupt,
   onRegisterModels,
@@ -212,6 +214,7 @@ function Composer({
    */
   disabledReason: string | null;
   running: boolean;
+  placeholder: string;
   onSend: (text: string, skills: readonly string[]) => void;
   onInterrupt: () => void;
   onRegisterModels?: () => void;
@@ -293,11 +296,7 @@ function Composer({
           className="composer__input"
           value={text}
           rows={3}
-          placeholder={
-            disabled
-              ? (disabledReason ?? '当前不可输入')
-              : '说说要做什么。Enter 发送，Shift+Enter 换行，/ 插入技能。'
-          }
+          placeholder={disabled ? (disabledReason ?? '当前不可输入') : placeholder}
           disabled={disabled}
           onChange={(e) => {
             setText(e.target.value);
@@ -785,7 +784,16 @@ export function App(): React.JSX.Element {
       {(view === 'refs' || view === 'claims' || view === 'manuscripts') && (
         <div className="app__dock">
           {focusRef !== null && (
-            <p className="panel__hint">当前文献：{focusRef.cite}</p>
+            <div className="dock-paper">
+              <p className="dock-paper__cite">当前文献：{focusRef.cite}</p>
+              <button
+                type="button"
+                className="btn btn--small"
+                onClick={() => setFocusRef(null)}
+              >
+                取消选中
+              </button>
+            </div>
           )}
           <TaskTypeChips
             selected={routingOverride.taskType}
@@ -801,6 +809,7 @@ export function App(): React.JSX.Element {
             disabled={composerBlock !== null}
             disabledReason={composerBlock?.message ?? null}
             running={turn.running}
+            placeholder={composerPlaceholder(focusRef)}
             onSend={(text, skills) => {
               void turn.send(withPaperContext(text, focusRef), routingOverride, skills);
               if (Object.keys(routingOverride).length > 0) setRoutingOverride({});

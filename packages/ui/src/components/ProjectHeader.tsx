@@ -54,11 +54,12 @@ export function ProjectHeader(props: ProjectHeaderProps): React.JSX.Element {
         </button>
       </div>
 
-      <span className={`badge badge--${props.connectionState}`} role="status">
-        {props.connectionLabel}
-      </span>
-
-      <IsolationBadge />
+      <div className="app__status">
+        <span className={`badge badge--${props.connectionState}`} role="status">
+          {props.connectionLabel}
+        </span>
+        <IsolationBadge />
+      </div>
     </header>
   );
 }

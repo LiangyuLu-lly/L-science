@@ -114,10 +114,11 @@ export function RefsView({
       ) : refs.length === 0 ? null : (
         <ul className="ref-list">
           {refs.map((item) => (
-            <li key={item.id} className={`panel ${selectedId === item.id ? 'is-current' : ''}`}>
+            <li key={item.id} className={`ref-card ${selectedId === item.id ? 'is-current' : ''}`}>
               <button
                 type="button"
-                className="btn btn--small"
+                className="ref-card__select"
+                aria-pressed={selectedId === item.id}
                 onClick={() => {
                   onSelect({
                     id: item.id,
@@ -128,14 +129,16 @@ export function RefsView({
                   });
                 }}
               >
-                {item.title ?? item.cite}
+                <span className="ref-card__title">{item.title ?? item.cite}</span>
+                <span className="ref-card__meta">
+                  {[item.firstAuthor, item.year, item.container].filter(Boolean).join(' · ')}
+                </span>
+                {item.doi !== null && <code className="ref-card__doi">{item.doi}</code>}
               </button>
-              <p className="panel__hint">
-                {[item.firstAuthor, item.year, item.container].filter(Boolean).join(' · ')}
-              </p>
-              {item.doi !== null && <code>{item.doi}</code>}
-              {item.retracted && <span className="artifact__warn">已撤稿</span>}
-              {item.fulltextArtifactId !== null && <span className="panel__hint">已抓全文</span>}
+              <div className="ref-card__flags">
+                {item.retracted && <span className="artifact__warn">已撤稿</span>}
+                {item.fulltextArtifactId !== null && <span className="panel__hint">已抓全文</span>}
+              </div>
               {selectedId === item.id && (
                 <button
                   type="button"

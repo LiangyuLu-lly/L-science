@@ -181,9 +181,11 @@ export function getAppStatus(): Promise<AppStatus> {
 }
 
 export function subscribeEvents(listener: (event: BackendEvent) => void): Unsubscribe {
+  if (!hasBackend()) return () => {};
   return api().onEvent(listener);
 }
 
 export function subscribeLogs(listener: (line: string) => void): Unsubscribe {
+  if (!hasBackend()) return () => {};
   return api().onLog(listener);
 }

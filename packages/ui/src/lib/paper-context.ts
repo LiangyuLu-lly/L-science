@@ -28,6 +28,15 @@ export function withPaperContext(text: string, ref: PaperFocus | null): string {
   return `${formatPaperPrefix(ref)}${text}`;
 }
 
+export function composerPlaceholder(ref: PaperFocus | null): string {
+  if (ref === null) {
+    return '先在文献里点一篇，或直接提问。Enter 发送，/ 插入技能。';
+  }
+  const title = ref.title ?? ref.cite;
+  const short = title.length > 48 ? `${title.slice(0, 47)}…` : title;
+  return `问这篇：${short}`;
+}
+
 export function literatureMarkdown(ref: PaperFocus & { readonly abstract?: string | null }): string {
   const title = ref.title ?? ref.cite;
   const doi = ref.doi === null ? '' : `DOI: ${ref.doi}`;

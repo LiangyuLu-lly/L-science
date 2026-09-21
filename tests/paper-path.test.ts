@@ -19,6 +19,8 @@ describe('paper path navigation', () => {
     expect(APP).toContain('app__dock');
     expect(APP).toContain('extractClaims');
     expect(APP).toContain('bindClaim');
+    expect(APP).toContain('composerPlaceholder');
+    expect(APP).toContain('dock-paper');
     expect(APP).toContain("label: '助手'");
     expect(APP).toContain('nav__group');
   });
@@ -49,6 +51,7 @@ describe('paper path navigation', () => {
     expect(refs).toContain('rows={empty ? 8 : 3}');
     expect(refs).toContain('attempts');
     expect(refs).toContain('从本篇抽断言');
+    expect(refs).toContain('ref-card');
   });
 
   it('manuscripts view blocks ready-to-submit copy when claims are unresolved', () => {

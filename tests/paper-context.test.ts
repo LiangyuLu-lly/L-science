@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   EXTRACT_CLAIMS_PROMPT,
+  composerPlaceholder,
   formatPaperPrefix,
   literatureMarkdown,
   withPaperContext,
@@ -34,5 +35,10 @@ describe('paper context', () => {
   it('literatureMarkdown includes title and DOI for claim.extract', () => {
     expect(literatureMarkdown(ref)).toContain('10.1038/s41586-021-03819-2');
     expect(literatureMarkdown(ref)).toContain('# Highly accurate protein structure prediction with AlphaFold');
+  });
+
+  it('composerPlaceholder names the focused paper', () => {
+    expect(composerPlaceholder(null)).toContain('先在文献里点一篇');
+    expect(composerPlaceholder(ref)).toContain('问这篇：Highly accurate protein structure');
   });
 });

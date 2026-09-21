@@ -365,6 +365,7 @@ export function FirstRunOverlay({
               value={compatKey}
               autoComplete="off"
               spellCheck={false}
+              autoFocus
               disabled={busy}
               onChange={(event) => setCompatKey(event.target.value)}
             />
