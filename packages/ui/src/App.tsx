@@ -31,6 +31,7 @@ import {
   createProject,
   decideApproval,
   listConversations,
+  listModels,
   listProjects,
   listProviders,
   bindClaim,
@@ -42,12 +43,10 @@ import {
   type RoutingOverride,
   type TaskType,
 } from './lib/api.js';
-import { hasBackend } from './lib/backend.js';
 import { composerBlockedReason } from './lib/composer-gate.js';
 import { conversationStatusLabel } from './lib/conversation-status.js';
 import { shouldShowFirstRun } from './lib/first-run.js';
 import {
-  EXTRACT_CLAIMS_PROMPT,
   composerPlaceholder,
   literatureMarkdown,
   withPaperContext,
@@ -454,6 +453,10 @@ export function App(): React.JSX.Element {
    */
   const [routingOverride, setRoutingOverride] = useState<RoutingOverride>({});
   const [providerCount, setProviderCount] = useState<number | null>(null);
+  const [enabledModelCount, setEnabledModelCount] = useState<number | null>(null);
+  const [projectLoadError, setProjectLoadError] = useState<string | null>(null);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [extractStatus, setExtractStatus] = useState<string | null>(null);
   const [skippedThisSession, setSkippedThisSession] = useState(false);
   const [overlayForced, setOverlayForced] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
@@ -469,10 +472,17 @@ export function App(): React.JSX.Element {
     });
   }, []);
 
+  const refreshEnabledModelCount = useCallback(() => {
+    void listModels().then((result) => {
+      setEnabledModelCount(result.models.filter((model) => model.enabled === true).length);
+    });
+  }, []);
+
   useEffect(() => {
     if (backend.state !== 'ready') return;
     refreshProviderCount();
-  }, [backend.state, refreshProviderCount]);
+    refreshEnabledModelCount();
+  }, [backend.state, refreshProviderCount, refreshEnabledModelCount]);
 
   const showFirstRun =
     overlayForced ||
@@ -485,22 +495,36 @@ export function App(): React.JSX.Element {
     backendError: backend.error,
     projectId,
     conversationId,
-    providerCount,
+    enabledModelCount,
   });
   const openRegisterModels = (): void => {
     setSkippedThisSession(false);
     setOverlayForced(true);
   };
 
-  // 首次加载：取项目，自动选第一个。空白界面对新用户没有任何指引价值
-  useEffect(() => {
-    if (!hasBackend()) return;
-    void listProjects().then((r) => {
-      setProjects(r.projects);
-      const first = r.projects[0];
+  const loadProjects = useCallback(async (): Promise<void> => {
+    try {
+      const listed = await listProjects();
+      if (listed.projects.length === 0) {
+        const { project } = await createProject('未命名项目');
+        setProjects([project]);
+        setProjectId(project.id);
+        setProjectLoadError(null);
+        return;
+      }
+      setProjects(listed.projects);
+      const first = listed.projects[0];
       if (first !== undefined) setProjectId(first.id);
-    });
+      setProjectLoadError(null);
+    } catch (err: unknown) {
+      setProjectLoadError(err instanceof Error ? err.message : String(err));
+    }
   }, []);
+
+  useEffect(() => {
+    if (backend.state !== 'ready') return;
+    void loadProjects();
+  }, [backend.state, loadProjects]);
 
   const reloadConversations = useCallback((pid: string) => {
     void listConversations(pid).then(async (r) => {
@@ -529,9 +553,14 @@ export function App(): React.JSX.Element {
   };
 
   const newProject = async (): Promise<void> => {
-    const { project } = await createProject('未命名项目');
-    setProjects((prev) => [project, ...prev]);
-    setProjectId(project.id);
+    try {
+      const { project } = await createProject('未命名项目');
+      setProjects((prev) => [project, ...prev]);
+      setProjectId(project.id);
+      setProjectLoadError(null);
+    } catch (err: unknown) {
+      setProjectLoadError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const onDecide = async (
@@ -711,6 +740,8 @@ export function App(): React.JSX.Element {
                 setFocusRef(ref);
                 if (projectId === null) return;
                 void (async () => {
+                  setExtractError(null);
+                  setExtractStatus(null);
                   try {
                     const extracted = await extractClaims(projectId, {
                       markdown: literatureMarkdown(ref),
@@ -729,25 +760,17 @@ export function App(): React.JSX.Element {
                       }
                     }
                     if (extracted.created.length === 0) {
-                      setAssistantOpen(true);
-                      void turn.send(
-                        withPaperContext(EXTRACT_CLAIMS_PROMPT, ref),
-                        routingOverride,
-                      );
+                      setExtractStatus('没有发现新的断言');
                     }
                     setView('claims');
-                  } catch {
-                    setAssistantOpen(true);
-                    void turn.send(
-                      withPaperContext(EXTRACT_CLAIMS_PROMPT, ref),
-                      routingOverride,
-                    );
+                  } catch (err: unknown) {
+                    setExtractError(err instanceof Error ? err.message : String(err));
                   }
                 })();
               }}
             />
           )}
-          {view === 'claims' && <ClaimsView projectId={projectId} />}
+          {view === 'claims' && <ClaimsView projectId={projectId} onGoToRefs={() => setView('refs')} />}
           {view === 'manuscripts' && <ManuscriptsView projectId={projectId} />}
 
           {view === 'artifacts' && <ArtifactsView projectId={projectId} />}
@@ -783,6 +806,24 @@ export function App(): React.JSX.Element {
       </div>
       {(view === 'refs' || view === 'claims' || view === 'manuscripts') && (
         <div className="app__dock">
+          {projectLoadError !== null && (
+            <p className="view__error" role="alert">
+              {projectLoadError}
+              <button type="button" className="btn btn--small" onClick={() => void loadProjects()}>
+                重试
+              </button>
+            </p>
+          )}
+          {extractError !== null && (
+            <p className="view__error" role="alert">
+              {extractError}
+            </p>
+          )}
+          {extractStatus !== null && (
+            <p className="panel__hint" role="status">
+              {extractStatus}
+            </p>
+          )}
           {focusRef !== null && (
             <div className="dock-paper">
               <p className="dock-paper__cite">当前文献：{focusRef.cite}</p>
@@ -830,10 +871,12 @@ export function App(): React.JSX.Element {
           setOverlayForced(false);
           setView('settings');
           refreshProviderCount();
+          refreshEnabledModelCount();
         }}
         onDone={() => {
           setOverlayForced(false);
           refreshProviderCount();
+          refreshEnabledModelCount();
         }}
       />
     )}

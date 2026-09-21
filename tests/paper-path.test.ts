@@ -110,3 +110,48 @@ describe('paper path IPC', () => {
     }
   });
 });
+
+describe('composer gates on enabled models', () => {
+  it('App counts enabled models and passes enabledModelCount to the composer gate', () => {
+    // Given: App.tsx source (composerBlockedReason input is a type contract)
+    // When / Then: gate on enabled models, not provider rows; first-run overlay stays on providers
+    expect(APP).toContain('enabledModelCount');
+    expect(APP).toContain('listModels');
+    expect(APP).toContain('enabled === true');
+    const gateCall = /composerBlockedReason\(\{[\s\S]*?\n  \}\);/.exec(APP);
+    expect(gateCall?.[0]).toContain('enabledModelCount');
+    expect(gateCall?.[0]).not.toContain('providerCount');
+    expect(APP).toContain('shouldShowFirstRun({ providerCount');
+  });
+});
+
+describe('project load survives a slow backend', () => {
+  it('does not call listProjects once on mount without waiting for backend ready', () => {
+    // Given: App.tsx source
+    // When / Then: empty-deps listProjects is the first-run dead end
+    expect(APP).not.toMatch(/void listProjects\(\)\.then\([\s\S]*?\}, \[\]\);/);
+    expect(APP).toContain('projectLoadError');
+    expect(APP).toContain('loadProjects');
+  });
+});
+
+describe('extract-claims never fails silently', () => {
+  it('does not swallow extract errors with a bare catch or silent send', () => {
+    // Given: App.tsx extract handler
+    // When / Then: failures are visible; zero claims is a status, not a chat prompt
+    expect(APP).not.toMatch(/catch \{/);
+    expect(APP).toContain('extractError');
+    expect(APP).toContain('err.message');
+    expect(APP).toContain('extractStatus');
+    expect(APP).not.toContain('EXTRACT_CLAIMS_PROMPT');
+    expect(APP).toContain('ref.doi !== null');
+  });
+});
+
+describe('ClaimsView pass-through', () => {
+  it('forwards onGoToRefs to ClaimsView', () => {
+    expect(APP).toContain(
+      "{view === 'claims' && <ClaimsView projectId={projectId} onGoToRefs={() => setView('refs')} />}",
+    );
+  });
+});
