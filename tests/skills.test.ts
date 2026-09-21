@@ -825,6 +825,18 @@ describe('SkillManager', () => {
     expect((await manager.search('第一个技能')).map((h) => h.slug)).not.toContain('alpha');
   });
 
+  it('禁用的技能不得注入 SKILL.md 正文', () => {
+    manager.setEnabled('alpha', false);
+    const injection = manager.inject('alpha');
+    expect(injection).toBeNull();
+  });
+
+  it('未探测不得当作依赖已满足', async () => {
+    manager.setEnabled('alpha', false);
+    const hits = await manager.search('第一个技能');
+    expect(hits.some((h) => h.slug === 'alpha' && h.requirementsSatisfied)).toBe(false);
+  });
+
   it('禁用状态在重扫后保留', () => {
     manager.setEnabled('alpha', false);
     manager.reload();

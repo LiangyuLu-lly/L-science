@@ -65,6 +65,8 @@ export class SkillManager {
   #catalog: SkillCatalog = { skills: new Map(), shadowed: [], broken: [], unavailable: [] };
   #index = new SkillSearchIndex([]);
   #requirements = new Map<string, RequirementReport>();
+  /** 用户启用的 slug。禁用的技能留在目录里供设置页列出，但不得被检索或注入。 */
+  #enabled = new Set<string>();
   /** 嵌入层是否已就绪。构建失败时保持 false 并只走词法层。 */
   #vectorsReady = false;
   #embedFailure: string | null = null;
@@ -118,6 +120,7 @@ export class SkillManager {
     // 只把用户启用的技能放进索引：禁用的技能被检索命中再告诉用户「它被你关了」
     // 毫无价值，而它会挤掉本该出现的候选
     const enabled = new Set(this.#repo.list().map((r) => r.slug));
+    this.#enabled = enabled;
     const active = skills.filter((s) => enabled.has(s.manifest.slug));
 
     this.#index = new SkillSearchIndex(active.map((s) => s.manifest));
@@ -257,7 +260,8 @@ export class SkillManager {
       return {
         ...hit,
         scope: skill?.scope ?? 'builtin',
-        requirementsSatisfied: report?.satisfied ?? true,
+        // 尚未探测是缺证据，闸门的意义就是缺证据时拒绝，不能默认已满足。
+        requirementsSatisfied: report?.satisfied === true,
         missingSummary: missing === '' ? null : missing,
         references: skill?.references ?? [],
       };
@@ -281,11 +285,14 @@ export class SkillManager {
   inject(slug: string): SkillInjection | null {
     const skill = this.#catalog.skills.get(slug);
     if (skill === null || skill === undefined) return null;
+    // 禁用的技能仍在目录里供列出，但不得当作可加载。
+    if (!this.#enabled.has(slug)) return null;
 
+    // 尚未探测是缺证据，闸门的意义就是缺证据时拒绝，不能默认已满足。
     const report = this.#requirements.get(slug) ?? {
-      satisfied: true,
+      satisfied: false,
       missing: [],
-      probeFailures: [],
+      probeFailures: ['依赖尚未探测，不能当作已满足'],
     };
     const missing = describeMissing(report);
 
