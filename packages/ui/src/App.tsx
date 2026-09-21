@@ -36,6 +36,7 @@ import {
   listProviders,
   bindClaim,
   extractClaims,
+  readRefFulltextText,
   TASK_LABEL,
   type Conversation,
   type GrantScope,
@@ -743,19 +744,34 @@ export function App(): React.JSX.Element {
                   setExtractError(null);
                   setExtractStatus(null);
                   try {
+                    let markdown = literatureMarkdown(ref);
+                    let sourceNote = '摘自题录与摘要（无全文）';
+                    try {
+                      const body = await readRefFulltextText(projectId, ref.id);
+                      if (body.kind === 'pdf' && body.text.trim() === '') {
+                        sourceNote = '摘自题录与摘要（扫描件无文本层）';
+                      } else if (body.text.trim() !== '') {
+                        markdown = body.text;
+                        sourceNote = '摘自全文';
+                      }
+                    } catch (err: unknown) {
+                      if (!(err instanceof Error)) throw err;
+                    }
                     const extracted = await extractClaims(projectId, {
-                      markdown: literatureMarkdown(ref),
+                      markdown,
                       ...(conversationId === null ? {} : { conversationId }),
                     });
                     for (const claim of extracted.created) {
                       await bindClaim(projectId, claim.id, {
                         evidenceKind: 'ref',
                         evidenceRef: ref.id,
+                        note: sourceNote,
                       });
                       if (ref.doi !== null) {
                         await bindClaim(projectId, claim.id, {
                           evidenceKind: 'doi',
                           evidenceRef: ref.doi,
+                          note: sourceNote,
                         });
                       }
                     }

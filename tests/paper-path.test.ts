@@ -220,6 +220,13 @@ describe('extract-claims never fails silently', () => {
     expect(APP).not.toContain('EXTRACT_CLAIMS_PROMPT');
     expect(APP).toContain('ref.doi !== null');
   });
+
+  it('feeds fulltext into extractClaims and stamps the source on every claim', () => {
+    expect(APP).toContain('readRefFulltextText');
+    expect(APP).toContain('摘自全文');
+    expect(APP).toContain('摘自题录与摘要（无全文）');
+    expect(APP).not.toContain('EXTRACT_CLAIMS_PROMPT');
+  });
 });
 
 describe('ClaimsView pass-through', () => {
