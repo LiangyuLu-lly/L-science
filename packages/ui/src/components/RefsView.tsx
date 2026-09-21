@@ -124,6 +124,7 @@ export function RefsView({
                     doi: item.doi,
                     cite: item.cite,
                     title: item.title,
+                    abstract: item.abstract,
                   });
                 }}
               >
@@ -145,6 +146,7 @@ export function RefsView({
                       doi: item.doi,
                       cite: item.cite,
                       title: item.title,
+                      abstract: item.abstract,
                     });
                   }}
                 >

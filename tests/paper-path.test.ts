@@ -17,6 +17,8 @@ describe('paper path navigation', () => {
     expect(APP).toContain("useState<ViewId>('refs')");
     expect(APP).toContain('PRIMARY_NAV');
     expect(APP).toContain('app__dock');
+    expect(APP).toContain('extractClaims');
+    expect(APP).toContain('bindClaim');
     expect(APP).toContain("label: '助手'");
     expect(APP).toContain('nav__group');
   });

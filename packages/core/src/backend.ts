@@ -3458,6 +3458,7 @@ async function main(): Promise<void> {
         type: r.type,
         cite: citeLine(r.csl),
         title: r.csl.title ?? null,
+        abstract: typeof r.csl.abstract === 'string' ? r.csl.abstract : null,
         year: r.year,
         container: r.container,
         firstAuthor: r.firstAuthor,

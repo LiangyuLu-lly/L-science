@@ -295,6 +295,7 @@ export interface RefListItem {
   doi: string | null;
   cite: string;
   title: string | null;
+  abstract: string | null;
   year: number | null;
   container: string | null;
   firstAuthor: string | null;
@@ -353,6 +354,34 @@ export interface ClaimListSummary {
   refuted: number;
   supported: number;
 }
+
+export const extractClaims = (
+  projectId: string,
+  input: { readonly markdown: string; readonly conversationId?: string },
+) =>
+  invoke<{
+    created: ReadonlyArray<{ id: string }>;
+    skippedExisting: number;
+    sentencesScanned: number;
+  }>({
+    method: 'claim.extract',
+    projectId,
+    markdown: input.markdown,
+    ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+  });
+
+export const bindClaim = (
+  projectId: string,
+  claimId: string,
+  evidence: { readonly evidenceKind: 'doi' | 'ref'; readonly evidenceRef: string },
+) =>
+  invoke<{ claim: ClaimListItem | null; advice: string | null }>({
+    method: 'claim.bind',
+    projectId,
+    claimId,
+    evidenceKind: evidence.evidenceKind,
+    evidenceRef: evidence.evidenceRef,
+  });
 
 export const listClaims = (projectId: string) =>
   invoke<{ claims: ClaimListItem[]; summary: ClaimListSummary }>({

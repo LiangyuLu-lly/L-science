@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EXTRACT_CLAIMS_PROMPT,
   formatPaperPrefix,
+  literatureMarkdown,
   withPaperContext,
 } from '../packages/ui/src/lib/paper-context.js';
 
@@ -28,5 +29,10 @@ describe('paper context', () => {
 
   it('extract prompt asks to bind doi', () => {
     expect(EXTRACT_CLAIMS_PROMPT).toContain('evidenceKind=doi');
+  });
+
+  it('literatureMarkdown includes title and DOI for claim.extract', () => {
+    expect(literatureMarkdown(ref)).toContain('10.1038/s41586-021-03819-2');
+    expect(literatureMarkdown(ref)).toContain('# Highly accurate protein structure prediction with AlphaFold');
   });
 });

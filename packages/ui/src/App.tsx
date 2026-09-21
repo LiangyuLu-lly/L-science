@@ -33,6 +33,8 @@ import {
   listConversations,
   listProjects,
   listProviders,
+  bindClaim,
+  extractClaims,
   TASK_LABEL,
   type Conversation,
   type GrantScope,
@@ -46,6 +48,7 @@ import { conversationStatusLabel } from './lib/conversation-status.js';
 import { shouldShowFirstRun } from './lib/first-run.js';
 import {
   EXTRACT_CLAIMS_PROMPT,
+  literatureMarkdown,
   withPaperContext,
   type PaperFocus,
 } from './lib/paper-context.js';
@@ -707,12 +710,41 @@ export function App(): React.JSX.Element {
               onSelect={setFocusRef}
               onExtractClaims={(ref) => {
                 setFocusRef(ref);
-                setAssistantOpen(true);
-                void turn.send(
-                  withPaperContext(EXTRACT_CLAIMS_PROMPT, ref),
-                  routingOverride,
-                );
-                if (Object.keys(routingOverride).length > 0) setRoutingOverride({});
+                if (projectId === null) return;
+                void (async () => {
+                  try {
+                    const extracted = await extractClaims(projectId, {
+                      markdown: literatureMarkdown(ref),
+                      ...(conversationId === null ? {} : { conversationId }),
+                    });
+                    for (const claim of extracted.created) {
+                      await bindClaim(projectId, claim.id, {
+                        evidenceKind: 'ref',
+                        evidenceRef: ref.id,
+                      });
+                      if (ref.doi !== null) {
+                        await bindClaim(projectId, claim.id, {
+                          evidenceKind: 'doi',
+                          evidenceRef: ref.doi,
+                        });
+                      }
+                    }
+                    if (extracted.created.length === 0) {
+                      setAssistantOpen(true);
+                      void turn.send(
+                        withPaperContext(EXTRACT_CLAIMS_PROMPT, ref),
+                        routingOverride,
+                      );
+                    }
+                    setView('claims');
+                  } catch {
+                    setAssistantOpen(true);
+                    void turn.send(
+                      withPaperContext(EXTRACT_CLAIMS_PROMPT, ref),
+                      routingOverride,
+                    );
+                  }
+                })();
               }}
             />
           )}

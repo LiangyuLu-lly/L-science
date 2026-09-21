@@ -8,6 +8,7 @@ export type PaperFocus = {
   readonly doi: string | null;
   readonly cite: string;
   readonly title: string | null;
+  readonly abstract?: string | null;
 };
 
 export const EXTRACT_CLAIMS_PROMPT =
@@ -25,4 +26,11 @@ export function formatPaperPrefix(ref: PaperFocus): string {
 export function withPaperContext(text: string, ref: PaperFocus | null): string {
   if (ref === null) return text;
   return `${formatPaperPrefix(ref)}${text}`;
+}
+
+export function literatureMarkdown(ref: PaperFocus & { readonly abstract?: string | null }): string {
+  const title = ref.title ?? ref.cite;
+  const doi = ref.doi === null ? '' : `DOI: ${ref.doi}`;
+  const abs = ref.abstract === undefined || ref.abstract === null || ref.abstract === '' ? '' : ref.abstract;
+  return [`# ${title}`, ref.cite, doi, '', abs].filter((line) => line !== '').join('\n');
 }
