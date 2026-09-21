@@ -7,11 +7,16 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   attachFulltext,
   deleteRef,
+  exportRefs,
   fetchRefFulltext as fetchFulltext,
   listRefAssets,
+  listRefDuplicates,
   listRefs,
+  mergeRefs,
   resolveRefs,
   type RefAssetView,
+  type RefDuplicatePair,
+  type RefExportFormat,
   type RefFetchAttemptView,
   type RefListItem,
 } from '../lib/api.js';
@@ -101,6 +106,11 @@ export function RefsView({
   const [lastResolvedId, setLastResolvedId] = useState<string | null>(null);
   const [assetsOpen, setAssetsOpen] = useState<string | null>(null);
   const [assetBundle, setAssetBundle] = useState<AssetBundle | null>(null);
+  const [dupPairs, setDupPairs] = useState<readonly RefDuplicatePair[] | null>(null);
+  const [dupMeta, setDupMeta] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState<RefExportFormat>('bibtex');
+  const [exportNote, setExportNote] = useState<string | null>(null);
+  const [toolBusy, setToolBusy] = useState(false);
 
   const reload = useCallback(() => {
     if (projectId === null) return;
@@ -267,6 +277,59 @@ export function RefsView({
     event.preventDefault();
   }
 
+  async function onScanDupes(): Promise<void> {
+    if (projectId === null) return;
+    setToolBusy(true);
+    try {
+      const result = await listRefDuplicates(projectId);
+      setDupPairs(result.pairs);
+      const extra = result.truncated ? '（结果已截断）' : '';
+      setDupMeta(`扫描 ${String(result.scanned)} / ${String(result.total)} 条${extra}`);
+      setError(null);
+    } catch (err: unknown) {
+      setError(errorText(err));
+    } finally {
+      setToolBusy(false);
+    }
+  }
+
+  async function onMerge(keepId: string, dropId: string): Promise<void> {
+    if (projectId === null) return;
+    setToolBusy(true);
+    try {
+      await mergeRefs(projectId, keepId, dropId);
+      setError(null);
+      const result = await listRefDuplicates(projectId);
+      setDupPairs(result.pairs);
+      reload();
+    } catch (err: unknown) {
+      setError(errorText(err));
+    } finally {
+      setToolBusy(false);
+    }
+  }
+
+  async function onExport(): Promise<void> {
+    if (projectId === null) return;
+    setToolBusy(true);
+    try {
+      const result = await exportRefs(projectId, { format: exportFormat });
+      const artifact =
+        result.artifactId === null ? '未落成制品' : `制品 ${result.artifactId}`;
+      const missing =
+        result.missingIds.length === 0 ? '' : `；缺 ${String(result.missingIds.length)} 个指定 id`;
+      const warnings = result.warningText.trim() === '' ? '' : `。${result.warningText}`;
+      setExportNote(
+        `已导出 ${String(result.entryCount)} 条为 ${result.filename}（${artifact}${missing}）。返回值含 content，界面不展开。${warnings}`,
+      );
+      setError(null);
+    } catch (err: unknown) {
+      setError(errorText(err));
+    } finally {
+      setToolBusy(false);
+    }
+  }
+
   if (projectId === null) {
     return <p className="panel__hint">先选择或新建一个项目。</p>;
   }
@@ -280,6 +343,66 @@ export function RefsView({
       <p className="panel__hint">
         {empty ? EMPTY_HINT : `贴 DOI 或拖入 PDF。共 ${String(total)} 条。`}
       </p>
+      <div className="view__toolbar">
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={busy || toolBusy}
+          onClick={() => void onScanDupes()}
+        >
+          查重
+        </button>
+        <label htmlFor="ref-export-format">导出格式</label>
+        <select
+          id="ref-export-format"
+          value={exportFormat}
+          disabled={busy || toolBusy}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === 'bibtex' || value === 'csl-json' || value === 'ris') {
+              setExportFormat(value);
+            }
+          }}
+        >
+          <option value="bibtex">BibTeX</option>
+          <option value="csl-json">CSL-JSON</option>
+          <option value="ris">RIS</option>
+        </select>
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={busy || toolBusy}
+          onClick={() => void onExport()}
+        >
+          导出
+        </button>
+      </div>
+      {exportNote !== null && <p className="panel__hint">{exportNote}</p>}
+      {dupMeta !== null && <p className="panel__hint">{dupMeta}</p>}
+      {dupPairs !== null && dupPairs.length === 0 && (
+        <p className="panel__hint">没有重复条目。</p>
+      )}
+      {dupPairs !== null && dupPairs.length > 0 && (
+        <ul className="ref-list">
+          {dupPairs.map((pair) => (
+            <li key={`${pair.keepId}-${pair.dropId}`} className="ref-card">
+              <span className="ref-card__title">
+                {pair.verdict === 'same' ? '同一篇' : '可能重复'} · {pair.keepCite}
+              </span>
+              <span className="ref-card__meta">{pair.dropCite}</span>
+              <p className="panel__hint">{pair.reason}</p>
+              <button
+                type="button"
+                className="btn btn--small"
+                disabled={toolBusy}
+                onClick={() => void onMerge(pair.keepId, pair.dropId)}
+              >
+                合并到这一条
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <form
         className="refs-resolve"
         onSubmit={(event) => void onResolve(event)}

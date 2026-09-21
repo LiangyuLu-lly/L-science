@@ -23,3 +23,11 @@ describe('refs view fulltext and delete', () => {
     expect(VIEW).toMatch(/onDrop|type="file"/);
   });
 });
+
+describe('refs view duplicates and export', () => {
+  it('wires duplicate scan, merge, and export', () => {
+    expect(VIEW).toContain('listRefDuplicates');
+    expect(VIEW).toContain('mergeRefs');
+    expect(VIEW).toContain('exportRefs');
+  });
+});
