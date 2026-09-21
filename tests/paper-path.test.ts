@@ -116,12 +116,11 @@ describe('compile output is not a submission file', () => {
   it('README states compile yields markdown and a report, not a submission file', () => {
     const zh = readFileSync('README.md', 'utf8');
     const en = readFileSync('README.en.md', 'utf8');
-    expect(zh).toContain(
-      '编译产出 Markdown 与检查报告，不是投稿文件（导出的可复现 zip 在制品里）',
-    );
-    expect(en).toContain(
-      'Compile produces Markdown and a check report, not a submission file (the reproducibility zip is in Artifacts)',
-    );
+    // 两边都要说清产出形态，并把「可投稿成品」明确列进不做项
+    expect(zh).toContain('编译产出 Markdown 与检查报告，在制品里查看');
+    expect(zh).toContain('编译出可投稿的 PDF / Word');
+    expect(en).toContain('compile produces Markdown and a check report');
+    expect(en).toContain('Compile a journal PDF or Word file');
   });
 });
 
