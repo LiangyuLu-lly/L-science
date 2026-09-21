@@ -18,10 +18,13 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   checkProviderHealth,
   deleteCredential,
+  forgetApprovalDenial,
+  listApprovalHistory,
   listCredentials,
   listGrants,
   listModels,
   listCompatPresets,
+  listProjects,
   listProviders,
   registerCompatProvider,
   revokeGrant,
@@ -31,6 +34,7 @@ import {
   setProviderEnabled,
   syncProvider,
   STRENGTH_LABEL,
+  type ApprovalHistoryEntry,
   type CredentialFingerprint,
   type DomainGrantView,
   type GrantMode,
@@ -295,6 +299,188 @@ function GrantsSection(): React.JSX.Element {
                     }}
                   >
                     撤销
+                  </button>
+                )}
+              </dd>
+            </>
+          )}
+        </dl>
+      ))}
+    </section>
+  );
+}
+
+const APPROVAL_KIND_LABEL = {
+  'artifact-delete': '删除制品',
+  'host-access': '访问沙箱外的路径',
+  'compute-target': '登记算力目标',
+  'ssh-command': '在远程主机执行命令',
+  'compute-job': '提交算力作业',
+  'compute-provider': '使用算力凭据',
+  'domain-allowlist': '新增域名白名单',
+  'skill-write': '写入技能',
+  'package-install': '安装或卸载依赖包',
+} as const satisfies Record<ApprovalHistoryEntry['kind'], string>;
+
+const APPROVAL_STATE_LABEL = {
+  pending: '待决议',
+  approved: '批准',
+  denied: '拒绝',
+  timeout: '超时',
+  abandoned: '已放弃',
+} as const satisfies Record<ApprovalHistoryEntry['state'], string>;
+
+const APPROVAL_DECIDER_LABEL = {
+  pending: '尚未决定',
+  approved: '用户',
+  denied: '用户',
+  timeout: '系统（超时）',
+  abandoned: '系统（进程重启后放弃）',
+} as const satisfies Record<ApprovalHistoryEntry['state'], string>;
+
+function ApprovalsSection(): React.JSX.Element {
+  const [entries, setEntries] = useState<readonly ApprovalHistoryEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingForgetId, setPendingForgetId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reloadApprovals = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    void listProjects()
+      .then(async (listed) => {
+        const batches = await Promise.all(
+          listed.projects.map((project) => listApprovalHistory(project.id)),
+        );
+        setEntries(
+          batches
+            .flatMap((batch) => batch.approvals)
+            .sort((a, b) => b.requestedAt - a.requestedAt),
+        );
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        setError(errorText(err));
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, []);
+
+  useEffect(reloadApprovals, [reloadApprovals]);
+
+  const empty = !loading && error === null && entries.length === 0;
+
+  const confirmForget = async (approvalId: string): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      await forgetApprovalDenial(approvalId);
+      setPendingForgetId(null);
+      reloadApprovals();
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel" aria-labelledby="approvals-heading">
+      <h2 id="approvals-heading" className="panel__title">
+        审批
+      </h2>
+      <div className="view__toolbar">
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={loading || busy}
+          onClick={reloadApprovals}
+        >
+          刷新
+        </button>
+      </div>
+      {loading && (
+        <p className="panel__hint" role="status">
+          正在读取审批…
+        </p>
+      )}
+      {error !== null && (
+        <p className="panel__error" role="alert">
+          {error}
+        </p>
+      )}
+      {empty && (
+        <p className="panel__hint">
+          敏感操作被批准或拒绝后会出现在这里，仍被记住的拒绝也可以在此忘记。
+        </p>
+      )}
+      {entries.map((entry) => (
+        <dl key={entry.id} className="kv">
+          <dt>类型</dt>
+          <dd>{APPROVAL_KIND_LABEL[entry.kind]}</dd>
+          <dt>请求</dt>
+          <dd>{entry.title}</dd>
+          {entry.detail !== '' && (
+            <>
+              <dt>详情</dt>
+              <dd>{entry.detail}</dd>
+            </>
+          )}
+          {entry.impact !== '' && (
+            <>
+              <dt>影响</dt>
+              <dd>{entry.impact}</dd>
+            </>
+          )}
+          <dt>决定</dt>
+          <dd>{APPROVAL_STATE_LABEL[entry.state]}</dd>
+          <dt>决定方</dt>
+          <dd>{APPROVAL_DECIDER_LABEL[entry.state]}</dd>
+          <dt>请求时间</dt>
+          <dd>{formatGrantTime(entry.requestedAt)}</dd>
+          {entry.decidedAt !== null && (
+            <>
+              <dt>决定时间</dt>
+              <dd>{formatGrantTime(entry.decidedAt)}</dd>
+            </>
+          )}
+          {entry.note !== null && entry.note !== '' && (
+            <>
+              <dt>备注</dt>
+              <dd>{entry.note}</dd>
+            </>
+          )}
+          {entry.state === 'denied' && (
+            <>
+              <dt>拒绝记忆</dt>
+              <dd>{entry.stillDenied ? '仍在拦截' : '已不再拦截'}</dd>
+            </>
+          )}
+          {entry.state === 'denied' && entry.stillDenied && (
+            <>
+              <dt>操作</dt>
+              <dd>
+                {pendingForgetId === entry.id ? (
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    disabled={busy}
+                    onClick={() => void confirmForget(entry.id)}
+                  >
+                    确认忘记
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    disabled={busy}
+                    onClick={() => {
+                      setPendingForgetId(entry.id);
+                    }}
+                  >
+                    忘记这条拒绝
                   </button>
                 )}
               </dd>
@@ -1007,6 +1193,8 @@ export function SettingsView({ onRegisterModels }: { onRegisterModels: () => voi
       </div>
 
       <GrantsSection />
+
+      <ApprovalsSection />
 
       <CredentialSection
         available={vaultAvailable}
