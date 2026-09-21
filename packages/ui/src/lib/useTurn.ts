@@ -15,6 +15,7 @@ import { subscribeEvents } from './backend.js';
 import {
   interruptConversation,
   isTurnEvent,
+  listPendingApprovals,
   loadHistory,
   sendMessage,
   type ApprovalRequest,
@@ -26,6 +27,16 @@ import {
   type Usage,
   type UserQuestion,
 } from './api.js';
+
+const APPROVAL_RESTORE_ERROR = '未能恢复未决审批列表，可能需要重新加载。';
+
+function alreadyShown(
+  approvals: readonly ApprovalRequest[],
+  id: string,
+  dismissed: ReadonlySet<string>,
+): boolean {
+  return dismissed.has(id) || approvals.some((a) => a.id === id);
+}
 
 /** 渲染用的一条消息。与落库的 StoredMessage 不同：它包含正在流入的增量。 */
 export interface ChatItem {
@@ -60,6 +71,8 @@ export interface TurnState {
   running: boolean;
   lastUsage: Usage | null;
   error: string | null;
+  /** 未决审批恢复失败。非空时界面提示，不挡住其余功能。 */
+  approvalRestoreError: string | null;
 }
 
 const EMPTY: TurnState = {
@@ -71,6 +84,7 @@ const EMPTY: TurnState = {
   running: false,
   lastUsage: null,
   error: null,
+  approvalRestoreError: null,
 };
 
 /** 从落库消息还原渲染结构。 */
@@ -112,6 +126,8 @@ export interface UseTurn extends TurnState {
   dismissApproval: (approvalId: string) => void;
   dismissQuestion: (questionId: string) => void;
   reload: () => Promise<void>;
+  /** 控制平面就绪后把后端仍在等待的审批补进同一份 approvals。 */
+  restorePendingApprovals: (projectId?: string) => Promise<void>;
 }
 
 export function useTurn(conversationId: string | null): UseTurn {
@@ -138,6 +154,7 @@ export function useTurn(conversationId: string | null): UseTurn {
   const frame = useRef<number | null>(null);
   const fallback = useRef<number | null>(null);
   const disposed = useRef(false);
+  const dismissedApprovalIds = useRef(new Set<string>());
 
   const clearScheduled = useCallback(() => {
     if (frame.current !== null) {
@@ -195,8 +212,37 @@ export function useTurn(conversationId: string | null): UseTurn {
       running: false,
       lastUsage: null,
       error: null,
+      approvalRestoreError: null,
     }),
     [],
+  );
+
+  const restorePendingApprovals = useCallback(
+    async (projectId?: string) => {
+      if (conversationId === null) return;
+      try {
+        const listed =
+          projectId === undefined ? await listPendingApprovals() : await listPendingApprovals(projectId);
+        if (disposed.current) return;
+        const dismissed = dismissedApprovalIds.current;
+        for (const entry of listed.pending) {
+          const request = entry.request;
+          if (alreadyShown(pending.current.approvals, request.id, dismissed)) continue;
+          pending.current.approvals.push(request);
+        }
+        pending.current.approvalRestoreError = null;
+        schedule();
+      } catch (err: unknown) {
+        if (disposed.current) {
+          if (!(err instanceof Error)) throw err;
+          return;
+        }
+        pending.current.approvalRestoreError = APPROVAL_RESTORE_ERROR;
+        schedule();
+        if (!(err instanceof Error)) throw err;
+      }
+    },
+    [conversationId, schedule],
   );
 
   const reload = useCallback(async () => {
@@ -218,7 +264,8 @@ export function useTurn(conversationId: string | null): UseTurn {
       pending.current.error = err instanceof Error ? err.message : String(err);
       schedule();
     }
-  }, [conversationId, schedule, freshState]);
+    await restorePendingApprovals();
+  }, [conversationId, schedule, freshState, restorePendingApprovals]);
 
   /** 处理一个回合事件。全部改动落在 pending 上，由 rAF 合并刷新。 */
   const apply = useCallback(
@@ -288,6 +335,7 @@ export function useTurn(conversationId: string | null): UseTurn {
         }
 
         case 'approval.request': {
+          if (alreadyShown(next.approvals, event.approval.id, dismissedApprovalIds.current)) break;
           next.approvals.push(event.approval);
           break;
         }
@@ -369,6 +417,7 @@ export function useTurn(conversationId: string | null): UseTurn {
 
   const dismissApproval = useCallback(
     (approvalId: string) => {
+      dismissedApprovalIds.current.add(approvalId);
       pending.current.approvals = pending.current.approvals.filter((a) => a.id !== approvalId);
       schedule();
     },
@@ -383,5 +432,5 @@ export function useTurn(conversationId: string | null): UseTurn {
     [schedule],
   );
 
-  return { ...state, send, interrupt, dismissApproval, dismissQuestion, reload };
+  return { ...state, send, interrupt, dismissApproval, dismissQuestion, reload, restorePendingApprovals };
 }

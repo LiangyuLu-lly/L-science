@@ -546,6 +546,11 @@ export function App(): React.JSX.Element {
     if (projectId !== null) reloadConversations(projectId);
   }, [projectId, reloadConversations]);
 
+  useEffect(() => {
+    if (backend.state !== 'ready' || conversationId === null) return;
+    void turn.restorePendingApprovals(projectId === null ? undefined : projectId);
+  }, [backend.state, conversationId, projectId, turn.restorePendingApprovals]);
+
   const newConversation = async (): Promise<void> => {
     if (projectId === null) return;
     const { conversation } = await createConversation(projectId);
@@ -679,6 +684,11 @@ export function App(): React.JSX.Element {
         {/* tabIndex={-1} 让它可以成为编程焦点目标，但不进 Tab 顺序 */}
         <main className="app__main" ref={mainRef} tabIndex={-1}>
           {/* 审批与提问置顶：它们阻塞流程，埋在下面用户看不到 */}
+          {turn.approvalRestoreError !== null && (
+            <p className="panel__error" role="alert">
+              未能恢复未决审批列表，可能需要重新加载。
+            </p>
+          )}
           {turn.approvals.map((approval) => (
             <ApprovalCard
               key={approval.id}
