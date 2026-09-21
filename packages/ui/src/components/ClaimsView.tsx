@@ -218,6 +218,11 @@ export function ClaimsView({
                     <p className="ledger__evidence">
                       {evidenceLine(detail, item.unsupported)}
                     </p>
+                    {detail?.evidence.some((ev) => ev.note !== null && ev.note !== '') === true && (
+                      <p className="panel__hint">
+                        {detail.evidence.find((ev) => ev.note !== null && ev.note !== '')?.note}
+                      </p>
+                    )}
                   </button>
                   <div className="ledger__actions">
                     <button
@@ -309,6 +314,9 @@ export function ClaimsView({
                   <li key={`${ev.kind}:${ev.ref}`} className="ledger__evidence-item">
                     <code>{formatEvidence(ev)}</code>
                     {ev.locator !== null && <span className="panel__hint">{ev.locator}</span>}
+                    {ev.note !== null && ev.note !== '' && (
+                      <p className="panel__hint">{ev.note}</p>
+                    )}
                     {ev.quote !== null && <p className="ledger__quote">{ev.quote}</p>}
                   </li>
                 ))}

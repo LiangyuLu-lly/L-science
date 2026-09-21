@@ -31,4 +31,9 @@ describe('claims ledger view', () => {
     expect(VIEW).not.toContain('window.alert');
     expect(VIEW).toMatch(/className="ledger/);
   });
+
+  it('renders the evidence note so the source stamp is readable', () => {
+    expect(VIEW).toContain('ev.note');
+    expect(VIEW).toMatch(/ev\.note !== null/);
+  });
 });
