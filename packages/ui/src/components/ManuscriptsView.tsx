@@ -8,8 +8,10 @@ import {
   compileManuscript,
   getManuscript,
   listClaims,
+  listManuscriptProfiles,
   listManuscripts,
   type ClaimListSummary,
+  type JournalProfileView,
   type ManuscriptCompileOutput,
   type ManuscriptListItem,
 } from '../lib/api.js';
@@ -44,6 +46,9 @@ export function ManuscriptsView({
   const [markdown, setMarkdown] = useState(BLANK_DRAFT);
   const [outputs, setOutputs] = useState<readonly ManuscriptCompileOutput[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [profiles, setProfiles] = useState<readonly JournalProfileView[]>([]);
+  const [disclaimer, setDisclaimer] = useState<string | null>(null);
+  const [targetJournal, setTargetJournal] = useState('');
 
   const reload = useCallback(() => {
     if (projectId === null) return;
@@ -61,6 +66,17 @@ export function ManuscriptsView({
   useEffect(() => {
     reload();
   }, [reload]);
+
+  useEffect(() => {
+    void listManuscriptProfiles()
+      .then((result) => {
+        setProfiles(result.profiles);
+        setDisclaimer(result.disclaimer);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  }, []);
 
   if (projectId === null) {
     return <p className="panel__hint">先选择或新建一个项目。</p>;
@@ -92,6 +108,7 @@ export function ManuscriptsView({
         markdown,
         ...(openId === null ? {} : { manuscriptId: openId }),
         ...(conversationId === null ? {} : { conversationId }),
+        ...(targetJournal === '' ? {} : { targetJournal }),
         both: true,
       });
       setOpenId(result.manuscript.id);
@@ -137,7 +154,24 @@ export function ManuscriptsView({
           setMarkdown(event.target.value);
         }}
       />
+      {disclaimer !== null && <p className="panel__hint">{disclaimer}</p>}
       <div className="view__toolbar">
+        <label htmlFor="manuscript-journal">期刊档案</label>
+        <select
+          id="manuscript-journal"
+          value={targetJournal}
+          disabled={busy}
+          onChange={(event) => {
+            setTargetJournal(event.target.value);
+          }}
+        >
+          <option value="">按 front matter 里的 journal</option>
+          {profiles.map((profile) => (
+            <option key={profile.id} value={profile.name}>
+              {profile.name}
+            </option>
+          ))}
+        </select>
         <button type="button" className="btn" disabled={busy} onClick={() => void onCompile()}>
           {busy ? '编译中…' : '编译'}
         </button>

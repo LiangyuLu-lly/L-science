@@ -82,6 +82,18 @@ describe('paper path navigation', () => {
     expect(api).toMatch(/export const compileManuscript = \([\s\S]*conversationId\?:/);
     expect(api).toMatch(/method: 'manuscript.compile'[\s\S]*conversationId/);
   });
+
+  it('manuscripts view lists journal profiles and renders the disclaimer', () => {
+    const ms = readFileSync(
+      join('packages', 'ui', 'src', 'components', 'ManuscriptsView.tsx'),
+      'utf8',
+    );
+    expect(ms).toContain('listManuscriptProfiles');
+    expect(ms).toContain('<select');
+    expect(ms).toContain('按 front matter 里的 journal');
+    expect(ms).toContain('{disclaimer}');
+    expect(ms).toContain('targetJournal');
+  });
 });
 
 describe('paper path IPC', () => {
