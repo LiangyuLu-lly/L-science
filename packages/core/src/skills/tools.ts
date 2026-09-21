@@ -195,6 +195,28 @@ export function createLoadSkillReferenceTool(
     },
 
     async execute(input, ctx): Promise<ToolResult> {
+      const injection = options.manager.inject(input.slug);
+      if (injection === null) {
+        return {
+          ok: false,
+          output: errorOutput(
+            'SkillUnavailable',
+            `技能不存在或已禁用：${input.slug}。不能跑的技能没有参考文件可加载。`,
+          ),
+        };
+      }
+      if (injection.blocked) {
+        const missingLine =
+          injection.missing.length === 0 ? '' : `缺少：${injection.missing.join('、')}。`;
+        return {
+          ok: false,
+          output: errorOutput(
+            'SkillRequirementsUnsatisfied',
+            `技能 ${input.slug} 在本机不能运行。${missingLine}不能跑的技能没有参考文件可加载。`,
+          ),
+        };
+      }
+
       const result = options.manager.readReference(input.slug, input.name);
       if (!result.ok) {
         return {

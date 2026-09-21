@@ -24,6 +24,7 @@ import {
   checkRequirements,
   countBuiltinSkills,
   cosineSimilarity,
+  createLoadSkillReferenceTool,
   describeMissing,
   installBuiltinSkills,
   isValidSlug,
@@ -33,6 +34,7 @@ import {
   tokenize,
   type RequirementProbes,
   type SkillManifest,
+  type ToolContext,
 } from '@l-science/core';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -875,6 +877,64 @@ describe('SkillManager', () => {
     expect(injection?.requirements.satisfied).toBe(false);
     expect(injection?.blocked).toBe(true);
     expect(injection?.missing).toContain('nonexistent-pkg');
+  });
+
+  it('依赖未满足时 load_skill_reference 拒绝返回文件内容', async () => {
+    const dir = writeSkill(
+      builtinDir,
+      'red-ref',
+      { requires: { python: ['nonexistent-pkg'] } },
+      '正文 colabfold_batch',
+    );
+    mkdirSync(join(dir, 'references'), { recursive: true });
+    writeFileSync(join(dir, 'references', 'table.md'), '不该被读到的参考', 'utf8');
+    const m = new SkillManager({
+      builtinDir,
+      userDir,
+      db: store.db,
+      probes: {
+        ...allPresent,
+        python: (n) => ({ present: new Map(n.map((x) => [x, false])), failure: null }),
+      },
+    });
+    m.reload();
+
+    const tool = createLoadSkillReferenceTool({ manager: m });
+    const ctx: ToolContext = { projectId: 'p', conversationId: 'c', workspaceDir: root };
+    const result = await tool.execute({ slug: 'red-ref', name: 'table.md' }, ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.output.kind).toBe('error');
+    if (result.output.kind !== 'error') return;
+    expect(result.output.evalue).not.toContain('不该被读到的参考');
+    expect(result.output.evalue).toContain('不能跑');
+    expect(result.output.evalue).toContain('nonexistent-pkg');
+  });
+
+  it('未知或禁用的技能 load_skill_reference 同样拒绝', async () => {
+    const dir = writeSkill(builtinDir, 'gated-ref');
+    mkdirSync(join(dir, 'references'), { recursive: true });
+    writeFileSync(join(dir, 'references', 'table.md'), '不该被读到的参考', 'utf8');
+    manager.reload();
+    manager.setEnabled('gated-ref', false);
+
+    const tool = createLoadSkillReferenceTool({ manager });
+    const ctx: ToolContext = { projectId: 'p', conversationId: 'c', workspaceDir: root };
+
+    const disabled = await tool.execute({ slug: 'gated-ref', name: 'table.md' }, ctx);
+    expect(disabled.ok).toBe(false);
+    expect(disabled.output.kind).toBe('error');
+    if (disabled.output.kind === 'error') {
+      expect(disabled.output.evalue).not.toContain('不该被读到的参考');
+      expect(disabled.output.evalue).toContain('不能跑');
+    }
+
+    const unknown = await tool.execute({ slug: 'no-such-skill', name: 'table.md' }, ctx);
+    expect(unknown.ok).toBe(false);
+    expect(unknown.output.kind).toBe('error');
+    if (unknown.output.kind === 'error') {
+      expect(unknown.output.evalue).not.toContain('不该被读到的参考');
+    }
   });
 
   it('参考材料按需读取，且不能越出 references 目录', () => {
