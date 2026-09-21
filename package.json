@@ -26,7 +26,7 @@
     "verify:skills": "npm run build && node scripts/verify-skills.mjs",
     "verify:connectors": "npm run build && node scripts/verify-connectors.mjs",
     "credential": "node scripts/credential.mjs",
-    "build": "tsc --build",
+    "build": "node scripts/build.mjs",
     "build:clean": "tsc --build --clean",
     "build:ui": "npm run build --workspace @l-science/ui",
     "dev:ui": "npm run dev --workspace @l-science/ui",
