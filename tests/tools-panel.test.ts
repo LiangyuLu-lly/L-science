@@ -48,11 +48,17 @@ describe('ToolsPanel python-kernel gap', () => {
       remediations: unavailable.flatMap((tool) => tool.missing.map((m) => m.remediation)),
     });
 
-    // Then: python-kernel 领头；一条都不藏；第一句人话是「还没有 lsci」并带 conda create
+    // Then: python-kernel 领头；一条都不藏；先指向一键安装，conda 只作兜底
     expect(ranked.map((tool) => tool.name)).toEqual(['python', 'bash', 'r']);
     expect(ranked).toHaveLength(unavailable.length);
     expect(banner).toMatch(/^还没有 lsci/u);
+    expect(banner).toContain('点『一键安装 Python / R 内核』；装不上时再用手动命令');
     expect(banner).toContain('conda create -n lsci python=3.13');
+    const ctaAt = banner!.indexOf('一键安装 Python / R 内核');
+    const condaAt = banner!.indexOf('conda create');
+    expect(ctaAt).toBeGreaterThan(-1);
+    expect(condaAt).toBeGreaterThan(-1);
+    expect(ctaAt).toBeLessThan(condaAt);
   });
 
   it('ToolsPanel ranks unavailable tools and does not hide them', () => {

@@ -88,4 +88,19 @@ describe('FirstRunOverlay source', () => {
     expect(section).toContain('一键安装 Python / R 内核');
     expect(section).toContain('bootstrapKernels');
   });
+
+  it('EnvDoctorSection names one-click install before conda fallback', () => {
+    const section = SRC.slice(
+      SRC.indexOf('export function EnvDoctorSection'),
+      SRC.indexOf('export function FirstRunOverlay'),
+    );
+    const cta = '点『一键安装 Python / R 内核』；装不上时再用手动命令';
+    expect(section).toContain(cta);
+    const ctaAt = section.indexOf(cta);
+    const condaAt = section.indexOf('conda create');
+    expect(ctaAt).toBeGreaterThan(-1);
+    expect(condaAt).toBeGreaterThan(-1);
+    expect(ctaAt).toBeLessThan(condaAt);
+    expect(section).toContain('<summary>手动命令</summary>');
+  });
 });

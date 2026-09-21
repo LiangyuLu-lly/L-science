@@ -131,7 +131,7 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
           : boot.running
             ? `正在安装内核（Python ${boot.python} / R ${boot.r}），可先去贴密钥。`
             : boot.error !== null
-              ? `环境未装完：${boot.error}`
+              ? `环境未装完：${boot.error}。点『一键安装 Python / R 内核』；装不上时再用手动命令`
               : '计算环境已就绪。'}
       </p>
       <button
@@ -151,6 +151,7 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
       >
         一键安装 Python / R 内核
       </button>
+      <p className="panel__hint">点『一键安装 Python / R 内核』；装不上时再用手动命令</p>
       {boot !== null && boot.log.length > 0 && (
         <pre className="tools__remediation">
           <code>{boot.log.slice(-8).join('\n')}</code>
@@ -158,6 +159,7 @@ export function EnvDoctorSection({ compact = false }: { compact?: boolean }): Re
       )}
       <details>
         <summary>手动命令</summary>
+        <p className="panel__hint">装不上时再用：</p>
         <pre className="tools__remediation">
           <code>conda create -n lsci python=3.13</code>
         </pre>

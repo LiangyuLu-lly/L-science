@@ -9,6 +9,9 @@ export const PYTHON_KERNEL_CAPABILITY = 'kernel:python' as const;
 
 export const PYTHON_KERNEL_GAP_COPY = '还没有 lsci' as const;
 
+export const PYTHON_KERNEL_ONE_CLICK =
+  '点『一键安装 Python / R 内核』；装不上时再用手动命令' as const;
+
 export const LSCI_CONDA_CREATE = 'conda create -n lsci python=3.13' as const;
 
 export type UnavailableCapabilityGap = {
@@ -49,5 +52,5 @@ export function pythonKernelGapBanner(input: PythonKernelGapBannerInput): string
     ) ?? false;
   if (lsci === undefined && !fromRemediation) return null;
   const command = lsci !== undefined && lsci.command !== '' ? lsci.command : LSCI_CONDA_CREATE;
-  return `${PYTHON_KERNEL_GAP_COPY}\n${command}`;
+  return `${PYTHON_KERNEL_GAP_COPY}。${PYTHON_KERNEL_ONE_CLICK}\n${command}`;
 }

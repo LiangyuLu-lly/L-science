@@ -26,7 +26,7 @@ const KOFFI_BLOCKER = {
 const LSCI_BLOCKER = {
   id: 'lsci',
   what: '托管环境 lsci / ipykernel 缺失',
-  consequence: '无法启动 Python 内核',
+  consequence: '无法启动 Python 内核。点『一键安装 Python / R 内核』；装不上时再用手动命令',
   command: 'conda create -n lsci python=3.13',
 } as const satisfies EnvDoctorBlocker;
 
