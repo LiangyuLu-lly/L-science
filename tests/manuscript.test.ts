@@ -1014,6 +1014,15 @@ describe('编译服务', () => {
     expect(artifacts.listArtifacts().length).toBe(before);
   });
 
+  it('界面贴进来的 markdown 存成源稿，重开能读回', async () => {
+    const c = compiler();
+    const outcome = await c.compile({ markdown: FULL_MANUSCRIPT });
+    const id = outcome.manuscript?.id ?? '';
+    // 没有这一步，手稿记录里的 sourceVersionId 是空的，UI 重开时正文就是空的
+    expect(outcome.manuscript?.sourceVersionId).not.toBeNull();
+    expect(c.readSourceText(id)).toContain('Sleep spindles predict overnight memory consolidation');
+  });
+
   it('趋势按时间正序返回，用于判断收敛还是发散', async () => {
     const c = compiler();
     const first = await c.compile({ markdown: '## A\n\nCited [99] here.\n' });

@@ -80,6 +80,11 @@ export class ManuscriptCompiler {
     this.#log = deps.onLog ?? ((): void => undefined);
   }
 
+  /** 读已有手稿的源 Markdown。没有源版本时返回 null。 */
+  readSourceText(manuscriptId: string): string | null {
+    return this.#readSource({ manuscriptId }).text;
+  }
+
   /** 只解析不编译。用于让用户先看元数据解析对不对。 */
   parse(input: { markdown?: string; sourceVersionId?: string }): {
     ok: boolean;
@@ -103,6 +108,23 @@ export class ManuscriptCompiler {
     const source = this.#readSource(request);
     if (source.text === null) {
       return { ok: false, manuscript: null, outputs: [], reason: source.reason };
+    }
+
+    /*
+     * 界面直接贴进来的 Markdown 没有制品版本。不把它存下来的话，重开手稿时
+     * `sourceVersionId` 是空的，正文就没了——而「回来接着写上次那段」是编辑器
+     * 最基本的承诺。按需求 6.2「更新即新版本」，每次编译存一版源稿。
+     */
+    let sourceArtifactId = source.artifactId;
+    let sourceVersionId = source.versionId;
+    if (sourceVersionId === null) {
+      const savedSource = this.#artifacts.save({
+        filename: 'manuscript-source.md',
+        content: Buffer.from(source.text, 'utf8'),
+        mime: 'text/markdown',
+      });
+      sourceArtifactId = savedSource.artifact.id;
+      sourceVersionId = savedSource.version.id;
     }
 
     let doc: ManuscriptDocument;
@@ -157,8 +179,8 @@ export class ManuscriptCompiler {
         title: doc.meta.title,
         targetJournal: target,
         ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
-        sourceArtifactId: source.artifactId,
-        sourceVersionId: source.versionId,
+        sourceArtifactId,
+        sourceVersionId,
         profileId: profile.id,
         ...(profile.id === 'custom' ? { profile } : {}),
       });
@@ -166,8 +188,8 @@ export class ManuscriptCompiler {
       this.repo.update(manuscript.id, {
         title: doc.meta.title,
         targetJournal: target,
-        sourceArtifactId: source.artifactId,
-        sourceVersionId: source.versionId,
+        sourceArtifactId,
+        sourceVersionId,
         profileId: profile.id,
         ...(profile.id === 'custom' ? { profile } : {}),
       });
@@ -230,7 +252,7 @@ export class ManuscriptCompiler {
         filename,
         content: Buffer.from(result.content, 'utf8'),
         mime: 'text/markdown',
-        ...(source.versionId === null ? {} : { inputVersionIds: [source.versionId] }),
+        inputVersionIds: [sourceVersionId],
       });
 
       let bibArtifactId: string | null = null;
@@ -255,7 +277,7 @@ export class ManuscriptCompiler {
 
       this.repo.addCompileRun({
         manuscriptId: manuscript.id,
-        sourceVersionId: source.versionId,
+        sourceVersionId,
         profileId: profile.id,
         blinded,
         artifactId: saved.artifact.id,

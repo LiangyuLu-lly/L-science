@@ -62,6 +62,10 @@ describe('paper path navigation', () => {
     expect(ms).toContain('listClaims');
     expect(ms).toContain('不能标为可投稿');
     expect(ms).toContain('getManuscript');
+    // 手稿页必须是可写的编辑器，不只是编译报告查看器
+    expect(ms).toContain('compileManuscript');
+    expect(ms).toContain('manuscript-source');
+    expect(ms).toContain('sourceMarkdown');
   });
 });
 

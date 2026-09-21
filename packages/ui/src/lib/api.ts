@@ -413,8 +413,35 @@ export type ManuscriptCompileRun = {
 export const getManuscript = (projectId: string, manuscriptId: string) =>
   invoke<{
     manuscript: ManuscriptListItem & { sourceVersionId: string | null };
+    sourceMarkdown: string | null;
     runs: readonly ManuscriptCompileRun[];
   }>({ method: 'manuscript.get', projectId, manuscriptId });
+
+export type ManuscriptCompileOutput = {
+  readonly blinded: boolean;
+  readonly filename: string;
+  readonly report: string;
+  readonly issues: readonly { severity: string; message: string; line: number | null }[];
+};
+
+export const compileManuscript = (
+  projectId: string,
+  input: {
+    readonly markdown: string;
+    readonly manuscriptId?: string;
+    readonly both?: boolean;
+  },
+) =>
+  invoke<{
+    manuscript: ManuscriptListItem;
+    outputs: readonly ManuscriptCompileOutput[];
+  }>({
+    method: 'manuscript.compile',
+    projectId,
+    markdown: input.markdown,
+    both: input.both ?? true,
+    ...(input.manuscriptId === undefined ? {} : { manuscriptId: input.manuscriptId }),
+  });
 
 export const listArtifactVersions = (projectId: string, artifactId: string) =>
   invoke<{ versions: ArtifactVersionInfo[] }>({

@@ -4124,6 +4124,7 @@ async function main(): Promise<void> {
     if (manuscript === null) throw notFound(`手稿不存在：${req.manuscriptId}`);
     return {
       manuscript,
+      sourceMarkdown: compiler.readSourceText(req.manuscriptId),
       runs: compiler.repo.compileRuns(req.manuscriptId, 20),
       trend: compiler.repo.trend(req.manuscriptId, 20),
     };
