@@ -67,6 +67,21 @@ describe('paper path navigation', () => {
     expect(ms).toContain('manuscript-source');
     expect(ms).toContain('sourceMarkdown');
   });
+
+  it('manuscripts compile forwards conversationId and names the skipped review', () => {
+    const ms = readFileSync(
+      join('packages', 'ui', 'src', 'components', 'ManuscriptsView.tsx'),
+      'utf8',
+    );
+    const api = readFileSync(join('packages', 'ui', 'src', 'lib', 'api.ts'), 'utf8');
+    expect(APP).toContain(
+      "{view === 'manuscripts' && <ManuscriptsView projectId={projectId} conversationId={conversationId} />}",
+    );
+    expect(ms).toContain('conversationId');
+    expect(ms).toContain('当前没有会话，编译前审查不会运行');
+    expect(api).toMatch(/export const compileManuscript = \([\s\S]*conversationId\?:/);
+    expect(api).toMatch(/method: 'manuscript.compile'[\s\S]*conversationId/);
+  });
 });
 
 describe('paper path IPC', () => {

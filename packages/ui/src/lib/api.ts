@@ -817,6 +817,8 @@ export const compileManuscript = (
     readonly markdown: string;
     readonly manuscriptId?: string;
     readonly both?: boolean;
+    readonly conversationId?: string;
+    readonly targetJournal?: string;
   },
 ) =>
   invoke<{
@@ -828,6 +830,8 @@ export const compileManuscript = (
     markdown: input.markdown,
     both: input.both ?? true,
     ...(input.manuscriptId === undefined ? {} : { manuscriptId: input.manuscriptId }),
+    ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+    ...(input.targetJournal === undefined ? {} : { targetJournal: input.targetJournal }),
   });
 
 /* --- 手稿档案 / 解析 / 历史 --- */

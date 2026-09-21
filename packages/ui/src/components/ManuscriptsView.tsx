@@ -30,7 +30,13 @@ journal:
 
 `;
 
-export function ManuscriptsView({ projectId }: { projectId: string | null }): React.JSX.Element {
+export function ManuscriptsView({
+  projectId,
+  conversationId,
+}: {
+  projectId: string | null;
+  conversationId: string | null;
+}): React.JSX.Element {
   const [rows, setRows] = useState<ManuscriptListItem[] | null>(null);
   const [summary, setSummary] = useState<ClaimListSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +91,7 @@ export function ManuscriptsView({ projectId }: { projectId: string | null }): Re
       const result = await compileManuscript(pid, {
         markdown,
         ...(openId === null ? {} : { manuscriptId: openId }),
+        ...(conversationId === null ? {} : { conversationId }),
         both: true,
       });
       setOpenId(result.manuscript.id);
@@ -104,6 +111,11 @@ export function ManuscriptsView({ projectId }: { projectId: string | null }): Re
       <p className="panel__hint">
         贴 Markdown（YAML front matter 里写 title / journal）。点编译会出正式版和双盲版报告。
       </p>
+      {conversationId === null && (
+        <p className="panel__hint" role="status">
+          当前没有会话，编译前审查不会运行
+        </p>
+      )}
       {blocked && summary !== null && (
         <p className="panel__error" role="status">
           有 {summary.unresolved} 条未关闭断言，不能标为可投稿。
