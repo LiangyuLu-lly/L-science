@@ -161,8 +161,6 @@ describe('paper path IPC', () => {
       'ref.export',
       'manuscript.profiles',
       'manuscript.parse',
-      'manuscript.history',
-      'manuscript.delete',
       'citation.parse',
       'citation.verify',
       'citation.checks',

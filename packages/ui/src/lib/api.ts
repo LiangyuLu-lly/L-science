@@ -968,33 +968,6 @@ export type ManuscriptDisplayItem = {
   readonly source: string | null;
 };
 
-export type ManuscriptHistoryRun = {
-  readonly id: string;
-  readonly manuscriptId: string;
-  readonly sourceVersionId: string | null;
-  readonly profileId: string;
-  readonly blinded: boolean;
-  readonly artifactId: string | null;
-  readonly versionId: string | null;
-  readonly bibArtifactId: string | null;
-  readonly bibVersionId: string | null;
-  readonly errors: number;
-  readonly warnings: number;
-  readonly selfCitationLeaks: number;
-  readonly report: string | null;
-  readonly removed: readonly string[];
-  readonly counts: Readonly<Record<string, number>>;
-  readonly modelId: string | null;
-  readonly createdAt: number;
-};
-
-export type ManuscriptTrendPoint = {
-  readonly at: number;
-  readonly errors: number;
-  readonly warnings: number;
-  readonly leaks: number;
-};
-
 export const listManuscriptProfiles = () =>
   invoke<{ profiles: readonly JournalProfileView[]; disclaimer: string }>({
     method: 'manuscript.profiles',
@@ -1032,17 +1005,6 @@ export const parseManuscript = (
     ...(input.markdown === undefined ? {} : { markdown: input.markdown }),
     ...(input.sourceVersionId === undefined ? {} : { sourceVersionId: input.sourceVersionId }),
   });
-
-export const listManuscriptHistory = (projectId: string, manuscriptId: string, limit?: number) =>
-  invoke<{ runs: readonly ManuscriptHistoryRun[]; trend: readonly ManuscriptTrendPoint[] }>({
-    method: 'manuscript.history',
-    projectId,
-    manuscriptId,
-    ...(limit === undefined ? {} : { limit }),
-  });
-
-export const deleteManuscript = (projectId: string, manuscriptId: string) =>
-  invoke<{ deleted: boolean }>({ method: 'manuscript.delete', projectId, manuscriptId });
 
 /* --- 引文核实 --- */
 
@@ -2369,9 +2331,6 @@ export interface PlanIssue {
 
 export const listPlans = (projectId: string, conversationId: string, limit = 20) =>
   invoke<{ plans: PlanView[] }>({ method: 'plan.list', projectId, conversationId, limit });
-
-export const loadPlan = (projectId: string, planId: string) =>
-  invoke<{ plan: PlanView }>({ method: 'plan.get', projectId, planId });
 
 export const decidePlan = (
   projectId: string,
