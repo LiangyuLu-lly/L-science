@@ -75,7 +75,7 @@ describe('paper path navigation', () => {
     );
     const api = readFileSync(join('packages', 'ui', 'src', 'lib', 'api.ts'), 'utf8');
     expect(APP).toContain(
-      "{view === 'manuscripts' && <ManuscriptsView projectId={projectId} conversationId={conversationId} />}",
+      '<ManuscriptsView projectId={projectId} conversationId={conversationId}',
     );
     expect(ms).toContain('conversationId');
     expect(ms).toContain('当前没有会话，编译前审查不会运行');
@@ -93,6 +93,35 @@ describe('paper path navigation', () => {
     expect(ms).toContain('按 front matter 里的 journal');
     expect(ms).toContain('{disclaimer}');
     expect(ms).toContain('targetJournal');
+  });
+
+  it('manuscripts view shows compile history and opens artifacts, not a fake folder', () => {
+    const ms = readFileSync(
+      join('packages', 'ui', 'src', 'components', 'ManuscriptsView.tsx'),
+      'utf8',
+    );
+    expect(ms).toContain('detail.runs');
+    expect(ms).toContain('run.errors');
+    expect(ms).toContain('run.warnings');
+    expect(ms).toContain('run.blinded');
+    expect(ms).toContain('run.createdAt');
+    expect(ms).toContain('在制品里查看');
+    expect(ms).toContain('onOpenArtifacts');
+    expect(ms).not.toContain('打开编译结果所在文件夹');
+    expect(APP).toContain("onOpenArtifacts={() => setView('artifacts')}");
+  });
+});
+
+describe('compile output is not a submission file', () => {
+  it('README states compile yields markdown and a report, not a submission file', () => {
+    const zh = readFileSync('README.md', 'utf8');
+    const en = readFileSync('README.en.md', 'utf8');
+    expect(zh).toContain(
+      '编译产出 Markdown 与检查报告，不是投稿文件（导出的可复现 zip 在制品里）',
+    );
+    expect(en).toContain(
+      'Compile produces Markdown and a check report, not a submission file (the reproducibility zip is in Artifacts)',
+    );
   });
 });
 

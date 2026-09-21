@@ -13,6 +13,7 @@ import {
   type ClaimListSummary,
   type JournalProfileView,
   type ManuscriptCompileOutput,
+  type ManuscriptCompileRun,
   type ManuscriptListItem,
 } from '../lib/api.js';
 
@@ -35,9 +36,11 @@ journal:
 export function ManuscriptsView({
   projectId,
   conversationId,
+  onOpenArtifacts,
 }: {
   projectId: string | null;
   conversationId: string | null;
+  onOpenArtifacts?: () => void;
 }): React.JSX.Element {
   const [rows, setRows] = useState<ManuscriptListItem[] | null>(null);
   const [summary, setSummary] = useState<ClaimListSummary | null>(null);
@@ -49,6 +52,7 @@ export function ManuscriptsView({
   const [profiles, setProfiles] = useState<readonly JournalProfileView[]>([]);
   const [disclaimer, setDisclaimer] = useState<string | null>(null);
   const [targetJournal, setTargetJournal] = useState('');
+  const [runs, setRuns] = useState<readonly ManuscriptCompileRun[]>([]);
 
   const reload = useCallback(() => {
     if (projectId === null) return;
@@ -91,6 +95,7 @@ export function ManuscriptsView({
     try {
       const detail = await getManuscript(pid, id);
       setMarkdown(detail.sourceMarkdown ?? BLANK_DRAFT);
+      setRuns(detail.runs);
       setError(null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -113,6 +118,8 @@ export function ManuscriptsView({
       });
       setOpenId(result.manuscript.id);
       setOutputs(result.outputs);
+      const detail = await getManuscript(pid, result.manuscript.id);
+      setRuns(detail.runs);
       setError(null);
       reload();
     } catch (err: unknown) {
@@ -175,6 +182,11 @@ export function ManuscriptsView({
         <button type="button" className="btn" disabled={busy} onClick={() => void onCompile()}>
           {busy ? '编译中…' : '编译'}
         </button>
+        {onOpenArtifacts !== undefined && (
+          <button type="button" className="btn btn--small" onClick={onOpenArtifacts}>
+            在制品里查看
+          </button>
+        )}
         <button
           type="button"
           className="btn btn--small"
@@ -183,6 +195,7 @@ export function ManuscriptsView({
             setOpenId(null);
             setMarkdown(BLANK_DRAFT);
             setOutputs(null);
+            setRuns([]);
             setError(null);
           }}
         >
@@ -197,6 +210,16 @@ export function ManuscriptsView({
             {output.report}
           </pre>
         ))}
+      {runs.length > 0 && (
+        <ul className="panel">
+          {runs.map((run) => (
+            <li key={run.id} className="panel__hint">
+              {new Date(run.createdAt).toISOString().slice(0, 16).replace('T', ' ')}
+              {` · 错误 ${String(run.errors)} · 警告 ${String(run.warnings)} · ${run.blinded ? '双盲' : '正式'}`}
+            </li>
+          ))}
+        </ul>
+      )}
       {rows === null ? (
         <p className="panel__hint">加载中…</p>
       ) : rows.length === 0 ? (

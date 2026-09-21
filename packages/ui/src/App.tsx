@@ -771,7 +771,7 @@ export function App(): React.JSX.Element {
             />
           )}
           {view === 'claims' && <ClaimsView projectId={projectId} onGoToRefs={() => setView('refs')} />}
-          {view === 'manuscripts' && <ManuscriptsView projectId={projectId} conversationId={conversationId} />}
+          {view === 'manuscripts' && <ManuscriptsView projectId={projectId} conversationId={conversationId} onOpenArtifacts={() => setView('artifacts')} />}
 
           {view === 'artifacts' && <ArtifactsView projectId={projectId} />}
 

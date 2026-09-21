@@ -94,7 +94,7 @@ Or `scripts/bootstrap-kernels.ps1`.
 1. **Literature**: paste a DOI → ingest. Failures show the upstream reason (e.g. Crossref 404).
 2. Talk from the bottom composer without leaving the paper view.
 3. **Claims**: handle unsupported items first.
-4. **Manuscripts**: open a row for the latest compile report. Unresolved claims block “ready to submit”.
+4. **Manuscripts**: Compile produces Markdown and a check report, not a submission file (the reproducibility zip is in Artifacts). Unresolved claims block “ready to submit”.
 5. **Artifacts**: exporting a zip reveals the folder.
 6. OpenRouter / SiliconFlow / Together enable only a small default subset after sync.
 
