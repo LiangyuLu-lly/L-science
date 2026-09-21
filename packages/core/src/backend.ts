@@ -1988,7 +1988,13 @@ async function main(): Promise<void> {
        * 如果后端静默忽略，他会以为方法已经生效并据此判断结果。
        */
       explicitSkills: ({ conversationId, slugs }) => {
-        const injections: Array<{ slug: string; name: string; content: string }> = [];
+        const injections: Array<{
+          slug: string;
+          name: string;
+          content: string;
+          blocked: boolean;
+          missing: readonly string[];
+        }> = [];
         const missing: string[] = [];
         for (const slug of slugs) {
           const injection = skills.inject(slug);
@@ -2000,13 +2006,17 @@ async function main(): Promise<void> {
             slug: injection.slug,
             name: injection.name,
             content: injection.content,
+            blocked: injection.blocked,
+            missing: injection.missing,
           });
           // 留痕（需求 9.8）：半年后回看结论时「当时按的是哪套方法」必须答得出来
           auditSkillLoad({
             conversationId,
             slug,
-            reason: 'explicit',
-            detail: '用户在输入框里显式插入',
+            reason: injection.blocked ? 'explicit-blocked' : 'explicit',
+            detail: injection.blocked
+              ? `用户在输入框里显式插入，但本机不能跑：${injection.missing.join('、')}`
+              : '用户在输入框里显式插入',
             injectedChars: injection.content.length,
           });
         }

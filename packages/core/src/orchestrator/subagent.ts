@@ -343,7 +343,20 @@ export class SubAgentRunner {
     if (spec.skillSlug !== undefined && spec.skillSlug !== null) {
       const injection = this.#deps.skills?.inject(spec.skillSlug);
       if (injection !== null && injection !== undefined) {
-        parts.push('', '---', '', '本任务应遵循下面的方法学文档：', '', injection.content);
+        if (injection.blocked) {
+          const missingLine =
+            injection.missing.length === 0 ? '' : `缺少：${injection.missing.join('、')}。`;
+          parts.push(
+            '',
+            '---',
+            '',
+            `绑定的技能在本机不能运行。${missingLine}不要声称已经跑过它。`,
+            '',
+            injection.content,
+          );
+        } else {
+          parts.push('', '---', '', '本任务应遵循下面的方法学文档：', '', injection.content);
+        }
       }
     }
 

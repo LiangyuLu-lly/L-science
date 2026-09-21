@@ -179,6 +179,8 @@ export type SkillLoadReason =
   | 'search'
   /** 模型或用户点名加载。 */
   | 'explicit'
+  /** 点名了但本机不能跑，只注入了阻塞说明。 */
+  | 'explicit-blocked'
   /** 计划里的某一步绑定了它。 */
   | 'plan-step'
   /** 作为另一个技能的参考材料被二次加载。 */

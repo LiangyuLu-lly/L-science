@@ -47,6 +47,13 @@ export interface SkillInjection {
   requirements: RequirementReport;
   /** 可供二次加载的参考材料。 */
   references: readonly string[];
+  /**
+   * 本机不能跑时为 true。调用方不得再包一层「按它的方法做」。
+   * 未探测与依赖缺失都算阻塞；空 requires 探测后为 false。
+   */
+  readonly blocked: boolean;
+  /** 缺失依赖的名字。未阻塞时为空。 */
+  readonly missing: readonly string[];
 }
 
 /** 检索结果里附带的可用性信息。检索不过滤掉依赖缺失的技能，但要如实标注。 */
@@ -296,6 +303,8 @@ export class SkillManager {
     };
     const missing = describeMissing(report);
 
+    const missingNames = report.missing.map((item) => item.name);
+
     if (!report.satisfied) {
       return {
         slug,
@@ -310,6 +319,8 @@ export class SkillManager {
           .join('\n'),
         requirements: report,
         references: [],
+        blocked: true,
+        missing: missingNames,
       };
     }
 
@@ -329,6 +340,8 @@ export class SkillManager {
       content: `${header}\n\n${skill.instructions}`,
       requirements: report,
       references: skill.references,
+      blocked: false,
+      missing: [],
     };
   }
 

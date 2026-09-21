@@ -757,6 +757,34 @@ describe('显式技能注入（任务 12.16）', () => {
     expect(injected?.content).toContain('以它为准');
   });
 
+  it('依赖未满足的技能不得被说成会按它的方法做', async () => {
+    const { adapter, seen } = captureAdapter();
+    const orch = build({
+      adapters: [{ adapter, providerId: 'fake' }],
+      explicitSkills: () => ({
+        injections: [
+          {
+            slug: 'alphafold2',
+            name: 'AlphaFold2',
+            content:
+              '# 技能：AlphaFold2（alphafold2）本机不能跑\n不要按本技能的操作步骤执行，也不要假装已经跑过。',
+            blocked: true,
+            missing: ['colabfold_batch'],
+          },
+        ],
+        missing: [],
+      }),
+    });
+    await collect(orch.startTurn(conversation.id, '预测结构', {}, ['alphafold2']));
+
+    const history = (seen[0] ?? []).map((m) => m.content).join('\n');
+    expect(history).not.toContain('按它的方法做');
+    expect(history).not.toContain('以它为准');
+    expect(history).not.toContain('colabfold_batch --');
+    expect(history).toContain('本机不能跑');
+    expect(history).toContain('colabfold_batch');
+  });
+
   it('找不到的技能如实告知模型，不静默忽略', async () => {
     const { adapter, seen } = captureAdapter();
     const orch = build({

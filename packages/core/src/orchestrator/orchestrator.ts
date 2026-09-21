@@ -45,6 +45,24 @@ import {
 /** 默认回合上限。见文件头对「必须存在」的说明。 */
 const DEFAULT_MAX_TURNS = 24;
 
+function formatExplicitSkillMessage(injection: {
+  slug: string;
+  name: string;
+  content: string;
+  blocked?: boolean;
+  missing?: readonly string[];
+}): string {
+  if (injection.blocked === true) {
+    const names = injection.missing ?? [];
+    const missingLine = names.length === 0 ? '' : `缺少：${names.join('、')}。`;
+    return `该技能在本机不能运行。${missingLine}不要声称已经跑过它。\n\n${injection.content}`;
+  }
+  return (
+    `用户在这条消息里显式指定了下面这个技能，**按它的方法做**。` +
+    `如果它与你原本的打算冲突，以它为准，或者明确说出冲突在哪再问用户。\n\n${injection.content}`
+  );
+}
+
 export interface OrchestratorDeps {
   conversations: ConversationRepo;
   messages: MessageRepo;
@@ -81,7 +99,13 @@ export interface OrchestratorDeps {
    * 返回值里的 `missing` 是那些点了但找不到的 slug——静默忽略会让用户以为已经生效。
    */
   explicitSkills?: (input: { conversationId: string; slugs: readonly string[] }) => {
-    injections: ReadonlyArray<{ slug: string; name: string; content: string }>;
+    injections: ReadonlyArray<{
+      slug: string;
+      name: string;
+      content: string;
+      blocked?: boolean;
+      missing?: readonly string[];
+    }>;
     missing: readonly string[];
   };
   maxTurns?: number;
@@ -298,9 +322,7 @@ export class Orchestrator {
         : [{ role: 'system' as const, content: this.#deps.systemPrompt(conversationId) }]),
       ...explicit.injections.map((injection) => ({
         role: 'system' as const,
-        content:
-          `用户在这条消息里显式指定了下面这个技能，**按它的方法做**。` +
-          `如果它与你原本的打算冲突，以它为准，或者明确说出冲突在哪再问用户。\n\n${injection.content}`,
+        content: formatExplicitSkillMessage(injection),
       })),
       ...(explicit.missing.length === 0
         ? []

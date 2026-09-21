@@ -25,6 +25,7 @@ import {
   extractVersionIds,
   textOutput,
   type ProjectStore,
+  type SkillManager,
   type ToolContext,
   type ToolDefinition,
 } from '@l-science/core';
@@ -131,6 +132,7 @@ function makeRunner(input: {
   adapter: ProviderAdapter;
   extraTools?: ReadonlyArray<ToolDefinition<never>>;
   maxConcurrent?: number;
+  skills?: SkillManager;
 }): { runner: SubAgentRunner; contexts: ToolContext[] } {
   const adapters = new AdapterRegistry();
   adapters.register(input.adapter);
@@ -183,6 +185,7 @@ function makeRunner(input: {
     workspaceDir: (agentId) => join(root, 'ws', agentId),
     projectId: project.projectId,
     ...(input.maxConcurrent === undefined ? {} : { maxConcurrent: input.maxConcurrent }),
+    ...(input.skills === undefined ? {} : { skills: input.skills }),
   });
 
   return { runner, contexts };
@@ -279,6 +282,40 @@ describe('子 agent 基本执行', () => {
     expect(result.status).toBe('failed');
     expect(result.detail).toContain('回合上限');
     expect(result.turns).toBe(3);
+  });
+});
+
+describe('子 agent 技能注入', () => {
+  it('依赖未满足时不得写成应遵循的方法学', async () => {
+    let system = '';
+    const { adapter } = scriptedAdapter((_turn, req) => {
+      system = req.messages
+        .filter((m) => m.role === 'system')
+        .map((m) => m.content)
+        .join('\n');
+      return done('做不到');
+    });
+    const skills = {
+      inject: () => ({
+        slug: 'needs',
+        name: 'Needs',
+        content: '# 技能：Needs（needs）本机不能跑\n不要按本技能的操作步骤执行',
+        blocked: true,
+        missing: ['nonexistent-pkg'],
+        requirements: { satisfied: false, missing: [], probeFailures: [] },
+        references: [],
+      }),
+    } as unknown as SkillManager;
+    const { runner } = makeRunner({ adapter, skills });
+
+    await runner.spawn({
+      parentConversationId: parentId,
+      spec: { task: '跑折叠', skillSlug: 'needs' },
+    }).result;
+
+    expect(system).not.toContain('本任务应遵循下面的方法学文档');
+    expect(system).toContain('本机不能跑');
+    expect(system).toContain('nonexistent-pkg');
   });
 });
 

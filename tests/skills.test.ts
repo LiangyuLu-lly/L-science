@@ -813,6 +813,8 @@ describe('SkillManager', () => {
     const injection = manager.inject('alpha');
     expect(injection?.content).toContain('alpha 的指令。');
     expect(injection?.content).toContain('技能 alpha');
+    expect(injection?.blocked).toBe(false);
+    expect(injection?.missing).toEqual([]);
   });
 
   it('注入不存在的技能返回 null', () => {
@@ -871,6 +873,8 @@ describe('SkillManager', () => {
     expect(injection?.content).toContain('本机不能跑');
     expect(injection?.content).toContain('pip install nonexistent-pkg');
     expect(injection?.requirements.satisfied).toBe(false);
+    expect(injection?.blocked).toBe(true);
+    expect(injection?.missing).toContain('nonexistent-pkg');
   });
 
   it('参考材料按需读取，且不能越出 references 目录', () => {
