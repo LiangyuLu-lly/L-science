@@ -200,7 +200,7 @@ import {
 } from './tools/capabilities.js';
 import { collectEnvDoctorBlockers } from './tools/env-doctor.js';
 import { createEditFileTool, createReadFileTool } from './tools/files.js';
-import { extractPdfPage } from './tools/pdf-text.js';
+import { extractPdfPage, extractPdfPageFromBuffer } from './tools/pdf-text.js';
 import { collectExecution, createKernelTool, formatExecution } from './tools/kernel-tools.js';
 import { ToolRegistry } from './tools/registry.js';
 import { createShellTool } from './tools/shell.js';
@@ -3683,6 +3683,77 @@ async function main(): Promise<void> {
       refIds: [req.refId],
     });
     return { artifactId: result.artifactId, versionId: result.versionId };
+  });
+
+  d.register('ref.fulltextText', async (req) => {
+    const library = await refsFor(req.projectId);
+    const ref = library.repo.get(req.refId);
+    if (ref === null) throw notFound(`文献不存在：${req.refId}`);
+    if (ref.fulltextArtifactId === null) {
+      throw new DispatchError(
+        makeError('bad_request', '这篇还没有全文', {
+          remediation: '这篇还没有全文。先点「抓全文」，或把 PDF 拖到该条目上。',
+        }),
+      );
+    }
+
+    const artifacts = artifactStoreFor(req.projectId);
+    const artifact = artifacts.getArtifact(ref.fulltextArtifactId);
+    if (artifact === null) throw notFound(`全文制品不存在：${ref.fulltextArtifactId}`);
+    const versionId = artifact.latestVersionId;
+    if (versionId === null) throw notFound(`全文制品没有版本：${artifact.id}`);
+    const buf = artifacts.readVersion(versionId);
+    if (buf === null) throw notFound(`读不到全文内容：${versionId}`);
+
+    const maxChars = req.maxChars;
+    if (buf.subarray(0, 5).toString('latin1') === '%PDF-') {
+      const pages: string[] = [];
+      let pageCount = 0;
+      let truncated = false;
+      for (let page = 1; ; page += 1) {
+        const extracted = await extractPdfPageFromBuffer(buf, page);
+        pageCount = extracted.pageCount;
+        if (pageCount === 0 || page > pageCount) break;
+        pages.push(extracted.text);
+        const joined = pages.join('\n');
+        if (joined.length >= maxChars) {
+          truncated = true;
+          const text = joined.slice(0, maxChars);
+          if (text.trim() === '') {
+            return {
+              text: '',
+              truncated: false,
+              kind: 'pdf' as const,
+              versionId,
+              pageCount,
+              emptyReason: '扫描件没有文本层',
+            };
+          }
+          return { text, truncated, kind: 'pdf' as const, versionId, pageCount };
+        }
+      }
+      const text = pages.join('\n');
+      if (text.trim() === '') {
+        return {
+          text: '',
+          truncated: false,
+          kind: 'pdf' as const,
+          versionId,
+          pageCount,
+          emptyReason: '扫描件没有文本层',
+        };
+      }
+      return { text, truncated, kind: 'pdf' as const, versionId, pageCount };
+    }
+
+    const decoded = buf.toString('utf8');
+    const truncated = decoded.length > maxChars;
+    return {
+      text: truncated ? decoded.slice(0, maxChars) : decoded,
+      truncated,
+      kind: 'text' as const,
+      versionId,
+    };
   });
 
   /* --- Claim Ledger（任务 13.4，需求 13.1-13.4）--- */

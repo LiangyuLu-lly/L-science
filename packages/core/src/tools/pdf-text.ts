@@ -8,13 +8,12 @@
 import { readFileSync } from 'node:fs';
 import { inflateSync } from 'node:zlib';
 
-export async function extractPdfPage(
-  path: string,
+export async function extractPdfPageFromBuffer(
+  buf: Buffer,
   page: number,
 ): Promise<{ text: string; pageCount: number }> {
-  const buf = readFileSync(path);
   if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') {
-    throw new Error(`${path} 不是 PDF`);
+    throw new Error('内容不是 PDF');
   }
   const src = buf.toString('latin1');
   const objects = parseObjects(src);
@@ -37,6 +36,13 @@ export async function extractPdfPage(
     chunks.push(pdfStrings(decodeStream(body)));
   }
   return { text: chunks.join('\n').trim(), pageCount };
+}
+
+export async function extractPdfPage(
+  path: string,
+  page: number,
+): Promise<{ text: string; pageCount: number }> {
+  return extractPdfPageFromBuffer(readFileSync(path), page);
 }
 
 function parseObjects(src: string): Map<number, string> {

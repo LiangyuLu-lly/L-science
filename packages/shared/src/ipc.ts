@@ -956,6 +956,16 @@ export const requestSchema = z.discriminatedUnion('method', [
     note: z.string().max(500).optional(),
   }),
 
+  /**
+   * 读回已绑定全文的正文。PDF 走抽字；扫描件返回空正文并标明原因。
+   */
+  z.object({
+    method: z.literal('ref.fulltextText'),
+    projectId: idSchema,
+    refId: idSchema,
+    maxChars: z.number().int().min(1000).max(600_000).default(200_000),
+  }),
+
   /* --- 引用导出（任务 13.3，需求 12.5）--- */
 
   /**

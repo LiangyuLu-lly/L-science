@@ -9,7 +9,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { collapseSpacedLetters, extractPdfPage } from '@l-science/core';
+import { collapseSpacedLetters, extractPdfPage, extractPdfPageFromBuffer } from '@l-science/core';
 
 /** 生成一页未压缩 PDF，正文是可抽取的 Tj 字符串。 */
 export function uncompressedPdf(text: string): Buffer {
@@ -61,5 +61,17 @@ describe('extractPdfPage', () => {
 
   it('collapses per-glyph spaced letters', () => {
     expect(collapseSpacedLetters('A l p h a F o l d')).toBe('AlphaFold');
+  });
+});
+
+describe('extractPdfPageFromBuffer', () => {
+  it('reads Tj text from an in-memory PDF without a file path', async () => {
+    // Given: the smallest valid single-page PDF built inline (uncompressedPdf)
+    const buf = uncompressedPdf('Hello from buffer');
+    // When: extract page 1 from the Buffer
+    const result = await extractPdfPageFromBuffer(buf, 1);
+    // Then: same text as the path-based extractor
+    expect(result.pageCount).toBe(1);
+    expect(result.text).toContain('Hello from buffer');
   });
 });

@@ -133,6 +133,13 @@ describe('paper path IPC', () => {
     }
   });
 
+  it('accepts ref.fulltextText and rejects a missing refId', () => {
+    const parsed = parseRequest({ method: 'ref.fulltextText', projectId: 'p1', refId: 'rf_1' });
+    expect(parsed.ok).toBe(true);
+    const missing = parseRequest({ method: 'ref.fulltextText', projectId: 'p1' });
+    expect(missing.ok).toBe(false);
+  });
+
   it('ui api wraps every paper-path IPC method', () => {
     const api = readFileSync(join('packages', 'ui', 'src', 'lib', 'api.ts'), 'utf8');
     const methods = [
@@ -151,6 +158,7 @@ describe('paper path IPC', () => {
       'ref.fetchFulltext',
       'ref.assets',
       'ref.attachFulltext',
+      'ref.fulltextText',
       'ref.export',
       'manuscript.profiles',
       'manuscript.parse',

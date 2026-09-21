@@ -560,6 +560,23 @@ export const attachFulltext = (
     ...(input.note === undefined ? {} : { note: input.note }),
   });
 
+export type RefFulltextText = {
+  readonly text: string;
+  readonly truncated: boolean;
+  readonly kind: 'pdf' | 'text';
+  readonly versionId: string;
+  readonly pageCount?: number;
+  readonly emptyReason?: string;
+};
+
+export const readRefFulltextText = (projectId: string, refId: string, maxChars?: number) =>
+  invoke<RefFulltextText>({
+    method: 'ref.fulltextText',
+    projectId,
+    refId,
+    ...(maxChars === undefined ? {} : { maxChars }),
+  });
+
 export const exportRefs = (
   projectId: string,
   input: {
