@@ -20,7 +20,7 @@ export type ComposerBlockInput = {
   readonly backendError: string | null;
   readonly projectId: string | null;
   readonly conversationId: string | null;
-  readonly providerCount: number | null;
+  readonly enabledModelCount: number | null;
 };
 
 export type ComposerBlock = {
@@ -56,7 +56,7 @@ export function composerBlockedReason(input: ComposerBlockInput): ComposerBlock 
   if (input.conversationId === null) {
     return { code: 'no-conversation', message: '正在准备会话…' };
   }
-  if (input.providerCount === 0) {
+  if (input.enabledModelCount === 0) {
     return { code: 'no-model', message: '没有可用模型。请先登记模型。' };
   }
   return null;

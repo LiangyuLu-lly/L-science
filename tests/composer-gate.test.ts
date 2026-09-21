@@ -1,8 +1,8 @@
 /**
- * 无模型时禁用输入区，以及空会话文案不能再邀请输入。
+ * 无启用模型时禁用输入区，以及空会话文案不能再邀请输入。
  *
- * 首次运行遮罩可以跳过，但跳过之后如果还没有任何供应商，发送只会得到
- * 「注册表为空」。把输入区关掉并给出「去登记模型」，比让用户发一条注定失败的消息更诚实。
+ * 首次运行遮罩可以跳过，但跳过之后如果启用模型注册表仍空，发送只会得到
+ * 「没有可用模型」。把输入区关掉并给出「去登记模型」，比让用户发一条注定失败的消息更诚实。
  */
 
 import { readFileSync } from 'node:fs';
@@ -13,14 +13,14 @@ import { describe, expect, it } from 'vitest';
 import { composerBlockedReason } from '../packages/ui/src/lib/composer-gate.js';
 
 describe('composer gate', () => {
-  it('composerBlockedReason includes no-model when providerCount is 0', () => {
-    // Given: 遮罩已跳过，控制平面就绪，项目和会话都在，但一个供应商都没有
+  it('composerBlockedReason includes no-model when enabledModelCount is 0', () => {
+    // Given: 遮罩已跳过，控制平面就绪，项目和会话都在，但一个启用模型都没有
     const input = {
       backendState: 'ready' as const,
       backendError: null,
       projectId: 'proj-1',
       conversationId: 'conv-1',
-      providerCount: 0,
+      enabledModelCount: 0,
     };
 
     // When
@@ -28,6 +28,7 @@ describe('composer gate', () => {
 
     // Then
     expect(reason?.code).toBe('no-model');
+    expect(reason?.message).toBe('没有可用模型。请先登记模型。');
   });
 
   it('ChatView empty copy omits 说点什么 when blocked', () => {
