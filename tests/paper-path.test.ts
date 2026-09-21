@@ -76,4 +76,37 @@ describe('paper path IPC', () => {
       expect(parsed.ok, method).toBe(true);
     }
   });
+
+  it('ui api wraps every paper-path IPC method', () => {
+    const api = readFileSync(join('packages', 'ui', 'src', 'lib', 'api.ts'), 'utf8');
+    const methods = [
+      'claim.get',
+      'claim.register',
+      'claim.unbind',
+      'claim.verify',
+      'claim.confirm',
+      'claim.close',
+      'claim.reopen',
+      'claim.delete',
+      'ref.get',
+      'ref.delete',
+      'ref.merge',
+      'ref.duplicates',
+      'ref.fetchFulltext',
+      'ref.assets',
+      'ref.export',
+      'manuscript.profiles',
+      'manuscript.parse',
+      'manuscript.history',
+      'manuscript.delete',
+      'citation.parse',
+      'citation.verify',
+      'citation.checks',
+      'grant.list',
+      'grant.revoke',
+    ] as const;
+    for (const method of methods) {
+      expect(api, method).toContain(`method: '${method}'`);
+    }
+  });
 });

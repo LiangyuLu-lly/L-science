@@ -335,6 +335,252 @@ export const resolveRefs = (projectId: string, identifiers: readonly string[]) =
     identifiers: [...identifiers],
   });
 
+/* --- 文献详情 / 去重 / 全文 / 导出 --- */
+
+export type RefAliasScheme =
+  | 'doi'
+  | 'pmid'
+  | 'pmcid'
+  | 'arxiv'
+  | 'openalex'
+  | 's2'
+  | 'europepmc'
+  | 'mag'
+  | 'isbn'
+  | 'url';
+
+export type RefCslName = {
+  readonly family?: string;
+  readonly given?: string;
+  readonly literal?: string;
+  readonly suffix?: string;
+  readonly 'non-dropping-particle'?: string;
+  readonly 'dropping-particle'?: string;
+};
+
+export type RefCslDate = {
+  readonly 'date-parts'?: readonly (readonly number[])[];
+  readonly raw?: string;
+  readonly literal?: string;
+};
+
+export type RefCslItem = {
+  readonly id: string;
+  readonly type: string;
+  readonly title?: string;
+  readonly 'container-title'?: string;
+  readonly 'container-title-short'?: string;
+  readonly 'collection-title'?: string;
+  readonly author?: readonly RefCslName[];
+  readonly editor?: readonly RefCslName[];
+  readonly issued?: RefCslDate;
+  readonly accessed?: RefCslDate;
+  readonly volume?: string;
+  readonly issue?: string;
+  readonly page?: string;
+  readonly 'page-first'?: string;
+  readonly 'number-of-pages'?: string;
+  readonly publisher?: string;
+  readonly 'publisher-place'?: string;
+  readonly edition?: string;
+  readonly DOI?: string;
+  readonly URL?: string;
+  readonly PMID?: string;
+  readonly PMCID?: string;
+  readonly ISSN?: readonly string[];
+  readonly ISBN?: readonly string[];
+  readonly abstract?: string;
+  readonly language?: string;
+  readonly note?: string;
+  readonly keyword?: string;
+  readonly extra?: Readonly<Record<string, unknown>>;
+};
+
+export type RefRecordView = {
+  readonly id: string;
+  readonly doi: string | null;
+  readonly type: string | null;
+  readonly csl: RefCslItem;
+  readonly bibtex: string | null;
+  readonly fulltextArtifactId: string | null;
+  readonly oaStatus: string | null;
+  readonly titleNorm: string | null;
+  readonly source: string | null;
+  readonly year: number | null;
+  readonly container: string | null;
+  readonly firstAuthor: string | null;
+  readonly pmid: string | null;
+  readonly pmcid: string | null;
+  readonly arxivId: string | null;
+  readonly addedAt: number;
+  readonly updatedAt: number | null;
+  readonly aliases: readonly { readonly scheme: RefAliasScheme; readonly value: string }[];
+  readonly cite: string;
+};
+
+export type RefAssetKind = 'fulltext' | 'fulltext-source' | 'figure' | 'table' | 'supplement';
+
+export type RefAssetView = {
+  readonly id: string;
+  readonly refId: string;
+  readonly kind: RefAssetKind;
+  readonly artifactId: string;
+  readonly versionId: string;
+  readonly label: string | null;
+  readonly caption: string | null;
+  readonly sourceUrl: string | null;
+  readonly originPath: string | null;
+  readonly createdAt: number;
+};
+
+export type RefFetchOutcome = 'success' | 'not-available' | 'blocked' | 'error' | 'skipped';
+
+export type RefFetchAttemptView = {
+  readonly id: number;
+  readonly refId: string;
+  readonly source: string;
+  readonly url: string | null;
+  readonly outcome: RefFetchOutcome;
+  readonly detail: string | null;
+  readonly status: number | null;
+  readonly bytes: number | null;
+  readonly at: number;
+};
+
+export type RefFulltextSource =
+  | 'pmc-oa-package'
+  | 'europepmc-xml'
+  | 'unpaywall'
+  | 'openalex-oa'
+  | 'arxiv'
+  | 'biorxiv'
+  | 'publisher-url';
+
+export type RefFulltextAttemptView = {
+  readonly source: RefFulltextSource;
+  readonly url: string | null;
+  readonly outcome: RefFetchOutcome;
+  readonly detail: string | null;
+  readonly status: number | null;
+  readonly bytes: number | null;
+};
+
+export type RefDuplicatePair = {
+  readonly keepId: string;
+  readonly dropId: string;
+  readonly keepCite: string;
+  readonly dropCite: string;
+  readonly verdict: 'same' | 'likely';
+  readonly reason: string;
+  readonly similarity: number;
+};
+
+export type RefExportFormat = 'bibtex' | 'csl-json' | 'ris';
+export type RefExportSort = 'key' | 'author-year' | 'year-desc' | 'added';
+
+export type RefExportWarning = {
+  readonly refId: string | null;
+  readonly key: string;
+  readonly cite: string;
+  readonly issue: string;
+};
+
+export const getRef = (projectId: string, refId: string) =>
+  invoke<{ ref: RefRecordView; bibtex: string }>({ method: 'ref.get', projectId, refId });
+
+export const deleteRef = (projectId: string, refId: string) =>
+  invoke<{ deleted: boolean }>({ method: 'ref.delete', projectId, refId });
+
+export const mergeRefs = (projectId: string, keepId: string, dropId: string) =>
+  invoke<{ ref: RefRecordView }>({ method: 'ref.merge', projectId, keepId, dropId });
+
+export const listRefDuplicates = (projectId: string, limit?: number) =>
+  invoke<{
+    pairs: readonly RefDuplicatePair[];
+    scanned: number;
+    total: number;
+    truncated: boolean;
+  }>({
+    method: 'ref.duplicates',
+    projectId,
+    ...(limit === undefined ? {} : { limit }),
+  });
+
+export const fetchRefFulltext = (
+  projectId: string,
+  refId: string,
+  options: { readonly sources?: readonly RefFulltextSource[]; readonly force?: boolean } = {},
+) =>
+  invoke<{
+    ok: boolean;
+    source: RefFulltextSource | null;
+    summary: string;
+    fulltextArtifactId: string | null;
+    fulltextVersionId: string | null;
+    assets: readonly RefAssetView[];
+    attempts: readonly RefFulltextAttemptView[];
+    article: {
+      readonly title: string | null;
+      readonly figures: number;
+      readonly tables: number;
+      readonly references: number;
+      readonly license: string | null;
+    } | null;
+  }>({
+    method: 'ref.fetchFulltext',
+    projectId,
+    refId,
+    ...(options.sources === undefined ? {} : { sources: [...options.sources] }),
+    ...(options.force === undefined ? {} : { force: options.force }),
+  });
+
+export const listRefAssets = (projectId: string, refId: string) =>
+  invoke<{
+    assets: readonly RefAssetView[];
+    attempts: readonly RefFetchAttemptView[];
+    fulltextArtifactId: string | null;
+    oaStatus: string | null;
+  }>({ method: 'ref.assets', projectId, refId });
+
+export const exportRefs = (
+  projectId: string,
+  input: {
+    readonly format: RefExportFormat;
+    readonly refIds?: readonly string[];
+    readonly query?: string;
+    readonly year?: number;
+    readonly type?: string;
+    readonly stem?: string;
+    readonly asciiOnly?: boolean;
+    readonly includeAbstract?: boolean;
+    readonly sort?: RefExportSort;
+  },
+) =>
+  invoke<{
+    filename: string;
+    mime: string;
+    entryCount: number;
+    keys: readonly string[];
+    content: string;
+    warnings: readonly RefExportWarning[];
+    warningText: string;
+    artifactId: string | null;
+    versionId: string | null;
+    missingIds: readonly string[];
+  }>({
+    method: 'ref.export',
+    projectId,
+    format: input.format,
+    ...(input.refIds === undefined ? {} : { refIds: [...input.refIds] }),
+    ...(input.query === undefined ? {} : { query: input.query }),
+    ...(input.year === undefined ? {} : { year: input.year }),
+    ...(input.type === undefined ? {} : { type: input.type }),
+    ...(input.stem === undefined ? {} : { stem: input.stem }),
+    ...(input.asciiOnly === undefined ? {} : { asciiOnly: input.asciiOnly }),
+    ...(input.includeAbstract === undefined ? {} : { includeAbstract: input.includeAbstract }),
+    ...(input.sort === undefined ? {} : { sort: input.sort }),
+  });
+
 export interface ClaimListItem {
   id: string;
   text: string;
@@ -390,6 +636,147 @@ export const listClaims = (projectId: string) =>
     status: 'all',
   });
 
+/* --- 断言登记 / 核验 / 关闭 --- */
+
+export type ClaimKind = 'numeric' | 'comparison' | 'causal' | 'citation' | 'other';
+export type ClaimStatus =
+  | 'open'
+  | 'supported'
+  | 'insufficient'
+  | 'refuted'
+  | 'retracted'
+  | 'dismissed';
+export type ClaimOrigin = 'extracted' | 'model' | 'user';
+export type ClaimEvidenceKind =
+  | 'artifact-version'
+  | 'ref'
+  | 'doi'
+  | 'compute'
+  | 'quote'
+  | 'message';
+export type ClaimVerdict = 'supports' | 'contradicts' | 'insufficient' | 'unrelated';
+
+export type ClaimEvidenceView = {
+  readonly claimId: string;
+  readonly kind: ClaimEvidenceKind;
+  readonly ref: string;
+  readonly locator: string | null;
+  readonly quote: string | null;
+  readonly note: string | null;
+  readonly verdict: ClaimVerdict | null;
+  readonly verifiedByModelId: string | null;
+  readonly verifiedAt: number | null;
+  readonly createdAt: number;
+};
+
+export type ClaimDetail = {
+  readonly id: string;
+  readonly manuscriptId: string | null;
+  readonly conversationId: string | null;
+  readonly locator: string | null;
+  readonly section: string | null;
+  readonly text: string;
+  readonly kind: ClaimKind;
+  readonly kinds: readonly ClaimKind[];
+  readonly numbers: readonly string[];
+  readonly status: ClaimStatus;
+  readonly origin: ClaimOrigin;
+  readonly note: string | null;
+  readonly createdAt: number;
+  readonly updatedAt: number | null;
+  readonly evidence: readonly ClaimEvidenceView[];
+  readonly unsupported: boolean;
+  readonly verifiedCount: number;
+};
+
+export const getClaim = (projectId: string, claimId: string) =>
+  invoke<{ claim: ClaimDetail }>({ method: 'claim.get', projectId, claimId });
+
+export const registerClaim = (
+  projectId: string,
+  text: string,
+  extra: {
+    readonly conversationId?: string;
+    readonly manuscriptId?: string;
+    readonly locator?: string;
+    readonly note?: string;
+  } = {},
+) =>
+  invoke<{ claim: ClaimDetail; existing: boolean; reason: string | null }>({
+    method: 'claim.register',
+    projectId,
+    text,
+    ...(extra.conversationId === undefined ? {} : { conversationId: extra.conversationId }),
+    ...(extra.manuscriptId === undefined ? {} : { manuscriptId: extra.manuscriptId }),
+    ...(extra.locator === undefined ? {} : { locator: extra.locator }),
+    ...(extra.note === undefined ? {} : { note: extra.note }),
+  });
+
+export const unbindClaim = (
+  projectId: string,
+  claimId: string,
+  evidence: { readonly evidenceKind: ClaimEvidenceKind; readonly evidenceRef: string },
+) =>
+  invoke<{ claim: ClaimDetail }>({
+    method: 'claim.unbind',
+    projectId,
+    claimId,
+    evidenceKind: evidence.evidenceKind,
+    evidenceRef: evidence.evidenceRef,
+  });
+
+export const verifyClaim = (
+  projectId: string,
+  claimId: string,
+  input: {
+    readonly evidenceKind: ClaimEvidenceKind;
+    readonly evidenceRef: string;
+    readonly verdict: ClaimVerdict;
+    readonly note?: string;
+  },
+) =>
+  invoke<{ claim: ClaimDetail }>({
+    method: 'claim.verify',
+    projectId,
+    claimId,
+    evidenceKind: input.evidenceKind,
+    evidenceRef: input.evidenceRef,
+    verdict: input.verdict,
+    ...(input.note === undefined ? {} : { note: input.note }),
+  });
+
+export const confirmClaim = (projectId: string, claimId: string, note?: string) =>
+  invoke<{ claim: ClaimDetail; reason: string | null }>({
+    method: 'claim.confirm',
+    projectId,
+    claimId,
+    ...(note === undefined ? {} : { note }),
+  });
+
+export const closeClaim = (
+  projectId: string,
+  claimId: string,
+  input: { readonly status: 'retracted' | 'dismissed'; readonly note: string },
+) =>
+  invoke<{ claim: ClaimDetail }>({
+    method: 'claim.close',
+    projectId,
+    claimId,
+    status: input.status,
+    note: input.note,
+  });
+
+export const reopenClaim = (projectId: string, claimId: string, note?: string) =>
+  invoke<{ claim: ClaimDetail }>({
+    method: 'claim.reopen',
+    projectId,
+    claimId,
+    ...(note === undefined ? {} : { note }),
+  });
+
+export const deleteClaim = (projectId: string, claimId: string) =>
+  invoke<{ deleted: boolean }>({ method: 'claim.delete', projectId, claimId });
+
 export interface ManuscriptListItem {
   id: string;
   title: string | null;
@@ -441,6 +828,344 @@ export const compileManuscript = (
     markdown: input.markdown,
     both: input.both ?? true,
     ...(input.manuscriptId === undefined ? {} : { manuscriptId: input.manuscriptId }),
+  });
+
+/* --- 手稿档案 / 解析 / 历史 --- */
+
+export type CitationStyleFamily =
+  | 'numeric-citation-order'
+  | 'numeric-alphabetical'
+  | 'author-year';
+
+export type JournalNumberingRule = {
+  readonly figureLabel: string;
+  readonly tableLabel: string;
+  readonly figureRefLabel: string;
+  readonly tableRefLabel: string;
+  readonly captionSeparator: string;
+  readonly figureCaptionBelow: boolean;
+  readonly tableCaptionAbove: boolean;
+};
+
+export type JournalLengthLimits = {
+  readonly abstractWords: number | null;
+  readonly bodyWords: number | null;
+  readonly references: number | null;
+  readonly displayItems: number | null;
+  readonly titleWords: number | null;
+  readonly keywords: number | null;
+};
+
+export type JournalProfileView = {
+  readonly id: string;
+  readonly name: string;
+  readonly aliases: readonly string[];
+  readonly citationStyle: CitationStyleFamily;
+  readonly numbering: JournalNumberingRule;
+  readonly limits: JournalLengthLimits;
+  readonly sectionOrder: readonly string[];
+  readonly structuredAbstract: boolean;
+  readonly doubleBlindByDefault: boolean;
+  readonly requiredStatements: readonly string[];
+  readonly note: string;
+};
+
+export type ManuscriptYamlValue =
+  | string
+  | number
+  | boolean
+  | readonly ManuscriptYamlValue[]
+  | { readonly [key: string]: ManuscriptYamlValue };
+
+export type ManuscriptAuthorView = {
+  readonly name: string;
+  readonly affiliations: readonly string[];
+  readonly email: string | null;
+  readonly orcid: string | null;
+  readonly corresponding: boolean;
+  readonly equalContribution: boolean;
+};
+
+export type ManuscriptMetaView = {
+  readonly title: string | null;
+  readonly shortTitle: string | null;
+  readonly abstract: string | null;
+  readonly keywords: readonly string[];
+  readonly targetJournal: string | null;
+  readonly articleType: string | null;
+  readonly bibliography: string | null;
+  readonly language: string | null;
+  readonly identifying: {
+    readonly authors: readonly ManuscriptAuthorView[];
+    readonly affiliations: readonly string[];
+    readonly acknowledgements: string | null;
+    readonly funding: readonly string[];
+    readonly grantNumbers: readonly string[];
+    readonly correspondingEmail: string | null;
+    readonly authorContributions: string | null;
+    readonly conflictOfInterest: string | null;
+  };
+  readonly statements: Readonly<Record<string, string>>;
+  readonly extra: Readonly<Record<string, ManuscriptYamlValue>>;
+};
+
+export type ManuscriptDisplayItem = {
+  readonly kind: 'figure' | 'table';
+  readonly number: number | null;
+  readonly caption: string;
+  readonly line: number;
+  readonly section: string | null;
+  readonly source: string | null;
+};
+
+export type ManuscriptHistoryRun = {
+  readonly id: string;
+  readonly manuscriptId: string;
+  readonly sourceVersionId: string | null;
+  readonly profileId: string;
+  readonly blinded: boolean;
+  readonly artifactId: string | null;
+  readonly versionId: string | null;
+  readonly bibArtifactId: string | null;
+  readonly bibVersionId: string | null;
+  readonly errors: number;
+  readonly warnings: number;
+  readonly selfCitationLeaks: number;
+  readonly report: string | null;
+  readonly removed: readonly string[];
+  readonly counts: Readonly<Record<string, number>>;
+  readonly modelId: string | null;
+  readonly createdAt: number;
+};
+
+export type ManuscriptTrendPoint = {
+  readonly at: number;
+  readonly errors: number;
+  readonly warnings: number;
+  readonly leaks: number;
+};
+
+export const listManuscriptProfiles = () =>
+  invoke<{ profiles: readonly JournalProfileView[]; disclaimer: string }>({
+    method: 'manuscript.profiles',
+  });
+
+export const parseManuscript = (
+  projectId: string,
+  input: { readonly markdown?: string; readonly sourceVersionId?: string } = {},
+) =>
+  invoke<{
+    meta: ManuscriptMetaView;
+    counts: {
+      readonly title: number;
+      readonly abstract: number;
+      readonly body: number;
+      readonly keywords: number;
+      readonly figures: number;
+      readonly tables: number;
+      readonly distinctCitations: number;
+    };
+    hasFrontMatter: boolean;
+    warnings: readonly { readonly line: number; readonly message: string }[];
+    sections: readonly {
+      readonly title: string;
+      readonly level: number;
+      readonly line: number;
+      readonly words: number;
+    }[];
+    figures: readonly ManuscriptDisplayItem[];
+    tables: readonly ManuscriptDisplayItem[];
+    citationCount: number;
+  }>({
+    method: 'manuscript.parse',
+    projectId,
+    ...(input.markdown === undefined ? {} : { markdown: input.markdown }),
+    ...(input.sourceVersionId === undefined ? {} : { sourceVersionId: input.sourceVersionId }),
+  });
+
+export const listManuscriptHistory = (projectId: string, manuscriptId: string, limit?: number) =>
+  invoke<{ runs: readonly ManuscriptHistoryRun[]; trend: readonly ManuscriptTrendPoint[] }>({
+    method: 'manuscript.history',
+    projectId,
+    manuscriptId,
+    ...(limit === undefined ? {} : { limit }),
+  });
+
+export const deleteManuscript = (projectId: string, manuscriptId: string) =>
+  invoke<{ deleted: boolean }>({ method: 'manuscript.delete', projectId, manuscriptId });
+
+/* --- 引文核实 --- */
+
+export type CitationShape =
+  | 'doi'
+  | 'pmid'
+  | 'pmcid'
+  | 'arxiv'
+  | 'reference-entry'
+  | 'author-year'
+  | 'title-only'
+  | 'marker-only'
+  | 'unparseable';
+
+export type CitationVerdict =
+  | 'verified'
+  | 'metadata-mismatch'
+  | 'not-found'
+  | 'ambiguous'
+  | 'unverifiable';
+
+export type ParsedCitationView = {
+  readonly raw: string;
+  readonly shape: CitationShape;
+  readonly searchable: boolean;
+  readonly doi: string | null;
+  readonly pmid: string | null;
+  readonly firstAuthorSurname: string | null;
+  readonly year: number | null;
+  readonly title: string | null;
+  readonly container: string | null;
+  readonly reason: string | null;
+  readonly summary: string;
+};
+
+export type CitationVerifyAttempt = {
+  readonly source: string;
+  readonly ok: boolean;
+  readonly hits: number;
+  readonly reason: string | null;
+};
+
+export type StoredParsedCitation = {
+  readonly raw: string;
+  readonly doi: string | null;
+  readonly pmid: string | null;
+  readonly pmcid: string | null;
+  readonly arxivId: string | null;
+  readonly firstAuthorSurname: string | null;
+  readonly authorSurnames: readonly string[];
+  readonly year: number | null;
+  readonly title: string | null;
+  readonly container: string | null;
+  readonly volume: string | null;
+  readonly pages: string | null;
+  readonly searchable: boolean;
+  readonly shape: CitationShape;
+  readonly reason: string | null;
+};
+
+export type CitationCheckView = {
+  readonly id: string;
+  readonly claimId: string | null;
+  readonly raw: string;
+  readonly parsed: StoredParsedCitation | null;
+  readonly queries: readonly string[];
+  readonly attempts: readonly CitationVerifyAttempt[];
+  readonly matchedRefId: string | null;
+  readonly matchedDoi: string | null;
+  readonly similarity: number | null;
+  readonly verdict: CitationVerdict;
+  readonly detail: string | null;
+  readonly modelId: string | null;
+  readonly queriedAt: number;
+  readonly retrievalBacked: boolean;
+  readonly summary: string;
+};
+
+export const parseCitations = (
+  projectId: string,
+  input: { readonly referenceList?: string; readonly artifactVersionId?: string } = {},
+) =>
+  invoke<{ citations: readonly ParsedCitationView[] }>({
+    method: 'citation.parse',
+    projectId,
+    ...(input.referenceList === undefined ? {} : { referenceList: input.referenceList }),
+    ...(input.artifactVersionId === undefined ? {} : { artifactVersionId: input.artifactVersionId }),
+  });
+
+export const verifyCitations = (
+  projectId: string,
+  input: {
+    readonly citations?: readonly string[];
+    readonly referenceList?: string;
+    readonly artifactVersionId?: string;
+    readonly claimId?: string;
+  } = {},
+) =>
+  invoke<{
+    notes: readonly string[];
+    counts: Readonly<Record<CitationVerdict, number>>;
+    summary: string;
+    results: readonly {
+      readonly raw: string;
+      readonly verdict: CitationVerdict;
+      readonly shape: CitationShape;
+      readonly matchedRefId: string | null;
+      readonly matchedDoi: string | null;
+      readonly matchedCite: string | null;
+      readonly similarity: number | null;
+      readonly mismatches: readonly string[];
+      readonly queries: readonly string[];
+      readonly attempts: readonly CitationVerifyAttempt[];
+      readonly detail: string;
+      readonly checkId: string | null;
+    }[];
+  }>({
+    method: 'citation.verify',
+    projectId,
+    ...(input.citations === undefined ? {} : { citations: [...input.citations] }),
+    ...(input.referenceList === undefined ? {} : { referenceList: input.referenceList }),
+    ...(input.artifactVersionId === undefined ? {} : { artifactVersionId: input.artifactVersionId }),
+    ...(input.claimId === undefined ? {} : { claimId: input.claimId }),
+  });
+
+export const listCitationChecks = (
+  projectId: string,
+  options: { readonly claimId?: string; readonly verdict?: CitationVerdict; readonly limit?: number } = {},
+) =>
+  invoke<{ checks: readonly CitationCheckView[]; suspects: number }>({
+    method: 'citation.checks',
+    projectId,
+    ...(options.claimId === undefined ? {} : { claimId: options.claimId }),
+    ...(options.verdict === undefined ? {} : { verdict: options.verdict }),
+    ...(options.limit === undefined ? {} : { limit: options.limit }),
+  });
+
+/* --- 宿主路径授权 --- */
+
+export type GrantMode = 'ro' | 'rw';
+
+export type HostGrantView = {
+  readonly id: string;
+  readonly hostPath: string;
+  readonly guestPath: string | null;
+  readonly mode: GrantMode;
+  readonly scope: GrantScope;
+  readonly scopeId: string | null;
+  readonly grantedAt: number;
+  readonly expiresAt: number | null;
+  readonly revokedAt: number | null;
+};
+
+export type DomainGrantView = {
+  readonly id: string;
+  readonly domain: string;
+  readonly mode: GrantMode;
+  readonly scope: GrantScope;
+  readonly scopeId: string | null;
+  readonly reason: string | null;
+  readonly addedAt: number;
+};
+
+export const listGrants = (includeInactive?: boolean) =>
+  invoke<{ hostPaths: readonly HostGrantView[]; domains: readonly DomainGrantView[] }>({
+    method: 'grant.list',
+    ...(includeInactive === undefined ? {} : { includeInactive }),
+  });
+
+export const revokeGrant = (grantId: string) =>
+  invoke<{ revoked: true; kind: 'host-path' | 'domain' }>({
+    method: 'grant.revoke',
+    grantId,
   });
 
 export const listArtifactVersions = (projectId: string, artifactId: string) =>
