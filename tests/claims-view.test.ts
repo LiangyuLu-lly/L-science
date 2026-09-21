@@ -36,4 +36,14 @@ describe('claims ledger view', () => {
     expect(VIEW).toContain('ev.note');
     expect(VIEW).toMatch(/ev\.note !== null/);
   });
+
+  it('wires registerClaim as the user-origin entry', () => {
+    expect(VIEW).toContain('registerClaim');
+    expect(VIEW).toContain('手动登记');
+    expect(VIEW).toContain('aria-expanded');
+  });
+
+  it('gates register submit on non-empty text', () => {
+    expect(VIEW).toMatch(/disabled=\{[^}]*trim\(\) === ''/);
+  });
 });

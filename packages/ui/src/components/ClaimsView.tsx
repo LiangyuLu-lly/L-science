@@ -10,6 +10,7 @@ import {
   deleteClaim,
   getClaim,
   listClaims,
+  registerClaim,
   reopenClaim,
   unbindClaim,
   verifyClaim,
@@ -18,6 +19,7 @@ import {
   type ClaimListItem,
   type ClaimListSummary,
 } from '../lib/api.js';
+import { BackendError } from '../lib/backend.js';
 import { rankClaims } from '../lib/claim-rank.js';
 
 const STATUS_LABEL: Readonly<Record<string, string>> = {
@@ -37,6 +39,9 @@ const ORIGIN_LABEL: Readonly<Record<string, string>> = {
 
 const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'insufficient', 'refuted']);
 const CLOSED_STATUSES: ReadonlySet<string> = new Set(['retracted', 'dismissed']);
+/** claim.register：text max 4000、note max 2000（packages/shared/src/ipc.ts）。 */
+const CLAIM_TEXT_MAX = 4000;
+const CLAIM_NOTE_MAX = 2000;
 
 type RowAction = 'confirm' | 'verify' | 'close' | 'reopen' | 'unbind' | 'delete';
 
@@ -49,7 +54,13 @@ function evidenceLine(detail: ClaimDetail | undefined, unsupported: boolean): st
   return detail.evidence.map(formatEvidence).join(' · ');
 }
 
-function errorMessage(err: unknown): string {
+function errorText(err: unknown): string {
+  if (err instanceof BackendError) {
+    const parts = [err.message];
+    if (err.detail !== undefined) parts.push(err.detail);
+    if (err.remediation !== undefined) parts.push(err.remediation);
+    return parts.join('　');
+  }
   return err instanceof Error ? err.message : String(err);
 }
 
@@ -67,6 +78,10 @@ export function ClaimsView({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [draftText, setDraftText] = useState('');
+  const [draftNote, setDraftNote] = useState('');
+  const [registering, setRegistering] = useState(false);
 
   const reload = useCallback(async () => {
     if (projectId === null) return;
@@ -83,7 +98,7 @@ export function ClaimsView({
       setDetails(Object.fromEntries(pairs));
       setError(null);
     } catch (err: unknown) {
-      setError(errorMessage(err));
+      setError(errorText(err));
     }
   }, [projectId]);
 
@@ -144,9 +159,29 @@ export function ClaimsView({
       }
       await reload();
     } catch (err: unknown) {
-      setError(errorMessage(err));
+      setError(errorText(err));
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function submitRegister(): Promise<void> {
+    if (projectId === null) return;
+    const text = draftText.trim();
+    if (text === '' || registering) return;
+    setRegistering(true);
+    setError(null);
+    try {
+      const note = draftNote.trim();
+      await registerClaim(projectId, text, note === '' ? {} : { note });
+      setDraftText('');
+      setDraftNote('');
+      setFormOpen(false);
+      await reload();
+    } catch (err: unknown) {
+      setError(errorText(err));
+    } finally {
+      setRegistering(false);
     }
   }
 
@@ -169,6 +204,51 @@ export function ClaimsView({
         <p className="panel__error" role="alert">
           {error}
         </p>
+      )}
+      <button
+        type="button"
+        className="btn btn--small"
+        aria-expanded={formOpen}
+        onClick={() => {
+          setFormOpen((open) => !open);
+        }}
+      >
+        手动登记
+      </button>
+      {formOpen && (
+        <form
+          className="panel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitRegister();
+          }}
+        >
+          <p className="panel__hint">来源记为用户登记。正文必填。</p>
+          <label>
+            断言正文
+            <textarea
+              value={draftText}
+              maxLength={CLAIM_TEXT_MAX}
+              required
+              onChange={(event) => {
+                setDraftText(event.target.value);
+              }}
+            />
+          </label>
+          <label>
+            备注（可选）
+            <textarea
+              value={draftNote}
+              maxLength={CLAIM_NOTE_MAX}
+              onChange={(event) => {
+                setDraftNote(event.target.value);
+              }}
+            />
+          </label>
+          <button type="submit" className="btn" disabled={registering || draftText.trim() === ''}>
+            登记
+          </button>
+        </form>
       )}
       {claims === null ? (
         <p className="panel__hint">加载中…</p>
