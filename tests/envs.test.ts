@@ -34,6 +34,7 @@ import {
   groupsOf,
   installCommand,
   isNativeSensitive,
+  judgeNumbaNumpyCompat,
   MemoryEnvGrantStore,
   needsRestart,
   normalizePackageName,
@@ -1039,5 +1040,62 @@ describe('环境仓储与服务', () => {
     });
     expect(reserved.ok).toBe(false);
     expect(reserved.reason).toContain('托管环境');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * numba / numpy 版本门（需求 2.7）
+ * ------------------------------------------------------------------ */
+
+describe('numba 与 numpy 版本门', () => {
+  it('兼容对给出 compatible，不把能导入当成兼容', () => {
+    // Given: numba 0.61.2 官方支持 numpy 2.0–<2.3
+    // When
+    const verdict = judgeNumbaNumpyCompat('0.61.2', '2.1.3');
+    // Then
+    expect(verdict.kind).toBe('compatible');
+    expect(verdict).toEqual(
+      expect.objectContaining({ kind: 'compatible', numba: '0.61.2', numpy: '2.1.3' }),
+    );
+  });
+
+  it('numba 太旧撑不住当前 numpy 时判 incompatible', () => {
+    // Given: numba 0.60 只二进制兼容 numpy 2.0，2.2 超上限
+    // When
+    const verdict = judgeNumbaNumpyCompat('0.60.0', '2.2.0');
+    // Then
+    expect(verdict.kind).toBe('incompatible');
+    expect(verdict).toEqual(
+      expect.objectContaining({
+        kind: 'incompatible',
+        reason: 'numpy-too-new',
+        numba: '0.60.0',
+        numpy: '2.2.0',
+      }),
+    );
+  });
+
+  it('numpy 太旧达不到当前 numba 下限时判 incompatible', () => {
+    // Given: numba 0.61.0 要求 numpy ≥1.24
+    // When
+    const verdict = judgeNumbaNumpyCompat('0.61.0', '1.23.5');
+    // Then
+    expect(verdict.kind).toBe('incompatible');
+    expect(verdict).toEqual(
+      expect.objectContaining({
+        kind: 'incompatible',
+        reason: 'numpy-too-old',
+        numba: '0.61.0',
+        numpy: '1.23.5',
+      }),
+    );
+  });
+
+  it('numba 未安装时不做兼容判定', () => {
+    // Given: 托管环境里没有 numba；numpy 在不在都不该发明「兼容」
+    // When
+    const verdict = judgeNumbaNumpyCompat(null, '2.1.0');
+    // Then
+    expect(verdict.kind).toBe('absent');
   });
 });

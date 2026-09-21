@@ -310,9 +310,21 @@ async function probeDataDir() {
  * 汇总
  * ---------------------------------------------------------------- */
 
+/**
+ * numba/numpy 版本门的判定函数在 packages/core/src/envs/numba-numpy.ts。
+ * 这里引用同一份 dist，不另抄表。控制平面未构建时不做兼容判定。
+ */
+async function judgeManagedNumba(pkgs) {
+  const entry = resolve(repoRoot, 'packages', 'core', 'dist', 'envs', 'numba-numpy.js');
+  if (!existsSync(entry)) return { kind: 'unbuilt' };
+  const { judgeNumbaNumpyCompat } = await import(pathToFileURL(entry).href);
+  return judgeNumbaNumpyCompat(pkgs.numba, pkgs.numpy);
+}
+
 const node = probeNode();
 const conda = condaInfo();
 const managed = probeManagedEnv(conda.envs);
+const numbaNumpy = managed.found ? await judgeManagedNumba(managed.packages) : { kind: 'absent' };
 
 const report = {
   timestamp: new Date().toISOString(),
@@ -333,7 +345,8 @@ const report = {
   dataDir: await probeDataDir(),
   conda: { exe: conda.exe, base: conda.base, envCount: conda.envs?.length ?? 0 },
   uv: firstLine(capture('uv', ['--version'])),
-  managedEnv: managed,
+  managedEnv: managed.found ? { ...managed, numbaNumpy } : managed,
+  numbaNumpy,
   r: probeREnv(conda.envs),
   wsl: probeWsl(),
   docker: probeDocker(),
@@ -501,8 +514,26 @@ if (!managed.found) {
   );
 
   // numba 编译期检查 numpy 上限，conda/pip 混装时最先炸的就是这一对。
-  if (pkgs.numba !== null) {
-    line(OK, '  numba/numpy', `numba ${pkgs.numba} 与 numpy ${pkgs.numpy} 兼容`);
+  // 判定走 numba-numpy.ts 的版本表，能 import 不等于兼容。
+  if (numbaNumpy.kind === 'unbuilt') {
+    line(WARN, '  numba/numpy', '控制平面尚未构建，跳过版本门');
+  } else if (numbaNumpy.kind === 'absent') {
+    line(OK, '  numba/numpy', '未安装');
+  } else if (numbaNumpy.kind === 'unknown') {
+    line(
+      WARN,
+      '  numba/numpy',
+      `numba ${numbaNumpy.numba} 未收录约束，不做兼容判定`,
+    );
+  } else if (numbaNumpy.kind === 'compatible') {
+    line(OK, '  numba/numpy', `numba ${numbaNumpy.numba} 与 numpy ${numbaNumpy.numpy} 兼容`);
+  } else if (numbaNumpy.kind === 'incompatible') {
+    const numpy = numbaNumpy.numpy ?? '未安装';
+    line(
+      NO,
+      '  numba/numpy',
+      `numba ${numbaNumpy.numba} 与 numpy ${numpy} 不兼容 —— ${numbaNumpy.command}`,
+    );
   }
 }
 
@@ -561,6 +592,12 @@ if (!report.native['better-sqlite3'].available) blockers.push('better-sqlite3 �
 if (!report.native.zeromq.available) blockers.push('zeromq 无法加载');
 if (!managed.found) blockers.push(`托管环境 ${managed.name} 不存在`);
 else if (managed.packages.ipykernel === null) blockers.push('托管环境缺 ipykernel');
+if (numbaNumpy.kind === 'incompatible') {
+  const numpy = numbaNumpy.numpy ?? '未安装';
+  blockers.push(
+    `numba ${numbaNumpy.numba} 与 numpy ${numpy} 不兼容 —— ${numbaNumpy.command}`,
+  );
+}
 
 if (blockers.length > 0) {
   process.stdout.write(`阻塞项：${blockers.join('；')}\n\n`);

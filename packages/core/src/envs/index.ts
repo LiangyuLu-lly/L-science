@@ -86,6 +86,19 @@ export { EnvService, MemoryEnvGrantStore } from './service.js';
 export type { EnvAction, EnvToolInput, EnvToolOptions } from './tools.js';
 export { createManageEnvironmentsTool } from './tools.js';
 
+export type {
+  NumbaNumpyConstraint,
+  NumbaNumpyVerdict,
+  NumpyInterval,
+  VersionTriple,
+} from './numba-numpy.js';
+export {
+  NUMBA_NUMPY_CONSTRAINTS,
+  formatNumbaNumpyDoctorDetail,
+  judgeNumbaNumpyCompat,
+  parseVersion,
+} from './numba-numpy.js';
+
 export { MICROMAMBA_URLS, ensureMicromamba, micromambaExe, micromambaRoot } from './micromamba.js';
 export type { BootstrapReport, BootstrapStep } from './bootstrap-kernels.js';
 export {
