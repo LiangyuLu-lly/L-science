@@ -17,7 +17,9 @@ const CHIPS = readFileSync(
   join('packages', 'ui', 'src', 'components', 'TaskTypeChips.tsx'),
   'utf8',
 );
+const APP = readFileSync(join('packages', 'ui', 'src', 'App.tsx'), 'utf8');
 const ORCH = readFileSync(join('packages', 'core', 'src', 'orchestrator', 'orchestrator.ts'), 'utf8');
+const IPC = readFileSync(join('packages', 'shared', 'src', 'ipc.ts'), 'utf8');
 
 describe('task type chips', () => {
   it('maps 写代码/画图/核对引用 to analysis.codegen/figure.compose/citation.verify', () => {
@@ -60,5 +62,56 @@ describe('task type chips', () => {
     expect(ask('画一张箱线图')).toBe('figure.compose');
     expect(ask('核对一下这些引用')).not.toBe('citation.verify');
     expect(ask('核对引用')).not.toBe('citation.verify');
+  });
+});
+
+describe('核对引用 chip performs a real check', () => {
+  it('uses citation.verify (citations[]) because the schema has no refId', () => {
+    // Given: IPC 三个引文方法都不收 refId；只有 citation.verify 能对一条题录做检索判定
+    expect(IPC).toContain("method: z.literal('citation.verify')");
+    expect(IPC).toContain('citations: z.array(z.string()');
+    expect(IPC).not.toMatch(/citation\.verify[\s\S]{0,400}refId/);
+
+    // When: 芯片处理核对引用
+    // Then: 走 verifyCitations，把选中文献的题录/DOI 当作 citations 传入
+    expect(CHIPS).toContain('verifyCitations');
+    expect(CHIPS).toContain('citations:');
+    expect(CHIPS).not.toContain('listCitationChecks');
+    expect(CHIPS).not.toContain('parseCitations');
+  });
+
+  it('still sets the routing hint when 核对引用 is clicked', () => {
+    // Given: 芯片点击仍是下一条消息的 taskType 覆盖
+    // When: 读 App 把芯片接到 routingOverride 的那一行
+    // Then: 覆盖还在；核对不是替换路由，是额外做一次
+    expect(APP).toContain('setRoutingOverride({ ...routingOverride, taskType })');
+    expect(CHIPS).toContain('onSelect(chip.taskType)');
+    expect(APP).toMatch(/<TaskTypeChips[\s\S]*focusRef=/);
+    expect(APP).toMatch(/<TaskTypeChips[\s\S]*projectId=/);
+  });
+
+  it('names the next step when it cannot check, and never pretends success', () => {
+    // Given: 没有选中文献时点核对引用
+    // When: 读芯片源码里的可见文案
+    // Then: 一句中文说明下一步；失败走 alert；进行中走 status
+    expect(CHIPS).toContain('先在文献里选一篇，再点核对引用');
+    expect(CHIPS).toContain('正在核对引用');
+    expect(CHIPS).toContain('核对引用失败');
+    expect(CHIPS).toContain('role="status"');
+    expect(CHIPS).toContain('role="alert"');
+    expect(CHIPS).toContain('panel__hint');
+    expect(CHIPS).toContain('panel__error');
+  });
+
+  it('renders not-found and metadata-mismatch counts plus offending entries', () => {
+    // Given: citation.verify 返回 counts 与 results
+    // When: 芯片渲染核对结果
+    // Then: 问题计数和条目都在，不把有问题的结果收成一个通过标记
+    expect(CHIPS).toContain("counts['not-found']");
+    expect(CHIPS).toContain("counts['metadata-mismatch']");
+    expect(CHIPS).toContain('result.raw');
+    expect(CHIPS).toContain('result.verdict');
+    expect(CHIPS).not.toContain('✓');
+    expect(CHIPS).not.toContain('核对通过');
   });
 });

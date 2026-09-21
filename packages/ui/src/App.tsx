@@ -855,6 +855,8 @@ export function App(): React.JSX.Element {
           <TaskTypeChips
             selected={routingOverride.taskType}
             onSelect={(taskType) => setRoutingOverride({ ...routingOverride, taskType })}
+            projectId={projectId}
+            focusRef={focusRef}
           />
           <OverrideBar
             override={routingOverride}
