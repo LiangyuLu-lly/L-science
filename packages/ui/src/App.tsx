@@ -80,10 +80,10 @@ const ASSISTANT_NAV = { label: '助手' } as const;
 const STUDIO_NAV: ReadonlyArray<{ id: ViewId; label: string }> = [
   { id: 'artifacts', label: '制品' },
   { id: 'skills', label: '技能' },
-  { id: 'connectors', label: '连接器' },
-  { id: 'routing', label: '模型路由' },
-  { id: 'usage', label: '用量与成本' },
-  { id: 'tools', label: '工具与环境' },
+  { id: 'connectors', label: '数据源' },
+  { id: 'routing', label: '模型' },
+  { id: 'usage', label: '花费' },
+  { id: 'tools', label: '运行环境' },
   { id: 'settings', label: '设置' },
 ];
 
@@ -91,7 +91,7 @@ const STATE_LABEL: Record<string, string> = {
   connecting: '连接中',
   ready: '已连接',
   unavailable: '暂时不可用',
-  'no-bridge': '未通过桌面外壳启动',
+  'no-bridge': '不是从桌面程序打开的',
 };
 
 /** 提问卡片。与审批不同：它要的是一段信息，不是放行与否。 */
@@ -269,7 +269,7 @@ function Composer({
       }}
     >
       <label className="composer__label" htmlFor="composer-input">
-        发送给助手
+        写给助手
       </label>
 
       <SelectedSkills
@@ -333,7 +333,7 @@ function Composer({
           <>
             {onRegisterModels !== undefined && (
               <button type="button" className="btn" onClick={onRegisterModels}>
-                去登记模型
+                去填写密钥
               </button>
             )}
             <button type="submit" className="btn" disabled={disabled || text.trim() === ''}>
@@ -397,7 +397,7 @@ function BackendPanel(): React.JSX.Element {
   return (
     <section className="panel" aria-labelledby="backend-heading">
       <h2 id="backend-heading" className="panel__title">
-        控制平面
+        后台
         <span className={`badge badge--${state}`} role="status">
           {STATE_LABEL[state] ?? state}
         </span>
@@ -431,7 +431,7 @@ function BackendPanel(): React.JSX.Element {
       )}
 
       {state === 'no-bridge' && (
-        <p className="panel__hint">当前在浏览器中直接打开了渲染层。控制平面只在桌面外壳内可用。</p>
+        <p className="panel__hint">现在是在浏览器里打开的。后台只在桌面程序里可用。</p>
       )}
     </section>
   );
@@ -460,6 +460,8 @@ export function App(): React.JSX.Element {
   const [extractStatus, setExtractStatus] = useState<string | null>(null);
   const [skippedThisSession, setSkippedThisSession] = useState(false);
   const [overlayForced, setOverlayForced] = useState(false);
+  /** 工作室分组默认收起（见导航注释）。 */
+  const [studioOpen, setStudioOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
 
   const turn = useTurn(conversationId);
@@ -488,7 +490,10 @@ export function App(): React.JSX.Element {
   const showFirstRun =
     overlayForced ||
     (providerCount !== null &&
-      shouldShowFirstRun({ providerCount, skippedThisSession, view }));
+       shouldShowFirstRun({ providerCount, skippedThisSession, view }));
+
+  const studioActive = STUDIO_NAV.some((v) => v.id === view);
+  const showStudio = studioOpen || studioActive;
 
   /** 输入区不可用时的真实原因。写死一个理由会让用户去排查不存在的问题。 */
   const composerBlock = composerBlockedReason({
@@ -614,9 +619,12 @@ export function App(): React.JSX.Element {
               <li key={v.id}>
                 <button
                   type="button"
-                  className={`nav__item ${view === v.id ? 'is-current' : ''}`}
-                  aria-current={view === v.id ? 'page' : undefined}
-                  onClick={() => setView(v.id)}
+                  className={`nav__item ${!assistantOpen && view === v.id ? 'is-current' : ''}`}
+                  aria-current={!assistantOpen && view === v.id ? 'page' : undefined}
+                  onClick={() => {
+                    setAssistantOpen(false);
+                    setView(v.id);
+                  }}
                 >
                   {v.label}
                 </button>
@@ -631,21 +639,38 @@ export function App(): React.JSX.Element {
           >
             {ASSISTANT_NAV.label}
           </button>
-          <p className="nav__group">工作室</p>
+          {/*
+            工作室默认收起：论文三站 + 助手是日常路径，七项设置类入口先不占版面。
+            点进来之后（view 落在工作室某一页）自动展开，否则侧栏会一项都不亮。
+          */}
+          <button
+            type="button"
+            className="nav__group nav__group--toggle"
+            aria-expanded={showStudio}
+            onClick={() => setStudioOpen((open) => !open)}
+          >
+            工作室
+            <span aria-hidden="true">{showStudio ? '▾' : '▸'}</span>
+          </button>
+          {showStudio && (
           <ul>
             {STUDIO_NAV.map((v) => (
               <li key={v.id}>
                 <button
                   type="button"
-                  className={`nav__item ${view === v.id ? 'is-current' : ''}`}
-                  aria-current={view === v.id ? 'page' : undefined}
-                  onClick={() => setView(v.id)}
+                  className={`nav__item ${!assistantOpen && view === v.id ? 'is-current' : ''}`}
+                  aria-current={!assistantOpen && view === v.id ? 'page' : undefined}
+                  onClick={() => {
+                    setAssistantOpen(false);
+                    setView(v.id);
+                  }}
                 >
                   {v.label}
                 </button>
               </li>
             ))}
           </ul>
+          )}
 
           {assistantOpen && (
             <div className="nav__conversations">
@@ -708,7 +733,7 @@ export function App(): React.JSX.Element {
             />
           ))}
 
-          {assistantOpen && (
+          {assistantOpen ? (
             <div className="chat__layout">
               <div className="chat__stream">
                 {turn.error !== null && (
@@ -727,9 +752,11 @@ export function App(): React.JSX.Element {
                     ? { onRegisterModels: openRegisterModels }
                     : {})}
                   onGoRefs={() => {
+                    setAssistantOpen(false);
                     setView('refs');
                   }}
                   onGoClaims={() => {
+                    setAssistantOpen(false);
                     setView('claims');
                   }}
                 />
@@ -740,9 +767,7 @@ export function App(): React.JSX.Element {
                 />
               </div>
             </div>
-          )}
-
-          {view === 'refs' && (
+          ) : view === 'refs' ? (
             <RefsView
               projectId={projectId}
               selectedId={focusRef?.id ?? null}
@@ -795,42 +820,36 @@ export function App(): React.JSX.Element {
                 })();
               }}
             />
-          )}
-          {view === 'claims' && <ClaimsView projectId={projectId} onGoToRefs={() => setView('refs')} />}
-          {view === 'manuscripts' && <ManuscriptsView projectId={projectId} conversationId={conversationId} onOpenArtifacts={() => setView('artifacts')} />}
-
-          {view === 'artifacts' && <ArtifactsView projectId={projectId} />}
-
-          {view === 'skills' && (
+          ) : view === 'claims' ? (
+            <ClaimsView projectId={projectId} onGoToRefs={() => { setAssistantOpen(false); setView('refs'); }} />
+          ) : view === 'manuscripts' ? (
+            <ManuscriptsView projectId={projectId} conversationId={conversationId} onOpenArtifacts={() => { setAssistantOpen(false); setView('artifacts'); }} />
+          ) : view === 'artifacts' ? (
+            <ArtifactsView projectId={projectId} />
+          ) : view === 'skills' ? (
             <SkillsView projectId={projectId} conversationId={conversationId} />
-          )}
-
-          {view === 'connectors' && <ConnectorsView projectId={projectId} />}
-
-          {view === 'routing' && (
+          ) : view === 'connectors' ? (
+            <ConnectorsView projectId={projectId} />
+          ) : view === 'routing' ? (
             <RoutingPanel
               projectId={projectId}
               conversationId={conversationId}
               override={routingOverride}
               onOverrideChange={setRoutingOverride}
             />
-          )}
-
-          {view === 'usage' && <UsagePanel projectId={projectId} conversationId={conversationId} />}
-
-          {view === 'tools' && (
+          ) : view === 'usage' ? (
+            <UsagePanel projectId={projectId} conversationId={conversationId} />
+          ) : view === 'tools' ? (
             <>
               <ToolsPanel projectId={projectId} />
               <BackendPanel />
             </>
-          )}
-
-          {view === 'settings' && (
+          ) : view === 'settings' ? (
             <SettingsView onRegisterModels={openRegisterModels} />
-          )}
+          ) : null}
         </main>
       </div>
-      {(view === 'refs' || view === 'claims' || view === 'manuscripts') && (
+      {(assistantOpen || view === 'refs' || view === 'claims' || view === 'manuscripts') && (
         <div className="app__dock">
           {projectLoadError !== null && (
             <p className="view__error" role="alert">

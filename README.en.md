@@ -31,7 +31,7 @@ The paper path is the product, not another chat window:
 1. **Literature**: paste a DOI or drop a PDF. The resolver talks to Crossref, OpenAlex, Semantic Scholar, PubMed, Europe PMC, and DataCite. Entries can fetch full text, delete, scan duplicates / merge, and export.
 2. **Claims**: unsupported and open items sort first. Rows can confirm / verify / close / reopen / unbind evidence / delete. Extract uses attached full text when present (stamped extracted from the full text); otherwise title+abstract, stamped 摘自题录与摘要（无全文） or 摘自题录与摘要（扫描件无文本层）.
 3. **Manuscripts**: compile produces Markdown and a check report. View in Artifacts. Journal profiles are selectable. Unresolved claims block “ready to submit”.
-4. **Studio**: artifacts, skills, connectors, routing, usage, tools, settings.
+4. **Studio** (collapsed by default; click the heading to open): artifacts, skills, data sources, models, spend, environment, settings.
 
 The composer stays visible on paper views; 助手 expands the transcript. Model quality is the key you register. No enabled model, no intelligence.
 
@@ -108,8 +108,8 @@ Paper path
   Claims
   Manuscripts
 Assistant     transcript toggle (composer stays on paper views)
-Studio
-  Artifacts / Skills / Connectors / Routing / Usage / Tools / Settings
+Studio (collapsed by default; click the heading to open)
+  Artifacts / Skills / Data sources / Models / Spend / Environment / Settings
 ```
 
 ---

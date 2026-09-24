@@ -416,7 +416,8 @@ describe('键盘可达与语义（20.5.2）', () => {
     // 骨架期这里是不可聚焦的 <li>，verify:ui 报告可聚焦元素 0 个
     expect(app).toMatch(/<nav[^>]*aria-label="主导航"/u);
     expect(app).toMatch(/className=\{`nav__item/u);
-    expect(app).toMatch(/aria-current=\{view === v\.id \? 'page' : undefined\}/u);
+    // 助手展开时正文被它占住，此时导航项不再标 current（见 App.tsx 互斥渲染）
+    expect(app).toMatch(/aria-current=\{!assistantOpen && view === v\.id \? 'page' : undefined\}/u);
   });
 
   it('有跳到主内容的入口，且主内容可成为焦点目标', () => {
