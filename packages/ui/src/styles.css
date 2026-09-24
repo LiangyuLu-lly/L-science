@@ -450,6 +450,10 @@ code {
 
 .app__nav {
   width: 220px;
+  /* 底栏出现时父级 overflow:hidden 会切掉最后一项。min-height:0 让侧栏缩进
+     正文行里自己滚，而不是把「设置」画到 dock 下面。 */
+  min-height: 0;
+  align-self: stretch;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -470,7 +474,7 @@ code {
   background: transparent;
   border: 0;
   border-left: 2px solid transparent;
-  padding: 8px 20px;
+  padding: 6px 20px;
   cursor: pointer;
 }
 
