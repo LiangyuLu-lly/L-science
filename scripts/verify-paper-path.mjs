@@ -172,20 +172,28 @@ try {
 await clickByText('文献');
 await sleep(600);
 
-const skipped = await clickByText('本次跳过');
-if (skipped) {
-  await sleep(800);
-  check(
-    (await evaluate(`document.querySelector('.overlay') === null`)) === true,
-    '跳过首次引导后遮罩关闭',
-  );
-} else {
-  check(true, '本次跳过（本次运行没有遮罩，视为已配置）');
-}
+  const skipped = await clickByText('本次跳过');
+  if (skipped) {
+    await sleep(800);
+    check(
+      (await evaluate(`document.querySelector('.overlay') === null`)) === true,
+      '跳过首次引导后遮罩关闭',
+    );
+  } else {
+    check(true, '本次跳过（本次运行没有遮罩，视为已配置）');
+  }
 
-const refsUsable = await evaluate(`document.querySelector('#ref-identifiers') !== null`);
-check(refsUsable === true, '文献页在没有密钥时也可用（贴 DOI 输入框存在）');
-await shot('refs-empty');
+  // onSkip 固定落到设置页（App.tsx setView('settings')）。
+  // 「跳过不挡文献」的判据是回到文献后输入框在，不是跳过之后还停在文献。
+  // skippedThisSession 为真时再进文献不会把遮罩弹回来。
+  await clickByText('文献');
+  try {
+    await waitFor(`document.querySelector('#ref-identifiers') !== null`, 8000, '文献页 DOI 输入框');
+    check(true, '文献页在没有密钥时也可用（贴 DOI 输入框存在）');
+  } catch (err) {
+    check(false, '文献页在没有密钥时也可用（贴 DOI 输入框存在）', err.message);
+  }
+  await shot('refs-empty');
 
 /* ------------------------------------------------------------------ *
  * 2. 贴 DOI 入库
