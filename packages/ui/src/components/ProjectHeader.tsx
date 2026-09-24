@@ -22,7 +22,7 @@ export function ProjectHeader(props: ProjectHeaderProps): React.JSX.Element {
   return (
     <header className="app__header">
       <span className="app__brand">L-science</span>
-      <span className="app__tag">本地优先 AI 科研工作台</span>
+      <span className="app__tag">论文和手稿都在这台电脑上</span>
 
       <div className="app__project">
         {props.projects.length > 0 && (

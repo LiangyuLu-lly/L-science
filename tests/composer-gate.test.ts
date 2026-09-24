@@ -28,7 +28,7 @@ describe('composer gate', () => {
 
     // Then
     expect(reason?.code).toBe('no-model');
-    expect(reason?.message).toBe('没有可用模型。请先登记模型。');
+    expect(reason?.message).toBe('还没有可用的模型。先去填写密钥。');
   });
 
   it('ChatView empty copy omits 说点什么 when blocked', () => {

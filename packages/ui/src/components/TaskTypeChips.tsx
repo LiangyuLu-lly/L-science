@@ -167,7 +167,7 @@ export function TaskTypeChips({
   return (
     <div>
       <div className="tchips" role="group" aria-label="本条消息的任务类型">
-        <span className="tchips__label">本条任务</span>
+        <span className="tchips__label">这次要做</span>
         {TASK_TYPE_CHIPS.map((chip) => (
           <button
             key={chip.taskType}

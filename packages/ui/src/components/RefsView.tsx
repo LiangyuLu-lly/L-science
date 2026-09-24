@@ -26,8 +26,8 @@ import type { PaperFocus } from '../lib/paper-context.js';
 
 const FORM_LABEL = '贴 DOI 或拖入 PDF';
 const EMPTY_HINT =
-  '库是空的。贴 DOI 或拖入 PDF。入库会按标识问 Crossref、OpenAlex、Semantic Scholar、PubMed、Europe PMC、DataCite。';
-const NO_TARGET = '先贴 DOI 入库，再把 PDF 拖到该条目上';
+  '还没有文献。贴一条 DOI，或把 PDF 拖进来。会向 Crossref、OpenAlex、Semantic Scholar、PubMed、Europe PMC、DataCite 查询。';
+const NO_TARGET = '先把 DOI 收进库里，再把 PDF 拖到那一条上';
 /** IPC 帧 8MB；base64 膨胀约 4/3，再留信封余量。 */
 const MAX_PDF_BYTES = Math.floor((8 * 1024 * 1024 * 3) / 4) - 4096;
 const FILE_NAME_MAX = 255;

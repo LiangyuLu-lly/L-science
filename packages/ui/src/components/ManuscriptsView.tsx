@@ -104,7 +104,7 @@ export function ManuscriptsView({
 
   async function onCompile(): Promise<void> {
     if (markdown.trim() === '') {
-      setError('先写或贴 Markdown。');
+      setError('先写一段正文。');
       return;
     }
     setBusy(true);
@@ -133,16 +133,16 @@ export function ManuscriptsView({
     <section className="view" aria-labelledby="manuscripts-heading">
       <h1 id="manuscripts-heading">手稿</h1>
       <p className="panel__hint">
-        贴 Markdown（YAML front matter 里写 title / journal）。点编译会出正式版和双盲版报告。
+        在下面写正文。开头三道横线里可以写标题和期刊名。编译后会给出正式稿、隐去姓名的稿，以及一份检查说明。
       </p>
       {conversationId === null && (
         <p className="panel__hint" role="status">
-          当前没有会话，编译前审查不会运行
+          还没有对话，编译前不会做检查
         </p>
       )}
       {blocked && summary !== null && (
         <p className="panel__error" role="status">
-          有 {summary.unresolved} 条未关闭断言，不能标为可投稿。
+          还有 {summary.unresolved} 条断言没处理完，不能标为可投稿。
         </p>
       )}
       {error !== null && (
@@ -172,7 +172,7 @@ export function ManuscriptsView({
             setTargetJournal(event.target.value);
           }}
         >
-          <option value="">按 front matter 里的 journal</option>
+          <option value="">按正文开头写的期刊名</option>
           {profiles.map((profile) => (
             <option key={profile.id} value={profile.name}>
               {profile.name}
@@ -205,7 +205,7 @@ export function ManuscriptsView({
       {outputs !== null &&
         outputs.map((output) => (
           <pre key={output.filename} className="panel__hint">
-            {output.blinded ? '双盲' : '正式'} · {output.filename}
+            {output.blinded ? '隐去姓名' : '正式稿'} · {output.filename}
             {'\n'}
             {output.report}
           </pre>
@@ -215,7 +215,7 @@ export function ManuscriptsView({
           {runs.map((run) => (
             <li key={run.id} className="panel__hint">
               {new Date(run.createdAt).toISOString().slice(0, 16).replace('T', ' ')}
-              {` · 错误 ${String(run.errors)} · 警告 ${String(run.warnings)} · ${run.blinded ? '双盲' : '正式'}`}
+              {` · 错误 ${String(run.errors)} · 警告 ${String(run.warnings)} · ${run.blinded ? '隐去姓名' : '正式稿'}`}
             </li>
           ))}
         </ul>
@@ -223,7 +223,7 @@ export function ManuscriptsView({
       {rows === null ? (
         <p className="panel__hint">加载中…</p>
       ) : rows.length === 0 ? (
-        <p className="panel__hint">还没有登记过的手稿。编译一次就会出现在下面。</p>
+        <p className="panel__hint">还没有保存过的手稿。编译一次就会列在下面。</p>
       ) : (
         <ul className="manuscript-list">
           {rows.map((item) => (

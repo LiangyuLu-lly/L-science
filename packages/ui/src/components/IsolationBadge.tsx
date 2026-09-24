@@ -16,33 +16,33 @@ import { loadIsolation, type IsolationInfo } from '../lib/api.js';
 import { hasBackend } from '../lib/backend.js';
 
 const STRENGTH_LABEL: Record<'strong' | 'weak', string> = {
-  strong: '强隔离',
-  weak: '弱隔离',
+  strong: '限制较严',
+  weak: '限制较松',
 };
 
 const BACKEND_LABEL: Record<string, string> = {
-  native: '原生（Windows 作业对象）',
-  wsl2: 'WSL2（命名空间）',
+  native: '本机 Windows',
+  wsl2: 'WSL2',
 };
 
 const FILESYSTEM_LABEL: Record<string, string> = {
-  namespace: '命名空间隔离',
-  acl: 'ACL 限制',
-  advisory: '仅工具层约束',
+  namespace: '系统级隔开',
+  acl: '按权限限制',
+  advisory: '只在工具里限制',
 };
 
 const NETWORK_LABEL: Record<string, string> = {
-  namespace: '命名空间隔离',
-  proxy: '出口代理管控',
-  none: '无管控',
+  namespace: '系统级隔开',
+  proxy: '按域名限制联网',
+  none: '不限制联网',
 };
 
 const PROCESS_LABEL: Record<string, string> = {
-  'job-object': 'Windows 作业对象',
-  cgroup: 'cgroup 限额',
-  monitor: '进程树监控（非硬限额）',
-  container: '容器隔离',
-  none: '无限额',
+  'job-object': 'Windows 进程限制',
+  cgroup: 'Linux 资源限额',
+  monitor: '只看着进程，不是硬性限额',
+  container: '在容器里运行',
+  none: '不限额',
 };
 
 export function IsolationBadge(): React.JSX.Element {
@@ -70,7 +70,7 @@ export function IsolationBadge(): React.JSX.Element {
   if (!hasBackend()) {
     return (
       <span className="isolation isolation--unknown" role="status">
-        隔离强度未知（请通过桌面外壳启动）
+        还不知道运行限制（请从桌面程序打开）
       </span>
     );
   }
@@ -79,7 +79,7 @@ export function IsolationBadge(): React.JSX.Element {
     return (
       <span className="isolation isolation--unknown" role="status">
         {/* 探测失败时不假装是强隔离。未知就说未知 */}
-        隔离强度未知（{error}）
+        还不知道运行限制（{error}）
       </span>
     );
   }
@@ -87,7 +87,7 @@ export function IsolationBadge(): React.JSX.Element {
   if (info === null) {
     return (
       <span className="isolation isolation--unknown" role="status">
-        正在探测隔离强度…
+        正在检查运行限制…
       </span>
     );
   }
@@ -103,9 +103,9 @@ export function IsolationBadge(): React.JSX.Element {
         onClick={() => setExpanded((v) => !v)}
       >
         {/* 折叠态说机制，不把「弱隔离」当吓词。强度文字仍走 STRENGTH_LABEL，给展开层与色盲用户 */}
-        <span className="isolation__strength">本机用户态隔离（点击查看说明）</span>
+        <span className="isolation__strength">运行限制（点开查看）</span>
         <span className="isolation__backend">{BACKEND_LABEL[info.backend] ?? info.backend}</span>
-        {caveatCount > 0 && <span className="isolation__caveat-count">{caveatCount} 项限制</span>}
+        {caveatCount > 0 && <span className="isolation__caveat-count">{caveatCount} 条限制</span>}
         <span aria-hidden="true" className="isolation__chevron">
           {expanded ? '▾' : '▸'}
         </span>
@@ -114,7 +114,7 @@ export function IsolationBadge(): React.JSX.Element {
       {expanded && (
         <div className="isolation__detail">
           <dl className="kv">
-            <dt>隔离强度</dt>
+            <dt>限制程度</dt>
             <dd>{STRENGTH_LABEL[info.strength]}</dd>
             <dt>文件系统</dt>
             <dd>{FILESYSTEM_LABEL[info.isolation.filesystem] ?? info.isolation.filesystem}</dd>
@@ -131,16 +131,15 @@ export function IsolationBadge(): React.JSX.Element {
           */}
           {info.isolation.network === 'proxy' && (
             <p className="isolation__proxy-note" role="note">
-              网络出口按域名白名单管控，但这是<strong>代理级</strong>管控：它靠向内核注入 HTTP_PROXY
-              环境变量生效。requests、urllib 这类会读取该变量的库受管控，而直接 建 socket
-              的代码可以绕过它。它防的是无意的数据外泄，不防有意的绕过。真正的 网络隔离需要 WSL2
-              后端的命名空间。
+              联网会按允许的域名拦住，但这只是<strong>代理</strong>在拦：靠给程序塞 HTTP_PROXY
+              环境变量。会读这个变量的库（如 requests、urllib）受限制；自己直接建连接的代码可以绕过去。
+              它防的是不小心把数据发出去，防不住故意绕开。要真正隔开网络，需要 WSL2。
             </p>
           )}
 
           {caveatCount > 0 && (
             <section className="isolation__caveats">
-              <h4>已知限制</h4>
+              <h4>需要知道的限制</h4>
               {/* 原文展示，不概括。概括的过程就是弱化的过程 */}
               <ul>
                 {info.isolation.caveats.map((caveat) => (
@@ -184,7 +183,7 @@ export function IsolationBadge(): React.JSX.Element {
 
           {info.skipped.length > 0 && (
             <section className="isolation__skipped">
-              <h4>为什么没用更强的隔离</h4>
+              <h4>为什么没有用更严的限制</h4>
               <ul>
                 {info.skipped.map((s) => (
                   <li key={s.id}>

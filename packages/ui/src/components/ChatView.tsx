@@ -193,7 +193,7 @@ export function ChatView(props: ChatViewProps): React.JSX.Element {
           </p>
           {props.blocked && props.onRegisterModels !== undefined && (
             <button type="button" className="btn btn--small" onClick={props.onRegisterModels}>
-              去登记模型
+              去填写密钥
             </button>
           )}
           {!props.blocked && (

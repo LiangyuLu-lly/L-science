@@ -307,8 +307,7 @@ export function PlanPanel({
 
       {plans.length === 0 && !loading && (
         <p className="sidepanel__hint">
-          这个会话还没有计划。复杂任务里 agent 会先用 <code>generate_plan</code> 出一份，
-          简单任务不需要。
+          这个对话还没有步骤清单。复杂任务会先列出步骤，等你同意再做；简单问题不用。
         </p>
       )}
 
@@ -318,8 +317,8 @@ export function PlanPanel({
       */}
       {draft !== null && (
         <div className="planpanel__awaiting" role="status">
-          <strong>有一份计划等你批准。</strong>
-          批准之后 agent 才会开始执行；拒绝时写下理由，它会作为下一轮生成的输入。
+          <strong>有一份步骤清单等你点头。</strong>
+          点头之后才会开始做。若不同意，写明原因，下次会按你的意见重列。
         </div>
       )}
 

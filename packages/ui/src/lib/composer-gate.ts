@@ -33,15 +33,15 @@ export function composerBlockedReason(input: ComposerBlockInput): ComposerBlock 
     case 'no-bridge':
       return {
         code: 'no-bridge',
-        message: '当前在浏览器里直接打开了渲染层，控制平面只在桌面外壳内可用。',
+        message: '现在是在浏览器里打开的，这些功能要在桌面程序里用。',
       };
     case 'unavailable':
       return {
         code: 'unavailable',
-        message: `控制平面暂时不可用：${input.backendError ?? '未知错误'}`,
+        message: `后台暂时连不上：${input.backendError ?? '未知错误'}`,
       };
     case 'connecting':
-      return { code: 'connecting', message: '正在连接控制平面…' };
+      return { code: 'connecting', message: '正在连接…' };
     case 'ready':
       break;
     default: {
@@ -57,7 +57,7 @@ export function composerBlockedReason(input: ComposerBlockInput): ComposerBlock 
     return { code: 'no-conversation', message: '正在准备会话…' };
   }
   if (input.enabledModelCount === 0) {
-    return { code: 'no-model', message: '没有可用模型。请先登记模型。' };
+    return { code: 'no-model', message: '还没有可用的模型。先去填写密钥。' };
   }
   return null;
 }

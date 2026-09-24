@@ -17,22 +17,22 @@ describe('IsolationBadge collapsed copy', () => {
     // Given: 折叠态是用户未点开时唯一看见的标签
     // When: 读徽章源码
     // Then: 折叠标签是机制说明，不是「弱隔离」吓词
-    expect(BADGE).toContain('本机用户态隔离（点击查看说明）');
+    expect(BADGE).toContain('运行限制（点开查看）');
   });
 
   it('PROCESS_LABEL includes monitor', () => {
     // Given: native 后端在没有 Job Object 时 process 是 monitor
     // When: 读 PROCESS_LABEL
     // Then: 有对应中文，而不是把 raw `monitor` 漏到界面上
-    expect(BADGE).toMatch(/monitor:\s*'进程树监控（非硬限额）'/u);
+    expect(BADGE).toMatch(/monitor:\s*'只看着进程，不是硬性限额'/u);
   });
 
   it('PROCESS_LABEL includes container', () => {
-    expect(BADGE).toMatch(/container:\s*'容器隔离'/u);
+    expect(BADGE).toMatch(/container:\s*'在容器里运行'/u);
   });
 
   it('no-bridge copy does not spin on 正在探测', () => {
-    expect(BADGE).toContain('隔离强度未知（请通过桌面外壳启动）');
+    expect(BADGE).toContain('还不知道运行限制（请从桌面程序打开）');
     expect(BADGE).toContain('if (!hasBackend())');
   });
 

@@ -37,6 +37,12 @@ describe('paper path navigation', () => {
     expect(APP).toContain('<ManuscriptsView');
   });
 
+  it('助手展开时不与手稿同时渲染', () => {
+    expect(APP).toContain('assistantOpen ?');
+    expect(APP).toContain(") : view === 'manuscripts' ? (");
+    expect(APP).toContain('setAssistantOpen(false)');
+  });
+
   it('empty chat offers DOI and claims next steps', () => {
     const chat = readFileSync(join('packages', 'ui', 'src', 'components', 'ChatView.tsx'), 'utf8');
     expect(chat).toContain('去文献贴 DOI');
@@ -78,7 +84,7 @@ describe('paper path navigation', () => {
       '<ManuscriptsView projectId={projectId} conversationId={conversationId}',
     );
     expect(ms).toContain('conversationId');
-    expect(ms).toContain('当前没有会话，编译前审查不会运行');
+    expect(ms).toContain('还没有对话，编译前不会做检查');
     expect(api).toMatch(/export const compileManuscript = \([\s\S]*conversationId\?:/);
     expect(api).toMatch(/method: 'manuscript.compile'[\s\S]*conversationId/);
   });
@@ -90,7 +96,7 @@ describe('paper path navigation', () => {
     );
     expect(ms).toContain('listManuscriptProfiles');
     expect(ms).toContain('<select');
-    expect(ms).toContain('按 front matter 里的 journal');
+    expect(ms).toContain('按正文开头写的期刊名');
     expect(ms).toContain('{disclaimer}');
     expect(ms).toContain('targetJournal');
   });
@@ -108,7 +114,7 @@ describe('paper path navigation', () => {
     expect(ms).toContain('在制品里查看');
     expect(ms).toContain('onOpenArtifacts');
     expect(ms).not.toContain('打开编译结果所在文件夹');
-    expect(APP).toContain("onOpenArtifacts={() => setView('artifacts')}");
+    expect(APP).toContain("onOpenArtifacts={() => { setAssistantOpen(false); setView('artifacts'); }}");
   });
 });
 
@@ -229,7 +235,7 @@ describe('extract-claims never fails silently', () => {
 describe('ClaimsView pass-through', () => {
   it('forwards onGoToRefs to ClaimsView', () => {
     expect(APP).toContain(
-      "{view === 'claims' && <ClaimsView projectId={projectId} onGoToRefs={() => setView('refs')} />}",
+      "onGoToRefs={() => { setAssistantOpen(false); setView('refs'); }}",
     );
   });
 });
